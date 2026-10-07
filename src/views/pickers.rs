@@ -1,7 +1,7 @@
 //! Modal pickers for transitions, resolutions, assignees, sprints, and field edits.
 //! Keys (↑/↓/j/k, Enter, Esc) are handled in `App::shortcuts`; this only draws.
 
-use crate::app::{Action, App, Picker, filtered_users};
+use crate::app::{Action, App, Picker, assign_cursor_after_filter, filtered_users};
 use crate::theme::{self, Palette};
 use crate::views::{button, primary_button};
 use egui::{Frame, Margin, RichText, Stroke, vec2};
@@ -39,8 +39,12 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                     title(ui, p, &format!("Assign {key}"));
                     let r = ui.add(egui::TextEdit::singleline(filter).hint_text("Type a name").desired_width(f32::INFINITY));
                     r.request_focus();
+                    let shown = filtered_users(items, filter);
+                    if r.changed() {
+                        *cursor = assign_cursor_after_filter(shown.len(), filter.trim().is_empty());
+                    }
                     let mut names = vec!["Unassigned".to_string()];
-                    names.extend(filtered_users(items, filter).iter().map(|u| u.display_name.clone()));
+                    names.extend(shown.iter().map(|u| u.display_name.clone()));
                     if *cursor >= names.len() {
                         *cursor = 0;
                     }

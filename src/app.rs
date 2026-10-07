@@ -343,7 +343,8 @@ impl App {
             }
             Msg::Done { key, what, result } => {
                 if what == "Transition" {
-                    let pending = self.pending_transition.take();
+                    // Only this issue's pending transition; another issue's stays for its own Done.
+                    let pending = self.pending_transition.take_if(|(k, _)| *k == key);
                     if let Err(e) = &result
                         && jira::needs_resolution(e)
                         && let Some(pending) = pending
@@ -520,7 +521,7 @@ impl App {
             // or `picker_loading` would never clear.
             Action::OpenTransition => {
                 let Some(key) = self.selected.clone() else { return };
-                if self.client.is_none() {
+                if self.client.is_none() || self.picker_loading {
                     return;
                 }
                 self.picker_loading = true;
@@ -529,7 +530,7 @@ impl App {
                 });
             }
             Action::OpenAssign => {
-                if self.selected.is_none() || self.client.is_none() {
+                if self.selected.is_none() || self.client.is_none() || self.picker_loading {
                     return;
                 }
                 self.picker_loading = true;
@@ -539,7 +540,7 @@ impl App {
                 });
             }
             Action::OpenSprint => {
-                if self.selected.is_none() || self.client.is_none() {
+                if self.selected.is_none() || self.client.is_none() || self.picker_loading {
                     return;
                 }
                 self.picker_loading = true;
@@ -549,7 +550,8 @@ impl App {
                 });
             }
             Action::OpenEdit => {
-                if self.client.is_none() {
+                // A late picker response would replace the Edit dialog.
+                if self.client.is_none() || self.picker_loading {
                     return;
                 }
                 let Some(i) = self.selected.as_ref().and_then(|k| self.store.get(k)) else { return };
@@ -587,7 +589,10 @@ impl App {
                     && let (Some(a), Some(b)) = (list.iter().position(|k| *k == key), list.iter().position(|k| *k == neighbour))
                 {
                     list.swap(a, b);
-                    self.cursor = (self.cursor as i32 + delta).max(0) as usize;
+                    // The selected row's new index, not the old cursor, which can disagree with it.
+                    if let Some(i) = rows.iter().position(|k| *k == key) {
+                        self.cursor = (i as i32 + delta).clamp(0, rows.len() as i32 - 1) as usize;
+                    }
                 }
                 self.spawn(move |c, tx| {
                     let (b, a) = if before { (Some(neighbour.as_str()), None) } else { (None, Some(neighbour.as_str())) };
@@ -755,6 +760,13 @@ pub fn filtered_users(items: &[User], filter: &str) -> Vec<User> {
     items.iter().filter(|u| f.is_empty() || u.display_name.to_lowercase().contains(&f)).cloned().collect()
 }
 
+/// The Assign cursor after its filter text changes: the first match (row 1,
+/// after "Unassigned") when the filter is non-empty and matches someone, so
+/// type-then-Enter assigns rather than unassigns; otherwise "Unassigned".
+pub fn assign_cursor_after_filter(matches: usize, filter_empty: bool) -> usize {
+    if filter_empty || matches == 0 { 0 } else { 1 }
+}
+
 /// Moves a picker cursor by `d`, wrapping at both ends.
 fn wrap_cursor(cur: usize, d: i32, len: usize) -> usize {
     if len == 0 {
@@ -918,6 +930,13 @@ mod tests {
         assert_eq!(f, serde_json::json!({ "labels": ["a", "b"], "customfield_10016": 3.5 }));
         let f = edit_fields("", "High", "x");
         assert_eq!(f, serde_json::json!({ "labels": [], "priority": { "name": "High" } }));
+    }
+
+    #[test]
+    fn assign_filter_moves_cursor_to_first_match() {
+        assert_eq!(assign_cursor_after_filter(2, false), 1, "typed and matched");
+        assert_eq!(assign_cursor_after_filter(0, false), 0, "typed, no match");
+        assert_eq!(assign_cursor_after_filter(5, true), 0, "cleared");
     }
 
     #[test]
