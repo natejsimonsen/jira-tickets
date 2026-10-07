@@ -1,6 +1,14 @@
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+#![allow(dead_code)]
 
+mod auth;
 mod config;
+
+#[cfg(test)]
+pub mod testutil {
+    /// Tests that set process env vars lock this so they never interleave.
+    pub static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+}
 
 fn main() -> eframe::Result {
     let options = eframe::NativeOptions {
