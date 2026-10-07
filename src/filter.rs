@@ -63,14 +63,21 @@ pub fn parse_goto(text: &str, project: &str) -> Option<String> {
         return None;
     }
     if let Some(rest) = t.split("/browse/").nth(1) {
-        let key: String = rest.chars().take_while(|c| c.is_ascii_alphanumeric() || *c == '-').collect();
-        return (!key.is_empty()).then(|| key.to_uppercase());
+        let key: String = rest.chars().take_while(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_').collect();
+        return issue_key(&key);
     }
     if t.chars().all(|c| c.is_ascii_digit()) {
         return Some(format!("{project}-{t}"));
     }
+    issue_key(t)
+}
+
+/// `PROJ-123`, uppercased: the project is `[A-Za-z][A-Za-z0-9_]*`, the number digits.
+fn issue_key(t: &str) -> Option<String> {
     let (p, n) = t.split_once('-')?;
-    (n.chars().all(|c| c.is_ascii_digit()) && !n.is_empty()).then(|| format!("{}-{n}", p.to_uppercase()))
+    let project_ok = p.chars().next().is_some_and(|c| c.is_ascii_alphabetic()) && p.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+    let number_ok = !n.is_empty() && n.chars().all(|c| c.is_ascii_digit());
+    (project_ok && number_ok).then(|| format!("{}-{n}", p.to_uppercase()))
 }
 
 #[cfg(test)]
@@ -128,5 +135,10 @@ mod tests {
         assert_eq!(parse_goto("ci-9001", "CI").as_deref(), Some("CI-9001"));
         assert_eq!(parse_goto("https://example.atlassian.net/browse/CI-9001?x=1", "CI").as_deref(), Some("CI-9001"));
         assert_eq!(parse_goto("", "CI"), None);
+        assert_eq!(parse_goto("my_proj2-7", "CI").as_deref(), Some("MY_PROJ2-7"));
+        assert_eq!(parse_goto("https://x.atlassian.net/browse/9-1", "CI"), None);
+        for bad in ["-12", "2CI-1", "C I-1", "CI$-1", "CI-", "CI-1a", "ci-1-2", "é-1"] {
+            assert_eq!(parse_goto(bad, "CI"), None, "{bad}");
+        }
     }
 }

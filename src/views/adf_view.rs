@@ -125,6 +125,7 @@ fn spans(ui: &mut Ui, s: &[Span], p: &Palette, size: f32, heading: bool) {
     // One link per paragraph is the common case; open the first on click.
     if r.clicked()
         && let Some(url) = s.iter().find_map(|sp| sp.link.clone())
+        && crate::app::openable(&url)
     {
         ui.ctx().open_url(egui::OpenUrl::new_tab(url));
     }

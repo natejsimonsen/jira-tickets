@@ -38,7 +38,7 @@ Only a token you paste is saved. Signing out deletes that file.
 | --- | --- |
 | `⌘1`–`⌘4` | Issues, Grooming, Team, Roadmap |
 | `⌘R` | Refresh |
-| `⌘K` | Command palette |
+| `⌘K` | Go to an issue by key, number, or link |
 | `⌘F` or `/` | Focus search |
 | `j` / `k` (or arrows) | Next / previous issue |
 | `Enter` | Confirm the open picker |

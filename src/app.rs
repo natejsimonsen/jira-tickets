@@ -948,14 +948,23 @@ fn close_shortcut(ctx: &egui::Context) {
     }
 }
 
+/// Only web and mail links open; anything else (file:, custom schemes) is ignored.
+pub fn openable(url: &str) -> bool {
+    let u = url.trim_start().to_ascii_lowercase();
+    ["http://", "https://", "mailto:"].iter().any(|s| u.starts_with(s))
+}
+
 pub fn open_url(url: &str) {
+    if !openable(url) {
+        return;
+    }
     #[cfg(target_os = "macos")]
     {
         let _ = webbrowser::open(url);
     }
     #[cfg(not(target_os = "macos"))]
     {
-        let _ = std::process::Command::new("xdg-open").arg(url).spawn();
+        let _ = std::process::Command::new("xdg-open").arg("--").arg(url).spawn();
     }
 }
 
@@ -1091,6 +1100,16 @@ mod tests {
         assert_eq!(assign_cursor_after_filter(2, false), 1, "typed and matched");
         assert_eq!(assign_cursor_after_filter(0, false), 0, "typed, no match");
         assert_eq!(assign_cursor_after_filter(5, true), 0, "cleared");
+    }
+
+    #[test]
+    fn only_web_and_mail_links_open() {
+        for ok in ["https://x.atlassian.net/browse/CI-1", "HTTP://example.com", "mailto:a@b.c"] {
+            assert!(openable(ok), "{ok}");
+        }
+        for bad in ["file:///etc/passwd", "javascript:alert(1)", "smb://host/share", "-n", "x-apple.systempreferences:"] {
+            assert!(!openable(bad), "{bad}");
+        }
     }
 
     #[test]
