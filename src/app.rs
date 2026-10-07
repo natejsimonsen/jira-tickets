@@ -60,6 +60,13 @@ pub enum Action {
     FindToken,
     SignOut,
     Toast(String, bool),
+    SetEpic(Option<String>),
+    SetQuick(Option<usize>),
+    ToggleMine,
+    RunSearch(String),
+    ToggleGoTo,
+    GoTo,
+    Move(i32),
 }
 
 #[derive(Default)]
@@ -92,6 +99,17 @@ pub struct App {
     pub selected: Option<String>,
     /// Issue keys with a detail fetch in flight.
     pub detail_loading: std::collections::HashSet<String>,
+    pub filter: crate::filter::IssueFilter,
+    /// Set by ⌘F or `/`; the search box takes focus on its next frame.
+    pub focus_search: bool,
+    /// The ⌘K box text while it is open.
+    pub goto: Option<String>,
+    /// Keyboard cursor: an index into the Issues view's current rows.
+    pub cursor: usize,
+    /// The cursor the list last drew; when it differs the row scrolls into view.
+    pub last_cursor: usize,
+    /// The list shows ListId::Search instead of TeamOpen.
+    pub search_active: bool,
     pub(crate) client: Option<Arc<Client>>,
     tx: Sender<Msg>,
     rx: Receiver<Msg>,
@@ -128,6 +146,12 @@ impl App {
             offline: false,
             selected: None,
             detail_loading: Default::default(),
+            filter: Default::default(),
+            focus_search: false,
+            goto: None,
+            cursor: 0,
+            last_cursor: 0,
+            search_active: false,
             client: None,
             tx,
             rx,
@@ -320,6 +344,57 @@ impl App {
                 self.me = None;
             }
             Action::Toast(t, e) => self.toast(t, e),
+            Action::SetEpic(e) => {
+                self.filter.epic = e;
+                self.cursor = 0;
+            }
+            Action::SetQuick(q) => {
+                self.filter.quick = q;
+                match q.and_then(|i| self.cfg.issues.filters.get(i)) {
+                    Some(f) => {
+                        let jql = format!("labels = {} AND ({})", store::jql_quote(&self.cfg.scope.team_label), f.jql);
+                        self.actions.push(Action::RunSearch(jql));
+                    }
+                    None => self.actions.push(Action::RunSearch(String::new())),
+                }
+            }
+            Action::ToggleMine => {
+                self.filter.mine = !self.filter.mine;
+                self.cursor = 0;
+            }
+            Action::RunSearch(jql) => {
+                self.cursor = 0;
+                if jql.trim().is_empty() {
+                    self.search_active = false;
+                    self.store.lists.remove(&ListId::Search);
+                    return;
+                }
+                self.search_active = true;
+                let full = format!("project = {} AND ({}) ORDER BY Rank ASC", store::jql_quote(&self.cfg.scope.project), jql.trim());
+                let fields: Vec<String> = jira::LIST_FIELDS.iter().map(|s| s.to_string()).collect();
+                // A new search replaces any in flight.
+                self.lists.entry(ListId::Search).or_default().loading = false;
+                self.load_list(ListId::Search, full, fields);
+            }
+            Action::ToggleGoTo => self.goto = if self.goto.is_some() { None } else { Some(String::new()) },
+            Action::GoTo => {
+                if let Some(text) = self.goto.take()
+                    && let Some(key) = crate::filter::parse_goto(&text, &self.cfg.scope.project)
+                {
+                    self.selected = Some(key.clone());
+                    self.load_detail(&key);
+                }
+            }
+            Action::Move(delta) => {
+                let n = views::issues::current_rows(self).len();
+                if n == 0 {
+                    return;
+                }
+                self.cursor = (self.cursor as i32 + delta).clamp(0, n as i32 - 1) as usize;
+                if let Some(key) = views::issues::current_rows(self).get(self.cursor).map(|i| i.key.clone()) {
+                    self.actions.push(Action::Select(key));
+                }
+            }
         }
     }
 
@@ -333,6 +408,46 @@ impl App {
         }
         if ctx.input_mut(|i| i.consume_shortcut(&KeyboardShortcut::new(cmd, Key::R))) {
             self.actions.push(Action::Refresh);
+        }
+        if self.screen != Screen::Issues {
+            return;
+        }
+        let shortcut = |m: Modifiers, k: Key| ctx.input_mut(|i| i.consume_shortcut(&KeyboardShortcut::new(m, k)));
+        if shortcut(cmd, Key::K) {
+            self.actions.push(Action::ToggleGoTo);
+        }
+        if self.goto.is_some() {
+            if shortcut(Modifiers::NONE, Key::Escape) {
+                self.goto = None;
+            }
+            return;
+        }
+        if shortcut(cmd, Key::F) {
+            self.focus_search = true;
+        }
+        let browse = self.selected.as_ref().map(|k| self.cfg.browse_url(k));
+        if shortcut(cmd, Key::O)
+            && let Some(u) = &browse
+        {
+            self.actions.push(Action::OpenUrl(u.clone()));
+        }
+        // Plain keys belong to a focused text field.
+        if ctx.text_edit_focused() {
+            return;
+        }
+        if shortcut(Modifiers::NONE, Key::Slash) {
+            self.focus_search = true;
+        }
+        if shortcut(Modifiers::NONE, Key::J) | shortcut(Modifiers::NONE, Key::ArrowDown) {
+            self.actions.push(Action::Move(1));
+        }
+        if shortcut(Modifiers::NONE, Key::K) | shortcut(Modifiers::NONE, Key::ArrowUp) {
+            self.actions.push(Action::Move(-1));
+        }
+        if shortcut(Modifiers::NONE, Key::C)
+            && let Some(u) = browse
+        {
+            self.actions.push(Action::Copy(u));
         }
     }
 }
@@ -392,7 +507,12 @@ impl eframe::App for App {
         }
         views::toast(self, &ctx);
 
-        for a in std::mem::take(&mut self.actions) {
+        // Actions run after the views drew, so draw once more to show their effect.
+        let actions = std::mem::take(&mut self.actions);
+        if !actions.is_empty() {
+            ctx.request_repaint();
+        }
+        for a in actions {
             self.apply(a, &ctx);
         }
         let urls = ctx.output_mut(|o| {

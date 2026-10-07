@@ -6,6 +6,7 @@ mod app;
 mod auth;
 mod cache;
 mod config;
+mod filter;
 mod jira;
 mod store;
 mod theme;
