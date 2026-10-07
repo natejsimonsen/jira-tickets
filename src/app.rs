@@ -70,6 +70,24 @@ pub enum Action {
     GoTo,
     Move(i32),
     Comment,
+    OpenTransition,
+    OpenAssign,
+    OpenSprint,
+    OpenEdit,
+    PickerMove(i32),
+    PickerConfirm,
+    PickerCancel,
+    Rank(i32),
+}
+
+/// The open modal picker. `cursor` indexes the rows the picker draws; Assign
+/// and Sprint put a synthetic first row ("Unassigned", "Backlog") at 0.
+pub enum Picker {
+    Transition { key: String, items: Vec<Transition>, cursor: usize },
+    Resolution { key: String, transition_id: String, items: Vec<Resolution>, cursor: usize },
+    Assign { key: String, items: Vec<User>, cursor: usize, filter: String },
+    Sprint { key: String, items: Vec<Sprint>, cursor: usize },
+    Edit { key: String, labels: String, priority: String, points: String },
 }
 
 #[derive(Default)]
@@ -121,6 +139,12 @@ pub struct App {
     pub drafts: HashMap<String, String>,
     /// The issue key of the comment post in flight.
     pub posting: Option<String>,
+    pub picker: Option<Picker>,
+    /// A picker's items are being fetched; a spinner shows meanwhile.
+    pub picker_loading: bool,
+    /// (issue key, transition id) of the transition in flight, so a
+    /// "resolution required" error can retry it with a resolution.
+    pending_transition: Option<(String, String)>,
     pub(crate) client: Option<Arc<Client>>,
     tx: Sender<Msg>,
     rx: Receiver<Msg>,
@@ -167,6 +191,9 @@ impl App {
             last_search_jql: None,
             drafts: HashMap::new(),
             posting: None,
+            picker: None,
+            picker_loading: false,
+            pending_transition: None,
             client: None,
             tx,
             rx,
@@ -315,6 +342,21 @@ impl App {
                 }
             }
             Msg::Done { key, what, result } => {
+                if what == "Transition" {
+                    let pending = self.pending_transition.take();
+                    if let Err(e) = &result
+                        && jira::needs_resolution(e)
+                        && let Some(pending) = pending
+                        && self.client.is_some()
+                    {
+                        self.pending_transition = Some(pending);
+                        self.picker_loading = true;
+                        self.spawn(|c, tx| {
+                            let _ = tx.send(Msg::Resolutions(c.resolutions()));
+                        });
+                        return;
+                    }
+                }
                 if what == "Comment" {
                     self.posting = None;
                     if result.is_ok() {
@@ -330,8 +372,37 @@ impl App {
                     self.refresh_all();
                 }
             }
-            // Pickers (Task 11) handle these; until then they are ignored.
-            Msg::Transitions { .. } | Msg::Resolutions(_) | Msg::Users(_) | Msg::Sprints(_) => {}
+            Msg::Transitions { key, result } => {
+                self.picker_loading = false;
+                match result {
+                    Ok(items) => self.picker = Some(Picker::Transition { key, items, cursor: 0 }),
+                    Err(e) => self.toast(e.to_string(), true),
+                }
+            }
+            Msg::Resolutions(result) => {
+                self.picker_loading = false;
+                match (result, self.pending_transition.take()) {
+                    (Ok(items), Some((key, transition_id))) => self.picker = Some(Picker::Resolution { key, transition_id, items, cursor: 0 }),
+                    (Err(e), _) => self.toast(e.to_string(), true),
+                    _ => {}
+                }
+            }
+            Msg::Users(result) => {
+                self.picker_loading = false;
+                match (result, self.selected.clone()) {
+                    (Ok(items), Some(key)) => self.picker = Some(Picker::Assign { key, items, cursor: 0, filter: String::new() }),
+                    (Err(e), _) => self.toast(e.to_string(), true),
+                    _ => {}
+                }
+            }
+            Msg::Sprints(result) => {
+                self.picker_loading = false;
+                match (result, self.selected.clone()) {
+                    (Ok(items), Some(key)) => self.picker = Some(Picker::Sprint { key, items, cursor: 0 }),
+                    (Err(e), _) => self.toast(e.to_string(), true),
+                    _ => {}
+                }
+            }
         }
     }
 
@@ -445,6 +516,137 @@ impl App {
                     let _ = tx.send(Msg::Done { key: key.clone(), what: "Comment", result: c.add_comment(&key, &text) });
                 });
             }
+            // spawn is a no-op without a client, so every Open* checks first
+            // or `picker_loading` would never clear.
+            Action::OpenTransition => {
+                let Some(key) = self.selected.clone() else { return };
+                if self.client.is_none() {
+                    return;
+                }
+                self.picker_loading = true;
+                self.spawn(move |c, tx| {
+                    let _ = tx.send(Msg::Transitions { key: key.clone(), result: c.transitions(&key) });
+                });
+            }
+            Action::OpenAssign => {
+                if self.selected.is_none() || self.client.is_none() {
+                    return;
+                }
+                self.picker_loading = true;
+                let project = self.cfg.scope.project.clone();
+                self.spawn(move |c, tx| {
+                    let _ = tx.send(Msg::Users(c.assignable_users(&project)));
+                });
+            }
+            Action::OpenSprint => {
+                if self.selected.is_none() || self.client.is_none() {
+                    return;
+                }
+                self.picker_loading = true;
+                let board = self.cfg.scope.board_id;
+                self.spawn(move |c, tx| {
+                    let _ = tx.send(Msg::Sprints(c.board_sprints(board, "active,future")));
+                });
+            }
+            Action::OpenEdit => {
+                if self.client.is_none() {
+                    return;
+                }
+                let Some(i) = self.selected.as_ref().and_then(|k| self.store.get(k)) else { return };
+                self.picker = Some(Picker::Edit {
+                    key: i.key.clone(),
+                    labels: i.labels.join(", "),
+                    priority: i.priority.clone(),
+                    points: i.story_points.map(|n| n.to_string()).unwrap_or_default(),
+                });
+            }
+            Action::PickerMove(d) => {
+                if let Some(p) = &mut self.picker {
+                    let (cur, len) = match p {
+                        Picker::Transition { cursor, items, .. } => (cursor, items.len()),
+                        Picker::Resolution { cursor, items, .. } => (cursor, items.len()),
+                        Picker::Assign { cursor, items, filter, .. } => (cursor, filtered_users(items, filter).len() + 1),
+                        Picker::Sprint { cursor, items, .. } => (cursor, items.len() + 1),
+                        Picker::Edit { .. } => return,
+                    };
+                    *cur = wrap_cursor(*cur, d, len);
+                }
+            }
+            Action::PickerCancel => self.picker = None,
+            Action::PickerConfirm => self.confirm_picker(),
+            Action::Rank(delta) => {
+                let Some(key) = self.selected.clone() else { return };
+                if self.client.is_none() {
+                    return;
+                }
+                let src = if self.search_active { ListId::Search } else { ListId::TeamOpen };
+                let rows: Vec<String> = views::issues::current_rows(self).iter().map(|i| i.key.clone()).collect();
+                let Some((neighbour, before)) = rank_target(&rows, &key, delta) else { return };
+                // Move the row now; a failed rank snaps back on the refresh that follows Done.
+                if let Some(list) = self.store.lists.get_mut(&src)
+                    && let (Some(a), Some(b)) = (list.iter().position(|k| *k == key), list.iter().position(|k| *k == neighbour))
+                {
+                    list.swap(a, b);
+                    self.cursor = (self.cursor as i32 + delta).max(0) as usize;
+                }
+                self.spawn(move |c, tx| {
+                    let (b, a) = if before { (Some(neighbour.as_str()), None) } else { (None, Some(neighbour.as_str())) };
+                    let _ = tx.send(Msg::Done { key: key.clone(), what: "Rank", result: c.rank(&key, b, a) });
+                });
+            }
+        }
+    }
+
+    fn confirm_picker(&mut self) {
+        // Without a client spawn does nothing; keep the picker open rather than drop the choice silently.
+        if self.client.is_none() {
+            return;
+        }
+        let Some(p) = self.picker.take() else { return };
+        match p {
+            Picker::Transition { key, items, cursor } => {
+                let Some(t) = items.get(cursor).cloned() else { return };
+                // Remember the transition so a resolution error can retry it.
+                self.pending_transition = Some((key.clone(), t.id.clone()));
+                self.spawn(move |c, tx| {
+                    let _ = tx.send(Msg::Done { key: key.clone(), what: "Transition", result: c.transition(&key, &t.id, None) });
+                });
+            }
+            Picker::Resolution { key, transition_id, items, cursor } => {
+                let Some(r) = items.get(cursor).cloned() else { return };
+                self.spawn(move |c, tx| {
+                    let _ = tx.send(Msg::Done { key: key.clone(), what: "Transition", result: c.transition(&key, &transition_id, Some(&r.id)) });
+                });
+            }
+            Picker::Assign { key, items, cursor, filter } => {
+                let shown = filtered_users(&items, &filter);
+                let account = if cursor == 0 { None } else { shown.get(cursor - 1).map(|u| u.account_id.clone()) };
+                if cursor != 0 && account.is_none() {
+                    return;
+                }
+                self.spawn(move |c, tx| {
+                    let _ = tx.send(Msg::Done { key: key.clone(), what: "Assign", result: c.assign(&key, account.as_deref()) });
+                });
+            }
+            Picker::Sprint { key, items, cursor } => {
+                let sprint = if cursor == 0 { None } else { items.get(cursor - 1).map(|s| s.id) };
+                if cursor != 0 && sprint.is_none() {
+                    return;
+                }
+                self.spawn(move |c, tx| {
+                    let r = match sprint {
+                        Some(id) => c.move_to_sprint(id, &[&key]),
+                        None => c.move_to_backlog(&[&key]),
+                    };
+                    let _ = tx.send(Msg::Done { key: key.clone(), what: "Sprint move", result: r });
+                });
+            }
+            Picker::Edit { key, labels, priority, points } => {
+                let fields = edit_fields(&labels, &priority, &points);
+                self.spawn(move |c, tx| {
+                    let _ = tx.send(Msg::Done { key: key.clone(), what: "Edit", result: c.update_fields(&key, fields) });
+                });
+            }
         }
     }
 
@@ -459,10 +661,33 @@ impl App {
         if ctx.input_mut(|i| i.consume_shortcut(&KeyboardShortcut::new(cmd, Key::R))) {
             self.actions.push(Action::Refresh);
         }
+        let shortcut = |m: Modifiers, k: Key| ctx.input_mut(|i| i.consume_shortcut(&KeyboardShortcut::new(m, k)));
+        // An open picker owns the keyboard. Assign's filter box has focus, so
+        // j/k type there; Edit has text fields, so only Esc applies (Enter in a
+        // field does not save; use the Save button).
+        if let Some((edit, assign)) = self.picker.as_ref().map(|p| (matches!(p, Picker::Edit { .. }), matches!(p, Picker::Assign { .. }))) {
+            if shortcut(Modifiers::NONE, Key::Escape) {
+                self.actions.push(Action::PickerCancel);
+                return;
+            }
+            if edit {
+                return;
+            }
+            let letters = !assign;
+            if shortcut(Modifiers::NONE, Key::ArrowDown) || (letters && shortcut(Modifiers::NONE, Key::J)) {
+                self.actions.push(Action::PickerMove(1));
+            }
+            if shortcut(Modifiers::NONE, Key::ArrowUp) || (letters && shortcut(Modifiers::NONE, Key::K)) {
+                self.actions.push(Action::PickerMove(-1));
+            }
+            if shortcut(Modifiers::NONE, Key::Enter) {
+                self.actions.push(Action::PickerConfirm);
+            }
+            return;
+        }
         if self.screen != Screen::Issues {
             return;
         }
-        let shortcut = |m: Modifiers, k: Key| ctx.input_mut(|i| i.consume_shortcut(&KeyboardShortcut::new(m, k)));
         if shortcut(cmd, Key::K) {
             self.actions.push(Action::ToggleGoTo);
         }
@@ -488,6 +713,18 @@ impl App {
         if shortcut(Modifiers::NONE, Key::Slash) {
             self.focus_search = true;
         }
+        // Before plain j/k: consume_key(NONE, J) also matches Shift+J.
+        if shortcut(Modifiers::SHIFT, Key::J) {
+            self.actions.push(Action::Rank(1));
+        }
+        if shortcut(Modifiers::SHIFT, Key::K) {
+            self.actions.push(Action::Rank(-1));
+        }
+        for (k, a) in [(Key::T, Action::OpenTransition), (Key::A, Action::OpenAssign), (Key::S, Action::OpenSprint), (Key::E, Action::OpenEdit)] {
+            if shortcut(Modifiers::NONE, k) {
+                self.actions.push(a);
+            }
+        }
         if shortcut(Modifiers::NONE, Key::J) | shortcut(Modifiers::NONE, Key::ArrowDown) {
             self.actions.push(Action::Move(1));
         }
@@ -500,6 +737,43 @@ impl App {
             self.actions.push(Action::Copy(u));
         }
     }
+}
+
+/// Which issue to rank next to, and whether it goes before it.
+pub fn rank_target(rows: &[String], key: &str, delta: i32) -> Option<(String, bool)> {
+    let i = rows.iter().position(|k| k == key)?;
+    let j = i as i32 + delta;
+    if j < 0 || j as usize >= rows.len() {
+        return None;
+    }
+    Some((rows[j as usize].clone(), delta < 0))
+}
+
+/// Users whose display name contains `filter`, case-insensitively.
+pub fn filtered_users(items: &[User], filter: &str) -> Vec<User> {
+    let f = filter.trim().to_lowercase();
+    items.iter().filter(|u| f.is_empty() || u.display_name.to_lowercase().contains(&f)).cloned().collect()
+}
+
+/// Moves a picker cursor by `d`, wrapping at both ends.
+fn wrap_cursor(cur: usize, d: i32, len: usize) -> usize {
+    if len == 0 {
+        return 0;
+    }
+    (cur as i32 + d).rem_euclid(len as i32) as usize
+}
+
+/// The `fields` body for the Edit picker: labels always (comma split, trimmed,
+/// empties dropped), priority when named, points when they parse.
+fn edit_fields(labels: &str, priority: &str, points: &str) -> serde_json::Value {
+    let mut fields = serde_json::json!({ "labels": labels.split(',').map(str::trim).filter(|l| !l.is_empty()).collect::<Vec<_>>() });
+    if !priority.trim().is_empty() {
+        fields["priority"] = serde_json::json!({ "name": priority.trim() });
+    }
+    if let Ok(n) = points.trim().parse::<f64>() {
+        fields[jira::POINTS_FIELD] = serde_json::json!(n);
+    }
+    fields
 }
 
 /// A load starts only with a client to run it and none already in flight;
@@ -557,6 +831,7 @@ impl eframe::App for App {
         if self.client.is_some() {
             self.shortcuts(&ctx);
             views::main(self, ui);
+            views::pickers::show(self, &ctx);
         } else {
             views::sign_in(self, ui);
         }
@@ -617,5 +892,41 @@ mod tests {
         for e in [jira::Error::Other("Jira returned 400: bad JQL".into()), jira::Error::RateLimited("rate limited (429)".into())] {
             assert!(!marks_offline(ListId::TeamOpen, &e));
         }
+    }
+
+    #[test]
+    fn picker_cursor_wraps() {
+        assert_eq!(wrap_cursor(0, -1, 3), 2);
+        assert_eq!(wrap_cursor(2, 1, 3), 0);
+        assert_eq!(wrap_cursor(1, 1, 3), 2);
+        assert_eq!(wrap_cursor(0, 1, 0), 0);
+    }
+
+    #[test]
+    fn users_filter_by_name_case_insensitively() {
+        let u = |n: &str| User { account_id: n.to_lowercase(), display_name: n.into() };
+        let items = [u("Ann Lee"), u("Bob Ray"), u("Joanne")];
+        let names = |f: &str| filtered_users(&items, f).into_iter().map(|u| u.display_name).collect::<Vec<_>>();
+        assert_eq!(names(""), ["Ann Lee", "Bob Ray", "Joanne"]);
+        assert_eq!(names(" ANN "), ["Ann Lee", "Joanne"]);
+        assert!(names("zed").is_empty());
+    }
+
+    #[test]
+    fn edit_fields_body() {
+        let f = edit_fields(" a, ,b ", "  ", "3.5");
+        assert_eq!(f, serde_json::json!({ "labels": ["a", "b"], "customfield_10016": 3.5 }));
+        let f = edit_fields("", "High", "x");
+        assert_eq!(f, serde_json::json!({ "labels": [], "priority": { "name": "High" } }));
+    }
+
+    #[test]
+    fn rank_neighbours() {
+        let rows = ["A", "B", "C"].map(String::from);
+        assert_eq!(rank_target(&rows, "B", -1), Some(("A".to_string(), true)));
+        assert_eq!(rank_target(&rows, "B", 1), Some(("C".to_string(), false)));
+        assert_eq!(rank_target(&rows, "A", -1), None);
+        assert_eq!(rank_target(&rows, "C", 1), None);
+        assert_eq!(rank_target(&rows, "Z", 1), None);
     }
 }

@@ -3,6 +3,7 @@
 pub mod adf_view;
 pub mod detail;
 pub mod issues;
+pub mod pickers;
 
 use crate::app::{Action, App, Screen};
 use crate::theme::{self, Palette};
