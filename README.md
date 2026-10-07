@@ -4,7 +4,7 @@ A fast native desktop app for working through Jira tickets, built with Rust and 
 
 ## Install from source
 
-There is no system Rust toolchain; the repo ships a nix dev shell.
+This project is built through its nix dev shell, so run cargo via `nix develop`.
 
     nix develop --command cargo run --release
 
@@ -27,7 +27,7 @@ The app looks for an API token in this order:
 
 1. The `JIRA_API_TOKEN` environment variable. `JIRA_EMAIL` overrides the config's email.
 2. `api_token` in the config. It can be a plain value, `op://vault/item/field` (the app runs `op read`), or `$(command)` (the app runs the command). It is resolved on every launch and never written to disk.
-3. A token saved earlier from the paste prompt, at `~/Library/Application Support/jira-tickets/token` on macOS (mode 0600).
+3. A token saved earlier from the paste prompt, at `~/Library/Application Support/jira-tickets/token` on macOS or `~/.config/jira-tickets/token` on Linux (mode 0600).
 4. The paste prompt, where you paste an Atlassian API token.
 
 Only a token you paste is saved. Signing out deletes that file.
@@ -41,7 +41,7 @@ Only a token you paste is saved. Signing out deletes that file.
 | `⌘K` | Command palette |
 | `⌘F` or `/` | Focus search |
 | `j` / `k` (or arrows) | Next / previous issue |
-| `Enter` | Open the selected issue |
+| `Enter` | Confirm the open picker |
 | `t` | Transition |
 | `a` | Assign |
 | `s` | Sprint |
@@ -50,6 +50,8 @@ Only a token you paste is saved. Signing out deletes that file.
 | `c` | Copy the issue link |
 | `⌘O` | Open in the browser |
 | `⌘W` | Close the window |
+
+Only `⌘1`–`⌘4`, `⌘R`, and `⌘W` work on every screen. The rest are bound on the Issues screen only. Plain letter keys do nothing while a text field has focus. While a picker is open, only `Esc`, the arrow keys (and `j` / `k`, except in the Assign picker), and `Enter` apply. Selecting a row shows its detail.
 
 ## Developer switches
 
@@ -65,7 +67,7 @@ Screenshots need the `snapshot` feature:
     nix develop --command cargo build --release --features snapshot
     JIRA_TICKETS_SCREENSHOT=out.png JIRA_TICKETS_VIEW=issues JIRA_TICKETS_ROW=2 ./target/release/jira-tickets
 
-`JIRA_TICKETS_SCREENSHOT` is the output path and switches the app to an offscreen render at 1440x900, 2x. `JIRA_TICKETS_VIEW` picks `issues`, `grooming`, `team`, or `roadmap`. `JIRA_TICKETS_ROW=<n>` moves the selection by n rows, and `JIRA_TICKETS_THEME` picks the theme. Writes are always blocked in this mode. If nothing has loaded after 20 seconds (for example, no token), the picture shows whatever is on screen.
+`JIRA_TICKETS_SCREENSHOT` is the output path and switches the app to an offscreen render at 1440x900, 2x. `JIRA_TICKETS_VIEW` picks `issues`, `grooming`, `team`, or `roadmap`. `JIRA_TICKETS_ROW=<n>` moves the selection by n rows, and `JIRA_TICKETS_THEME` picks `light` or `dark`; unset means light here, not the system theme. Writes are always blocked in this mode. If nothing has loaded after 20 seconds (for example, no token), the picture shows whatever is on screen.
 
 ## Code map
 
