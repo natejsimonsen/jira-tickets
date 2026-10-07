@@ -37,7 +37,7 @@ Reference material:
 - Binary and app name `jira-tickets` ("Jira Tickets").
 - Rust 2024 edition. Dependencies: eframe/egui 0.36 (wgpu, accesskit,
   persistence), egui_extras, ureq 3 (json, platform-verifier), serde,
-  serde_json, chrono, dirs, keyring, toml, webbrowser (macOS). No
+  serde_json, chrono, dirs, toml, webbrowser (macOS). No
   tree-sitter, no diff or image code.
 - One window, four top-level views switched by `⌘1`–`⌘4`: Issues, Grooming,
   Team, Roadmap.
@@ -54,7 +54,7 @@ first run, then the app exits with instructions, as `jira-cli` does.
 site = "https://example.atlassian.net"
 email = "you@example.com"
 # Optional. Accepts a plain token, "op://vault/item/field", or "$(command)".
-# Resolved only when no token is found in the env or the saved token file.
+# Resolved on every launch, before the saved token file; never written to disk.
 api_token = "op://Private/Jira API Token/credential"
 
 [scope]
@@ -109,10 +109,12 @@ Token lookup order:
 
 1. `JIRA_API_TOKEN` environment variable (with `JIRA_EMAIL` overriding the
    config email if set).
-2. `api_token` in config. `op://` runs `op read`; `$(…)` runs `sh -c`. This
-   is the only subprocess the app ever starts. The value is resolved on
-   every launch and is never written to disk: 1Password stays the only
-   store for that secret.
+2. `api_token` in config. `op://` runs `op read`; `$(…)` runs `sh -c`.
+   These are the only subprocesses the app ever starts; when `op` is not on
+   the app's PATH (a Finder launch), it is retried through the user's login
+   shell (`$SHELL -lc`). The value is resolved on every launch and is never
+   written to disk: 1Password stays the only store for that secret. A failed
+   resolution is shown on the sign-in panel.
 3. Saved token file `~/Library/Application Support/jira-tickets/token`
    (`~/.config/jira-tickets/token` on Linux), mode 0600. Only a pasted
    token is ever saved here.
@@ -144,7 +146,7 @@ Writes (ported from `jira-cli`):
 - `transition` with optional resolution; on a "resolution" error, fetch
   resolutions and retry via a picker.
 - `rank before` / `rank after`: PUT `/rest/agile/1.0/issue/rank`.
-- `assign` (account id or `-1` to unassign).
+- `assign` (account id, or `null` to unassign).
 - `move to sprint` / `move to backlog`.
 - `update fields`: labels, priority, story points.
 - `add comment` (ADF body built from plain text paragraphs).
@@ -184,7 +186,8 @@ Detail (full description, all comments) is fetched per issue when opened and
 merged into the same record. The store serialises to JSON under
 `~/Library/Caches/jira-tickets/` so launch shows the last state in under
 0.1 s and refreshes quietly. Every mutation refetches the affected issue
-rather than the whole list.
+and then refreshes the team lists, since a transition can move an issue
+out of them. Writes run on one ordered worker thread.
 
 ## 6. Issues view
 
