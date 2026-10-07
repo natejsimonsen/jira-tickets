@@ -39,7 +39,7 @@ pub fn login_email(cfg_email: &str) -> String {
 
 /// The first token found, or the reasons each configured source failed
 /// (empty when nothing was configured at all).
-pub fn find_login(cfg_email: &str, cfg_token_ref: Option<&str>) -> Result<Login, Vec<String>> {
+pub fn find_login(cfg_email: &str, cfg_token_ref: Option<&str>, op_account: Option<&str>) -> Result<Login, Vec<String>> {
     let email = login_email(cfg_email);
     let mut errors = Vec::new();
     if let Ok(t) = std::env::var("JIRA_API_TOKEN")
@@ -48,7 +48,7 @@ pub fn find_login(cfg_email: &str, cfg_token_ref: Option<&str>) -> Result<Login,
         return Ok(Login { email, token: t.trim().to_string(), source: Source::Env });
     }
     if let Some(r) = cfg_token_ref {
-        match crate::config::resolve_secret(r) {
+        match crate::config::resolve_secret(r, op_account) {
             Ok(t) if !t.is_empty() => return Ok(Login { email, token: t, source: Source::ConfigRef }),
             Ok(_) => errors.push("config api_token: resolved to an empty token".to_string()),
             Err(e) => errors.push(format!("config api_token: {e}")),
@@ -135,7 +135,7 @@ mod tests {
     fn env_wins() {
         with_token_file(|_| {
             unsafe { std::env::set_var("JIRA_API_TOKEN", "env-tok") };
-            let l = find_login("me@x.com", Some("plain-cfg")).unwrap();
+            let l = find_login("me@x.com", Some("plain-cfg"), None).unwrap();
             assert_eq!(l.token, "env-tok");
             assert!(matches!(l.source, Source::Env));
             unsafe { std::env::remove_var("JIRA_API_TOKEN") };
@@ -146,7 +146,7 @@ mod tests {
     fn config_before_saved_file() {
         with_token_file(|p| {
             std::fs::write(p, "file-tok\n").unwrap();
-            let l = find_login("me@x.com", Some("plain-cfg")).unwrap();
+            let l = find_login("me@x.com", Some("plain-cfg"), None).unwrap();
             assert_eq!(l.token, "plain-cfg");
             assert!(matches!(l.source, Source::ConfigRef));
         });
@@ -155,7 +155,7 @@ mod tests {
     #[test]
     fn config_ref_is_not_saved() {
         with_token_file(|p| {
-            let l = find_login("me@x.com", Some("plain-cfg")).unwrap();
+            let l = find_login("me@x.com", Some("plain-cfg"), None).unwrap();
             assert_eq!(l.token, "plain-cfg");
             assert!(matches!(l.source, Source::ConfigRef));
             assert!(!p.exists());
@@ -166,7 +166,7 @@ mod tests {
     fn falls_back_to_file_when_config_ref_fails() {
         with_token_file(|p| {
             std::fs::write(p, "file-tok\n").unwrap();
-            let l = find_login("me@x.com", Some("$(exit 1)")).unwrap();
+            let l = find_login("me@x.com", Some("$(exit 1)"), None).unwrap();
             assert_eq!(l.token, "file-tok");
             assert!(matches!(l.source, Source::SavedFile));
         });
@@ -174,13 +174,13 @@ mod tests {
 
     #[test]
     fn nothing_found() {
-        with_token_file(|_| assert_eq!(find_login("me@x.com", None).unwrap_err(), Vec::<String>::new()));
+        with_token_file(|_| assert_eq!(find_login("me@x.com", None, None).unwrap_err(), Vec::<String>::new()));
     }
 
     #[test]
     fn failed_config_ref_reports_its_error() {
         with_token_file(|_| {
-            let errs = find_login("me@x.com", Some("$(exit 1)")).unwrap_err();
+            let errs = find_login("me@x.com", Some("$(exit 1)"), None).unwrap_err();
             assert_eq!(errs.len(), 1, "{errs:?}");
             assert!(errs[0].starts_with("config api_token: sh failed"), "{errs:?}");
         });

@@ -268,7 +268,7 @@ impl App {
         // Finding the token may run `op read`, which can block; keep it off the UI thread.
         let (tx, ctx) = (app.tx.clone(), app.ctx.clone());
         std::thread::spawn(move || {
-            let _ = tx.send(Msg::Login(auth::find_login(&cfg.email, cfg.api_token.as_deref())));
+            let _ = tx.send(Msg::Login(auth::find_login(&cfg.email, cfg.api_token.as_deref(), cfg.op_account.as_deref())));
             ctx.request_repaint();
         });
         app
@@ -544,7 +544,7 @@ impl App {
                 self.finding_token = true;
                 let (tx, ctx2, cfg) = (self.tx.clone(), self.ctx.clone(), self.cfg.clone());
                 std::thread::spawn(move || {
-                    let _ = tx.send(Msg::Login(auth::find_login(&cfg.email, cfg.api_token.as_deref())));
+                    let _ = tx.send(Msg::Login(auth::find_login(&cfg.email, cfg.api_token.as_deref(), cfg.op_account.as_deref())));
                     ctx2.request_repaint();
                 });
             }

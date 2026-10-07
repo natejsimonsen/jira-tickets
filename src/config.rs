@@ -13,6 +13,7 @@ pub struct Config {
     pub site: String,
     pub email: String,
     pub api_token: Option<String>,
+    pub op_account: Option<String>,
     pub scope: Scope,
     pub grooming: Grooming,
     pub team: Team,
@@ -192,10 +193,10 @@ fn expand_home(p: &str) -> PathBuf {
 
 /// `op://vault/item/field` runs `op read`; `$(cmd)` runs `sh -c cmd`;
 /// anything else is returned as is.
-pub fn resolve_secret(value: &str) -> Result<String, String> {
+pub fn resolve_secret(value: &str, op_account: Option<&str>) -> Result<String, String> {
     let v = value.trim();
     if v.starts_with("op://") {
-        return op_read(v);
+        return op_read(v, op_account);
     }
     if let Some(inner) = v.strip_prefix("$(").and_then(|r| r.strip_suffix(')')) {
         return run("sh", &["-c", inner]);
@@ -205,18 +206,28 @@ pub fn resolve_secret(value: &str) -> Result<String, String> {
 
 /// A Finder or Dock launch inherits launchd's PATH, which rarely has `op`;
 /// when it is not found, retry through the user's login shell.
-fn op_read(reference: &str) -> Result<String, String> {
+fn op_read(reference: &str, account: Option<&str>) -> Result<String, String> {
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into());
-    op_read_via("op", &shell, reference)
+    op_read_via("op", &shell, reference, account)
 }
 
-fn op_read_via(op: &str, shell: &str, reference: &str) -> Result<String, String> {
-    match std::process::Command::new(op).args(["read", reference]).output() {
+fn op_read_via(op: &str, shell: &str, reference: &str, account: Option<&str>) -> Result<String, String> {
+    let mut cmd = std::process::Command::new(op);
+    cmd.arg("read");
+    if let Some(a) = account {
+        cmd.args(["--account", a]);
+    }
+    match cmd.arg(reference).output() {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             if reference.contains('\'') {
                 return Err("op reference contains a single quote".into());
             }
-            run(shell, &["-lc", &format!("op read '{reference}'")])
+            let acct = match account {
+                Some(a) if a.contains('\'') => return Err("op_account contains a single quote".into()),
+                Some(a) => format!(" --account '{a}'"),
+                None => String::new(),
+            };
+            run(shell, &["-lc", &format!("op read{acct} '{reference}'")])
         }
         out => finish(op, out),
     }
@@ -248,6 +259,9 @@ email = "you@example.com"
 # Optional. Plain token, "op://vault/item/field", or "$(command)".
 # Resolved on every launch, before the saved token file; never written to disk.
 # api_token = "op://Private/Jira API Token/credential"
+# Needed when `op` knows more than one account (the error says "multiple accounts
+# found"). Use the account's sign-in address or its email.
+# op_account = "yourcompany.1password.com"
 
 [scope]
 projects = ["CI", "OPS"]   # projects searched for team members' work
@@ -340,8 +354,8 @@ email = "me@example.com"
 
     #[test]
     fn resolve_secret_plain_and_shell() {
-        assert_eq!(resolve_secret("abc").unwrap(), "abc");
-        assert_eq!(resolve_secret("$(echo hi)").unwrap(), "hi");
+        assert_eq!(resolve_secret("abc", None).unwrap(), "abc");
+        assert_eq!(resolve_secret("$(echo hi)", None).unwrap(), "hi");
     }
 
     #[test]
@@ -356,9 +370,26 @@ email = "me@example.com"
             std::fs::set_permissions(&sh, std::fs::Permissions::from_mode(0o755)).unwrap();
         }
         let missing = dir.path().join("no-such-op");
-        let got = op_read_via(missing.to_str().unwrap(), sh.to_str().unwrap(), "op://Private/Jira/credential").unwrap();
+        let got = op_read_via(missing.to_str().unwrap(), sh.to_str().unwrap(), "op://Private/Jira/credential", None).unwrap();
         assert_eq!(got, "-lc op read 'op://Private/Jira/credential'");
-        assert!(op_read_via(missing.to_str().unwrap(), sh.to_str().unwrap(), "op://a/it's/x").is_err());
+        assert!(op_read_via(missing.to_str().unwrap(), sh.to_str().unwrap(), "op://a/it's/x", None).is_err());
+    }
+
+    #[test]
+    fn op_account_reaches_login_shell_command() {
+        let dir = tempfile::tempdir().unwrap();
+        let sh = dir.path().join("fake-shell");
+        std::fs::write(&sh, "#!/bin/sh\nprintf '%s %s' \"$1\" \"$2\"\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&sh, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let missing = dir.path().join("no-such-op");
+        let (op, shell) = (missing.to_str().unwrap(), sh.to_str().unwrap());
+        let got = op_read_via(op, shell, "op://Private/Jira/credential", Some("acme.1password.com")).unwrap();
+        assert_eq!(got, "-lc op read --account 'acme.1password.com' 'op://Private/Jira/credential'");
+        assert!(op_read_via(op, shell, "op://a/b/c", Some("it's")).is_err());
     }
 
     #[test]

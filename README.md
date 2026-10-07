@@ -26,7 +26,7 @@ Roadmap settings name custom fields by id, such as `customfield_12345`. To find 
 The app looks for an API token in this order:
 
 1. The `JIRA_API_TOKEN` environment variable. `JIRA_EMAIL` overrides the config's email.
-2. `api_token` in the config. It can be a plain value, `op://vault/item/field` (the app runs `op read`), or `$(command)` (the app runs the command). It is resolved on every launch and never written to disk.
+2. `api_token` in the config. It can be a plain value, `op://vault/item/field` (the app runs `op read`), or `$(command)` (the app runs the command). It is resolved on every launch and never written to disk. If `op` knows more than one 1Password account (it fails with "multiple accounts found"), set `op_account` in the config to the account's sign-in address or email.
 3. A token saved earlier from the paste prompt, at `~/Library/Application Support/jira-tickets/token` on macOS or `~/.config/jira-tickets/token` on Linux (mode 0600).
 4. The paste prompt, where you paste an Atlassian API token.
 
