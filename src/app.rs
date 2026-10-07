@@ -30,6 +30,8 @@ pub enum Msg {
         id: ListId,
         result: jira::Result<Vec<Issue>>,
         stale: bool,
+        /// Which `RunSearch` a `ListId::Search` result answers; None for other lists.
+        seq: Option<u64>,
     },
     Detail {
         key: String,
@@ -110,6 +112,10 @@ pub struct App {
     pub last_cursor: usize,
     /// The list shows ListId::Search instead of TeamOpen.
     pub search_active: bool,
+    /// Bumped by every `RunSearch`; Search results from older runs are dropped.
+    pub search_seq: u64,
+    /// The JQL of the running search, for Retry.
+    pub last_search_jql: Option<String>,
     pub(crate) client: Option<Arc<Client>>,
     tx: Sender<Msg>,
     rx: Receiver<Msg>,
@@ -152,6 +158,8 @@ impl App {
             cursor: 0,
             last_cursor: 0,
             search_active: false,
+            search_seq: 0,
+            last_search_jql: None,
             client: None,
             tx,
             rx,
@@ -224,6 +232,10 @@ impl App {
     }
 
     pub fn load_list(&mut self, id: ListId, jql: String, fields: Vec<String>) {
+        self.load_list_seq(id, jql, fields, None);
+    }
+
+    fn load_list_seq(&mut self, id: ListId, jql: String, fields: Vec<String>, seq: Option<u64>) {
         let client_present = self.client.is_some();
         let entry = self.lists.entry(id).or_default();
         if !should_load(client_present, entry.loading) {
@@ -232,7 +244,7 @@ impl App {
         entry.loading = true;
         self.spawn(move |c, tx| {
             let fields: Vec<&str> = fields.iter().map(String::as_str).collect();
-            let _ = tx.send(Msg::List { id, result: c.search(&jql, &fields), stale: false });
+            let _ = tx.send(Msg::List { id, result: c.search(&jql, &fields), stale: false, seq });
         });
     }
 
@@ -257,7 +269,10 @@ impl App {
                 self.token_error = Some(m);
             }
             Msg::Me(Err(e)) => self.toast(e.to_string(), true),
-            Msg::List { id, result, stale: _ } => {
+            Msg::List { id, result, stale: _, seq } => {
+                if id == ListId::Search && !accept_search(self.search_seq, seq, self.search_active) {
+                    return;
+                }
                 let entry = self.lists.entry(id).or_default();
                 entry.loading = false;
                 match result {
@@ -364,17 +379,23 @@ impl App {
             }
             Action::RunSearch(jql) => {
                 self.cursor = 0;
+                self.search_seq += 1;
                 if jql.trim().is_empty() {
                     self.search_active = false;
+                    self.filter.quick = None;
+                    self.last_search_jql = None;
                     self.store.lists.remove(&ListId::Search);
+                    // Drops the error and any in-flight flag; late results are ignored by seq.
+                    self.lists.remove(&ListId::Search);
                     return;
                 }
                 self.search_active = true;
+                self.last_search_jql = Some(jql.trim().to_string());
                 let full = format!("project = {} AND ({}) ORDER BY Rank ASC", store::jql_quote(&self.cfg.scope.project), jql.trim());
                 let fields: Vec<String> = jira::LIST_FIELDS.iter().map(|s| s.to_string()).collect();
                 // A new search replaces any in flight.
                 self.lists.entry(ListId::Search).or_default().loading = false;
-                self.load_list(ListId::Search, full, fields);
+                self.load_list_seq(ListId::Search, full, fields, Some(self.search_seq));
             }
             Action::ToggleGoTo => self.goto = if self.goto.is_some() { None } else { Some(String::new()) },
             Action::GoTo => {
@@ -456,6 +477,11 @@ impl App {
 /// otherwise nothing would ever clear the loading flag.
 fn should_load(client_present: bool, already_loading: bool) -> bool {
     client_present && !already_loading
+}
+
+/// A Search result lands only while a search is active and only for the latest run.
+fn accept_search(current_seq: u64, msg_seq: Option<u64>, active: bool) -> bool {
+    active && msg_seq == Some(current_seq)
 }
 
 /// Only a transport failure on a refresh list means we are offline; bad JQL,
@@ -542,6 +568,14 @@ mod tests {
         assert!(!should_load(true, true));
         assert!(!should_load(false, false));
         assert!(!should_load(false, true));
+    }
+
+    #[test]
+    fn search_results_only_land_for_the_latest_active_run() {
+        assert!(accept_search(3, Some(3), true), "current");
+        assert!(!accept_search(3, Some(2), true), "stale");
+        assert!(!accept_search(3, Some(3), false), "inactive");
+        assert!(!accept_search(3, None, true), "untagged");
     }
 
     #[test]

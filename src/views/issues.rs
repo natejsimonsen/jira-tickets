@@ -80,6 +80,8 @@ fn filters(app: &mut App, ui: &mut Ui, p: &Palette) {
         // JQL has an operator; a bare word is a local text filter.
         if t.contains('=') || t.contains(" in ") || t.contains('~') || t.contains('!') {
             app.filter.text.clear();
+            // A typed search replaces any quick filter.
+            app.filter.quick = None;
             app.actions.push(Action::RunSearch(t));
         }
     }
@@ -93,7 +95,11 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
         && rows.is_empty()
         && super::error_banner(ui, p, "Couldn't load issues.", &e)
     {
-        app.actions.push(Action::Refresh);
+        let retry = match (&app.last_search_jql, app.search_active) {
+            (Some(jql), true) => Action::RunSearch(jql.clone()),
+            _ => Action::Refresh,
+        };
+        app.actions.push(retry);
     }
     ui.horizontal(|ui| {
         ui.label(RichText::new(format!("{} issues", rows.len())).color(p.muted).size(12.0));
