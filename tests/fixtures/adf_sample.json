@@ -1,0 +1,33 @@
+{
+  "type": "doc", "version": 1,
+  "content": [
+    { "type": "heading", "attrs": { "level": 2 }, "content": [ { "type": "text", "text": "Goal" } ] },
+    { "type": "paragraph", "content": [
+      { "type": "text", "text": "Ship " },
+      { "type": "text", "text": "canary", "marks": [ { "type": "strong" } ] },
+      { "type": "text", "text": " via " },
+      { "type": "text", "text": "Gateway API", "marks": [ { "type": "link", "attrs": { "href": "https://gateway-api.sigs.k8s.io" } } ] },
+      { "type": "hardBreak" },
+      { "type": "mention", "attrs": { "id": "abc", "text": "@Ada Lovelace" } },
+      { "type": "text", "text": " owns it." }
+    ] },
+    { "type": "orderedList", "content": [
+      { "type": "listItem", "content": [ { "type": "paragraph", "content": [ { "type": "text", "text": "first" } ] } ] },
+      { "type": "listItem", "content": [ { "type": "paragraph", "content": [ { "type": "text", "text": "second" } ] } ] }
+    ] },
+    { "type": "codeBlock", "attrs": { "language": "sh" }, "content": [ { "type": "text", "text": "kubectl get pods" } ] },
+    { "type": "panel", "attrs": { "panelType": "warning" }, "content": [ { "type": "paragraph", "content": [ { "type": "text", "text": "Careful" } ] } ] },
+    { "type": "rule" },
+    { "type": "table", "content": [
+      { "type": "tableRow", "content": [
+        { "type": "tableHeader", "content": [ { "type": "paragraph", "content": [ { "type": "text", "text": "A" } ] } ] },
+        { "type": "tableHeader", "content": [ { "type": "paragraph", "content": [ { "type": "text", "text": "B" } ] } ] }
+      ] },
+      { "type": "tableRow", "content": [
+        { "type": "tableCell", "content": [ { "type": "paragraph", "content": [ { "type": "text", "text": "1" } ] } ] },
+        { "type": "tableCell", "content": [ { "type": "paragraph", "content": [ { "type": "text", "text": "2" } ] } ] }
+      ] }
+    ] },
+    { "type": "mysteryNode", "content": [ { "type": "text", "text": "fallback text" } ] }
+  ]
+}
