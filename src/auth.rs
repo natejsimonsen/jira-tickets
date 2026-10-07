@@ -1,6 +1,7 @@
-//! Finds the Jira API token. Order: JIRA_API_TOKEN, the saved token file,
-//! the config's api_token reference (which may run `op read`), then the
-//! paste prompt in the window (handled by the app).
+//! Finds the Jira API token. Order: JIRA_API_TOKEN, the config's api_token
+//! reference (resolved on every launch, e.g. `op read`, and never written to
+//! disk), the saved token file (only ever a pasted token), then the paste
+//! prompt in the window (handled by the app).
 
 use std::io::Write;
 use std::path::PathBuf;
@@ -18,7 +19,7 @@ impl Source {
         match self {
             Source::Env => "JIRA_API_TOKEN",
             Source::SavedFile => "saved token",
-            Source::ConfigRef => "config api_token",
+            Source::ConfigRef => "config api_token (resolved each launch)",
             Source::Pasted => "pasted token",
         }
     }
@@ -38,15 +39,14 @@ pub fn find_login(cfg_email: &str, cfg_token_ref: Option<&str>) -> Option<Login>
     {
         return Some(Login { email, token: t.trim().to_string(), source: Source::Env });
     }
-    if let Some(t) = read_token_file() {
-        return Some(Login { email, token: t, source: Source::SavedFile });
-    }
     if let Some(r) = cfg_token_ref
         && let Ok(t) = crate::config::resolve_secret(r)
         && !t.is_empty()
     {
-        let _ = save_token(&t);
         return Some(Login { email, token: t, source: Source::ConfigRef });
+    }
+    if let Some(t) = read_token_file() {
+        return Some(Login { email, token: t, source: Source::SavedFile });
     }
     None
 }
@@ -123,22 +123,32 @@ mod tests {
     }
 
     #[test]
-    fn saved_file_before_config() {
+    fn config_before_saved_file() {
         with_token_file(|p| {
             std::fs::write(p, "file-tok\n").unwrap();
             let l = find_login("me@x.com", Some("plain-cfg")).unwrap();
-            assert_eq!(l.token, "file-tok");
-            assert!(matches!(l.source, Source::SavedFile));
+            assert_eq!(l.token, "plain-cfg");
+            assert!(matches!(l.source, Source::ConfigRef));
         });
     }
 
     #[test]
-    fn config_ref_is_saved() {
+    fn config_ref_is_not_saved() {
         with_token_file(|p| {
             let l = find_login("me@x.com", Some("plain-cfg")).unwrap();
             assert_eq!(l.token, "plain-cfg");
             assert!(matches!(l.source, Source::ConfigRef));
-            assert_eq!(std::fs::read_to_string(p).unwrap(), "plain-cfg");
+            assert!(!p.exists());
+        });
+    }
+
+    #[test]
+    fn falls_back_to_file_when_config_ref_fails() {
+        with_token_file(|p| {
+            std::fs::write(p, "file-tok\n").unwrap();
+            let l = find_login("me@x.com", Some("$(exit 1)")).unwrap();
+            assert_eq!(l.token, "file-tok");
+            assert!(matches!(l.source, Source::SavedFile));
         });
     }
 
