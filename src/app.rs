@@ -200,8 +200,9 @@ impl App {
     }
 
     pub fn load_list(&mut self, id: ListId, jql: String, fields: Vec<String>) {
+        let client_present = self.client.is_some();
         let entry = self.lists.entry(id).or_default();
-        if entry.loading {
+        if !should_load(client_present, entry.loading) {
             return;
         }
         entry.loading = true;
@@ -212,9 +213,10 @@ impl App {
     }
 
     pub fn load_detail(&mut self, key: &str) {
-        if !self.detail_loading.insert(key.to_string()) {
+        if !should_load(self.client.is_some(), self.detail_loading.contains(key)) {
             return;
         }
+        self.detail_loading.insert(key.to_string());
         let key = key.to_string();
         self.spawn(move |c, tx| {
             let _ = tx.send(Msg::Detail { key: key.clone(), result: c.issue(&key, &[]) });
@@ -243,7 +245,7 @@ impl App {
                         self.store.fetched_at = Some(chrono::Utc::now().timestamp());
                         let store = self.store.clone();
                         std::thread::spawn(move || store.save_cached());
-                        if id == ListId::TeamOpen {
+                        if id == ListId::TeamOpen && self.client.is_some() {
                             self.load_epics();
                         }
                     }
@@ -252,8 +254,10 @@ impl App {
                         self.token_error = Some(m);
                     }
                     Err(e) => {
+                        if marks_offline(id, &e) {
+                            self.offline = true;
+                        }
                         entry.error = Some(e.to_string());
-                        self.offline = true;
                     }
                 }
             }
@@ -269,8 +273,10 @@ impl App {
                     Ok(()) => self.toast(format!("{what} done"), false),
                     Err(e) => self.toast(format!("{what} failed: {e}"), true),
                 }
-                self.load_detail(&key);
-                self.refresh_all();
+                if self.client.is_some() {
+                    self.load_detail(&key);
+                    self.refresh_all();
+                }
             }
             // Pickers (Task 11) handle these; until then they are ignored.
             Msg::Transitions { .. } | Msg::Resolutions(_) | Msg::Users(_) | Msg::Sprints(_) => {}
@@ -328,9 +334,25 @@ impl App {
         if ctx.input_mut(|i| i.consume_shortcut(&KeyboardShortcut::new(cmd, Key::R))) {
             self.actions.push(Action::Refresh);
         }
-        if ctx.input_mut(|i| i.consume_shortcut(&KeyboardShortcut::new(cmd, Key::W))) {
-            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-        }
+    }
+}
+
+/// A load starts only with a client to run it and none already in flight;
+/// otherwise nothing would ever clear the loading flag.
+fn should_load(client_present: bool, already_loading: bool) -> bool {
+    client_present && !already_loading
+}
+
+/// Only a transport failure on a refresh list means we are offline; bad JQL,
+/// rate limits, or a failed search just show on that list.
+fn marks_offline(id: ListId, e: &jira::Error) -> bool {
+    matches!(e, jira::Error::Network(_)) && matches!(id, ListId::TeamOpen | ListId::TeamInProgress | ListId::Epics)
+}
+
+/// ⌘W closes the window on every screen, signed in or not.
+fn close_shortcut(ctx: &egui::Context) {
+    if ctx.input_mut(|i| i.consume_shortcut(&KeyboardShortcut::new(Modifiers::COMMAND, Key::W))) {
+        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
     }
 }
 
@@ -361,6 +383,7 @@ impl eframe::App for App {
 
         // The root ui has no background of its own in eframe 0.36.
         ui.painter().rect_filled(ui.max_rect(), 0.0, theme::palette(&ctx).bg);
+        close_shortcut(&ctx);
         if self.client.is_some() {
             self.shortcuts(&ctx);
             views::main(self, ui);
@@ -385,6 +408,31 @@ impl eframe::App for App {
         });
         for u in urls {
             open_url(&u);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn loads_need_a_client_and_no_load_in_flight() {
+        assert!(should_load(true, false));
+        assert!(!should_load(true, true));
+        assert!(!should_load(false, false));
+        assert!(!should_load(false, true));
+    }
+
+    #[test]
+    fn only_network_errors_on_refresh_lists_mark_offline() {
+        let net = jira::Error::Network("Network error: refused".into());
+        for id in [ListId::TeamOpen, ListId::TeamInProgress, ListId::Epics] {
+            assert!(marks_offline(id, &net), "{id:?}");
+        }
+        assert!(!marks_offline(ListId::Search, &net));
+        for e in [jira::Error::Other("Jira returned 400: bad JQL".into()), jira::Error::RateLimited("rate limited (429)".into())] {
+            assert!(!marks_offline(ListId::TeamOpen, &e));
         }
     }
 }

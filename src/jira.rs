@@ -16,20 +16,22 @@ pub type Result<T> = std::result::Result<T, Error>;
 pub enum Error {
     Unauthorized(String),
     RateLimited(String),
+    /// The request never got an HTTP response (DNS, connect, TLS, timeout).
+    Network(String),
     Other(String),
 }
 
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Error::Unauthorized(m) | Error::RateLimited(m) | Error::Other(m) => f.write_str(m),
+            Error::Unauthorized(m) | Error::RateLimited(m) | Error::Network(m) | Error::Other(m) => f.write_str(m),
         }
     }
 }
 
 impl From<ureq::Error> for Error {
     fn from(e: ureq::Error) -> Self {
-        Error::Other(format!("Network error: {e}"))
+        Error::Network(format!("Network error: {e}"))
     }
 }
 
@@ -594,6 +596,12 @@ pub mod tests {
         assert!(matches!(c.myself(), Err(Error::Other(_))));
         assert!(matches!(map_status(401, "x"), Error::Unauthorized(_)));
         assert!(matches!(map_status(429, "x"), Error::RateLimited(_)));
+    }
+
+    #[test]
+    fn transport_errors_map_to_network() {
+        let e: Error = ureq::Error::Io(std::io::Error::other("connection refused")).into();
+        assert!(matches!(&e, Error::Network(m) if m.starts_with("Network error: ")));
     }
 
     #[test]
