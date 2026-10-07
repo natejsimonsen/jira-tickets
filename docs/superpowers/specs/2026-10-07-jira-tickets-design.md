@@ -109,13 +109,16 @@ Token lookup order:
 
 1. `JIRA_API_TOKEN` environment variable (with `JIRA_EMAIL` overriding the
    config email if set).
-2. Saved token file `~/Library/Application Support/jira-tickets/token`
-   (`~/.config/jira-tickets/token` on Linux), mode 0600.
-3. `api_token` in config. `op://` runs `op read`; `$(…)` runs `sh -c`. This
-   is the only subprocess the app ever starts.
+2. `api_token` in config. `op://` runs `op read`; `$(…)` runs `sh -c`. This
+   is the only subprocess the app ever starts. The value is resolved on
+   every launch and is never written to disk: 1Password stays the only
+   store for that secret.
+3. Saved token file `~/Library/Application Support/jira-tickets/token`
+   (`~/.config/jira-tickets/token` on Linux), mode 0600. Only a pasted
+   token is ever saved here.
 4. A paste prompt in the window.
 
-A token found by step 3 or 4 is saved to the file. Every request uses HTTP
+A token pasted in step 4 is saved to the file. Every request uses HTTP
 basic auth with email and token. A 401 shows the `jira-cli` diagnostic
 (site, email, masked token, what to check) in a panel with a "sign out"
 action that deletes the file.
