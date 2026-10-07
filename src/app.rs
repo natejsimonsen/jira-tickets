@@ -69,6 +69,7 @@ pub enum Action {
     ToggleGoTo,
     GoTo,
     Move(i32),
+    Comment,
 }
 
 #[derive(Default)]
@@ -116,6 +117,10 @@ pub struct App {
     pub search_seq: u64,
     /// The JQL of the running search, for Retry.
     pub last_search_jql: Option<String>,
+    /// The comment composer's text for the selected issue.
+    pub composer: String,
+    /// A comment post is in flight.
+    pub posting: bool,
     pub(crate) client: Option<Arc<Client>>,
     tx: Sender<Msg>,
     rx: Receiver<Msg>,
@@ -160,6 +165,8 @@ impl App {
             search_active: false,
             search_seq: 0,
             last_search_jql: None,
+            composer: String::new(),
+            posting: false,
             client: None,
             tx,
             rx,
@@ -308,6 +315,12 @@ impl App {
                 }
             }
             Msg::Done { key, what, result } => {
+                if what == "Comment" {
+                    self.posting = false;
+                    if result.is_ok() {
+                        self.composer.clear();
+                    }
+                }
                 match result {
                     Ok(()) => self.toast(format!("{what} done"), false),
                     Err(e) => self.toast(format!("{what} failed: {e}"), true),
@@ -415,6 +428,18 @@ impl App {
                 if let Some(key) = views::issues::current_rows(self).get(self.cursor).map(|i| i.key.clone()) {
                     self.actions.push(Action::Select(key));
                 }
+            }
+            Action::Comment => {
+                let (Some(key), false) = (self.selected.clone(), self.posting) else { return };
+                let text = self.composer.trim().to_string();
+                // spawn is a no-op without a client; don't leave `posting` stuck.
+                if text.is_empty() || self.client.is_none() {
+                    return;
+                }
+                self.posting = true;
+                self.spawn(move |c, tx| {
+                    let _ = tx.send(Msg::Done { key: key.clone(), what: "Comment", result: c.add_comment(&key, &text) });
+                });
             }
         }
     }

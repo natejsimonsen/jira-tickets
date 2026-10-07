@@ -1,5 +1,6 @@
 //! Header with the screen switcher, sign-in, toast, shared widgets.
 
+pub mod adf_view;
 pub mod detail;
 pub mod issues;
 
