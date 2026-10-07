@@ -154,6 +154,11 @@ pub struct App {
 }
 
 impl App {
+    /// True once the first team list has loaded; snapshots wait for it.
+    pub fn shot_ready(&self) -> bool {
+        self.lists.get(&crate::store::ListId::TeamOpen).is_some_and(|l| l.fetched.is_some())
+    }
+
     pub fn new(cc: &eframe::CreationContext<'_>, cfg: Config) -> Self {
         theme::apply(&cc.egui_ctx);
         match std::env::var("JIRA_TICKETS_THEME").as_deref() {

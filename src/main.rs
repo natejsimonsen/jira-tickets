@@ -8,6 +8,8 @@ mod cache;
 mod config;
 mod filter;
 mod jira;
+#[cfg(feature = "snapshot")]
+mod snapshot;
 mod store;
 mod theme;
 mod views;
@@ -31,6 +33,11 @@ fn main() -> eframe::Result {
             std::process::exit(1);
         }
     };
+    #[cfg(feature = "snapshot")]
+    if let Ok(out) = std::env::var("JIRA_TICKETS_SCREENSHOT") {
+        snapshot::run(&out, cfg);
+        return Ok(());
+    }
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("Jira Tickets")
