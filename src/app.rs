@@ -13,6 +13,11 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::{Duration, Instant};
 
 const AUTO_REFRESH: Duration = Duration::from_secs(5 * 60);
+/// A detail fetched this recently is not refetched on selection.
+const DETAIL_FRESH: Duration = Duration::from_secs(60);
+
+/// A write run on the ordered write worker.
+type WriteJob = Box<dyn FnOnce(&Client, &Sender<Msg>) + Send>;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Screen {
@@ -128,6 +133,8 @@ pub enum Picker {
 #[derive(Default)]
 pub struct Loaded {
     pub loading: bool,
+    /// A load was asked for while one was in flight; run it when that one lands.
+    pub reload_after: bool,
     pub error: Option<String>,
     pub fetched: Option<Instant>,
 }
@@ -155,6 +162,8 @@ pub struct App {
     pub selected: Option<String>,
     /// Issue keys with a detail fetch in flight.
     pub detail_loading: std::collections::HashSet<String>,
+    /// When each issue's detail last arrived.
+    detail_fetched: HashMap<String, Instant>,
     pub filter: crate::filter::IssueFilter,
     /// Set by ⌘F or `/`; the search box takes focus on its next frame.
     pub focus_search: bool,
@@ -183,6 +192,8 @@ pub struct App {
     pub(crate) client: Option<Arc<Client>>,
     tx: Sender<Msg>,
     rx: Receiver<Msg>,
+    /// Feeds the single write worker, so writes reach Jira in the order made.
+    writes: Sender<(Arc<Client>, WriteJob)>,
     ctx: egui::Context,
     last_refresh: Instant,
     was_focused: bool,
@@ -205,6 +216,17 @@ impl App {
             jira::READ_ONLY.store(true, std::sync::atomic::Ordering::Relaxed);
         }
         let (tx, rx) = channel();
+        let (writes, write_rx) = channel::<(Arc<Client>, WriteJob)>();
+        {
+            let (tx, ctx) = (tx.clone(), cc.egui_ctx.clone());
+            // Ends when the App (the only sender) is dropped.
+            std::thread::spawn(move || {
+                for (client, job) in write_rx {
+                    job(&client, &tx);
+                    ctx.request_repaint();
+                }
+            });
+        }
         let cfg = Arc::new(cfg);
         let app = App {
             cfg: cfg.clone(),
@@ -221,6 +243,7 @@ impl App {
             offline: false,
             selected: None,
             detail_loading: Default::default(),
+            detail_fetched: HashMap::new(),
             filter: Default::default(),
             focus_search: false,
             goto: None,
@@ -237,6 +260,7 @@ impl App {
             client: None,
             tx,
             rx,
+            writes,
             ctx: cc.egui_ctx.clone(),
             last_refresh: Instant::now(),
             was_focused: true,
@@ -257,6 +281,12 @@ impl App {
             f(&client, &tx);
             ctx.request_repaint();
         });
+    }
+
+    /// Queues a write on the ordered write worker; a no-op without a client.
+    pub fn spawn_write(&self, f: impl FnOnce(&Client, &Sender<Msg>) + Send + 'static) {
+        let Some(client) = self.client.clone() else { return };
+        let _ = self.writes.send((client, Box::new(f)));
     }
 
     pub fn toast(&mut self, text: impl Into<String>, error: bool) {
@@ -312,6 +342,9 @@ impl App {
     fn load_list_seq(&mut self, id: ListId, jql: String, fields: Vec<String>, seq: Option<u64>) {
         let client_present = self.client.is_some();
         let entry = self.lists.entry(id).or_default();
+        if defer_load(client_present, entry.loading) {
+            entry.reload_after = true;
+        }
         if !should_load(client_present, entry.loading) {
             return;
         }
@@ -322,8 +355,23 @@ impl App {
         });
     }
 
-    pub fn load_detail(&mut self, key: &str) {
+    /// Re-runs a refresh list's load (a Search is superseded, not reloaded).
+    fn reload(&mut self, id: ListId) {
+        let fields: Vec<String> = jira::LIST_FIELDS.iter().map(|s| s.to_string()).collect();
+        match id {
+            ListId::TeamOpen => self.load_list(id, store::jql_team_open(&self.cfg), fields),
+            ListId::TeamInProgress => self.load_list(id, store::jql_team_in_progress(&self.cfg), fields),
+            ListId::Epics => self.load_epics(),
+            ListId::Search => {}
+        }
+    }
+
+    /// `force` refetches even a detail fetched within DETAIL_FRESH.
+    pub fn load_detail(&mut self, key: &str, force: bool) {
         if !should_load(self.client.is_some(), self.detail_loading.contains(key)) {
+            return;
+        }
+        if !force && self.detail_fetched.get(key).is_some_and(|t| t.elapsed() < DETAIL_FRESH) {
             return;
         }
         self.detail_loading.insert(key.to_string());
@@ -368,6 +416,7 @@ impl App {
                 }
                 let entry = self.lists.entry(id).or_default();
                 entry.loading = false;
+                let reload = std::mem::take(&mut entry.reload_after);
                 match result {
                     Ok(issues) => {
                         entry.error = None;
@@ -392,11 +441,17 @@ impl App {
                         entry.error = Some(e.to_string());
                     }
                 }
+                if reload {
+                    self.reload(id);
+                }
             }
             Msg::Detail { key, result } => {
                 self.detail_loading.remove(&key);
                 match result {
-                    Ok(issue) => self.store.merge_detail(issue),
+                    Ok(issue) => {
+                        self.detail_fetched.insert(key, Instant::now());
+                        self.store.merge_detail(issue);
+                    }
                     Err(e) => self.toast(format!("Couldn't load {key}: {e}"), true),
                 }
             }
@@ -428,7 +483,7 @@ impl App {
                     Err(e) => self.toast(format!("{what} failed: {e}"), true),
                 }
                 if self.client.is_some() {
-                    self.load_detail(&key);
+                    self.load_detail(&key, true);
                     self.refresh_all();
                 }
             }
@@ -475,7 +530,7 @@ impl App {
             }
             Action::Select(key) => {
                 self.selected = Some(key.clone());
-                self.load_detail(&key);
+                self.load_detail(&key, false);
             }
             Action::SubmitToken => {
                 let t = self.token_input.trim().to_string();
@@ -545,7 +600,7 @@ impl App {
                     && let Some(key) = crate::filter::parse_goto(&text, &self.cfg.scope.project)
                 {
                     self.selected = Some(key.clone());
-                    self.load_detail(&key);
+                    self.load_detail(&key, false);
                 }
             }
             Action::Move(delta) => {
@@ -570,7 +625,7 @@ impl App {
                     return;
                 }
                 self.posting = Some(key.clone());
-                self.spawn(move |c, tx| {
+                self.spawn_write(move |c, tx| {
                     let _ = tx.send(Msg::Done { key: key.clone(), what: "Comment", result: c.add_comment(&key, &text) });
                 });
             }
@@ -657,7 +712,7 @@ impl App {
                         self.cursor = (i as i32 + delta).clamp(0, rows.len() as i32 - 1) as usize;
                     }
                 }
-                self.spawn(move |c, tx| {
+                self.spawn_write(move |c, tx| {
                     let (b, a) = if before { (Some(neighbour.as_str()), None) } else { (None, Some(neighbour.as_str())) };
                     let _ = tx.send(Msg::Done { key: key.clone(), what: "Rank", result: c.rank(&key, b, a) });
                 });
@@ -676,13 +731,13 @@ impl App {
                 let Some(t) = items.get(cursor).cloned() else { return };
                 // Remember the transition so a resolution error can retry it.
                 self.pending_transition = Some((key.clone(), t.id.clone()));
-                self.spawn(move |c, tx| {
+                self.spawn_write(move |c, tx| {
                     let _ = tx.send(Msg::Done { key: key.clone(), what: "Transition", result: c.transition(&key, &t.id, None) });
                 });
             }
             Picker::Resolution { key, transition_id, items, cursor } => {
                 let Some(r) = items.get(cursor).cloned() else { return };
-                self.spawn(move |c, tx| {
+                self.spawn_write(move |c, tx| {
                     let _ = tx.send(Msg::Done { key: key.clone(), what: "Transition", result: c.transition(&key, &transition_id, Some(&r.id)) });
                 });
             }
@@ -692,7 +747,7 @@ impl App {
                 if cursor != 0 && account.is_none() {
                     return;
                 }
-                self.spawn(move |c, tx| {
+                self.spawn_write(move |c, tx| {
                     let _ = tx.send(Msg::Done { key: key.clone(), what: "Assign", result: c.assign(&key, account.as_deref()) });
                 });
             }
@@ -701,7 +756,7 @@ impl App {
                 if cursor != 0 && sprint.is_none() {
                     return;
                 }
-                self.spawn(move |c, tx| {
+                self.spawn_write(move |c, tx| {
                     let r = match sprint {
                         Some(id) => c.move_to_sprint(id, &[&key]),
                         None => c.move_to_backlog(&[&key]),
@@ -714,7 +769,7 @@ impl App {
                     self.toast("No changes", false);
                     return;
                 };
-                self.spawn(move |c, tx| {
+                self.spawn_write(move |c, tx| {
                     let _ = tx.send(Msg::Done { key: key.clone(), what: "Edit", result: c.update_fields(&key, fields) });
                 });
             }
@@ -869,6 +924,12 @@ fn should_load(client_present: bool, already_loading: bool) -> bool {
     client_present && !already_loading
 }
 
+/// A load asked for while one is in flight runs after it lands, so a write's
+/// refresh is never lost to an older refresh still on the wire.
+fn defer_load(client_present: bool, already_loading: bool) -> bool {
+    client_present && already_loading
+}
+
 /// A Search result lands only while a search is active and only for the latest run.
 fn accept_search(current_seq: u64, msg_seq: Option<u64>, active: bool) -> bool {
     active && msg_seq == Some(current_seq)
@@ -959,6 +1020,14 @@ mod tests {
         assert!(!should_load(true, true));
         assert!(!should_load(false, false));
         assert!(!should_load(false, true));
+    }
+
+    #[test]
+    fn a_load_during_a_load_is_deferred_not_dropped() {
+        assert!(defer_load(true, true));
+        assert!(!defer_load(true, false), "starts now instead");
+        assert!(!defer_load(false, true), "no client to run it");
+        assert!(!defer_load(false, false));
     }
 
     #[test]
