@@ -2,7 +2,9 @@
 #![allow(dead_code)]
 
 mod auth;
+mod cache;
 mod config;
+mod jira;
 
 #[cfg(test)]
 pub mod testutil {

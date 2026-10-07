@@ -1,0 +1,36 @@
+{
+  "id": "100001",
+  "key": "CI-9001",
+  "fields": {
+    "summary": "Remove the old autoscaler",
+    "issuetype": { "name": "Task" },
+    "status": { "name": "New", "statusCategory": { "key": "new" } },
+    "priority": { "name": "Medium" },
+    "labels": ["PLAT"],
+    "assignee": null,
+    "reporter": { "accountId": "abc", "displayName": "Shawn Sorichetti" },
+    "parent": { "id": "10002", "key": "CI-79", "fields": { "summary": "Cluster Operations (ongoing)" } },
+    "created": "2026-10-01T10:00:00.000-0700",
+    "updated": "2026-10-05T10:00:00.000-0700",
+    "description": {
+      "type": "doc", "version": 1,
+      "content": [
+        { "type": "paragraph", "content": [ { "type": "text", "text": "Delete the " }, { "type": "text", "text": "autoscaler", "marks": [ { "type": "code" } ] }, { "type": "text", "text": " helm release and its IAM role." } ] },
+        { "type": "bulletList", "content": [
+          { "type": "listItem", "content": [ { "type": "paragraph", "content": [ { "type": "text", "text": "Remove the Deployer app" } ] } ] },
+          { "type": "listItem", "content": [ { "type": "paragraph", "content": [ { "type": "text", "text": "Drop the role in terraform" } ] } ] }
+        ] }
+      ]
+    },
+    "comment": {
+      "comments": [
+        {
+          "id": "5001",
+          "author": { "accountId": "def", "displayName": "Ada Lovelace" },
+          "created": "2026-10-03T09:00:00.000-0700",
+          "body": { "type": "doc", "version": 1, "content": [ { "type": "paragraph", "content": [ { "type": "text", "text": "Is the role still used by anything?" } ] } ] }
+        }
+      ]
+    }
+  }
+}

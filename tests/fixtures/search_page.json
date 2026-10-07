@@ -1,0 +1,46 @@
+{
+  "issues": [
+    {
+      "id": "100001",
+      "key": "CI-9001",
+      "fields": {
+        "summary": "Remove the old autoscaler",
+        "issuetype": { "name": "Task" },
+        "status": { "name": "New", "statusCategory": { "key": "new" } },
+        "priority": { "name": "Medium" },
+        "labels": ["PLAT"],
+        "assignee": null,
+        "reporter": { "accountId": "abc", "displayName": "Shawn Sorichetti" },
+        "parent": { "id": "10002", "key": "CI-79", "fields": { "summary": "Cluster Operations (ongoing)" } },
+        "created": "2026-10-01T10:00:00.000-0700",
+        "updated": "2026-10-05T10:00:00.000-0700",
+        "duedate": null,
+        "customfield_10019": "0|i0abcd:",
+        "statuscategorychangedate": "2026-10-01T10:00:00.000-0700",
+        "customfield_10020": [{ "id": 55, "name": "Sprint 92", "state": "active" }],
+        "customfield_10016": 3.0
+      }
+    },
+    {
+      "id": "100002",
+      "key": "CI-9002",
+      "fields": {
+        "summary": "Convert the deployer to the overlay workflow",
+        "issuetype": { "name": "Story" },
+        "status": { "name": "In Progress", "statusCategory": { "key": "indeterminate" } },
+        "priority": { "name": "High" },
+        "labels": ["PLAT", "health:on-track"],
+        "assignee": { "accountId": "def", "displayName": "Ada Lovelace" },
+        "reporter": null,
+        "parent": null,
+        "created": "2026-09-01T10:00:00.000-0700",
+        "updated": "2026-10-06T10:00:00.000-0700",
+        "duedate": "2026-12-31",
+        "customfield_10019": "0|i0abce:",
+        "statuscategorychangedate": "2026-09-20T10:00:00.000-0700",
+        "customfield_10020": null,
+        "customfield_10016": null
+      }
+    }
+  ]
+}
