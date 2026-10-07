@@ -55,6 +55,15 @@ pub fn default_sprint_scope(sprints: &[Sprint]) -> SprintScope {
     sprints.iter().find(|s| s.state == "active").map_or(SprintScope::All, |s| SprintScope::Named(s.name.clone()))
 }
 
+/// The scope to keep after the sprint list refreshes: a named sprint that is no longer
+/// listed (it closed) falls back to the default; anything else is kept.
+pub fn sprint_scope_after_refresh(current: &SprintScope, sprints: &[Sprint]) -> SprintScope {
+    match current {
+        SprintScope::Named(n) if !sprints.iter().any(|s| &s.name == n) => default_sprint_scope(sprints),
+        other => other.clone(),
+    }
+}
+
 pub fn column_value(issue: &Issue, field: &str) -> String {
     match field {
         "status" => issue.status.name.clone(),
@@ -212,5 +221,16 @@ mod tests {
         assert_eq!(default_sprint_scope(&[sprint(2, "Sprint 93", "future"), sprint(1, "Sprint 92", "active")]), SprintScope::Named("Sprint 92".into()));
         assert_eq!(default_sprint_scope(&[sprint(2, "Sprint 93", "future")]), SprintScope::All);
         assert_eq!(default_sprint_scope(&[]), SprintScope::All);
+    }
+
+    #[test]
+    fn scope_after_refresh_falls_back_only_when_sprint_is_gone() {
+        let now = [sprint(2, "Sprint 93", "active"), sprint(3, "Sprint 94", "future")];
+        let named = |n: &str| SprintScope::Named(n.into());
+        assert_eq!(sprint_scope_after_refresh(&named("Sprint 94"), &now), named("Sprint 94"));
+        assert_eq!(sprint_scope_after_refresh(&named("Sprint 92"), &now), named("Sprint 93"));
+        assert_eq!(sprint_scope_after_refresh(&named("Sprint 92"), &[sprint(3, "Sprint 94", "future")]), SprintScope::All);
+        assert_eq!(sprint_scope_after_refresh(&SprintScope::All, &now), SprintScope::All);
+        assert_eq!(sprint_scope_after_refresh(&SprintScope::Backlog, &now), SprintScope::Backlog);
     }
 }

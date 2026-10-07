@@ -531,8 +531,13 @@ impl App {
             }
             Msg::BoardSprints(Ok(sprints)) => {
                 self.sprints = sprints;
-                if !self.sprint_default_applied {
-                    self.filter.sprint = crate::filter::default_sprint_scope(&self.sprints);
+                let next = if self.sprint_default_applied {
+                    crate::filter::sprint_scope_after_refresh(&self.filter.sprint, &self.sprints)
+                } else {
+                    crate::filter::default_sprint_scope(&self.sprints)
+                };
+                if !self.sprint_default_applied || next != self.filter.sprint {
+                    self.filter.sprint = next;
                     self.sprint_default_applied = true;
                     self.cursor = 0;
                 }
