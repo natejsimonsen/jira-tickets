@@ -303,13 +303,14 @@ impl Client {
                 body["nextPageToken"] = json!(t);
             }
             let v = self.send("POST", "/rest/api/3/search/jql", &body)?;
-            if let Some(a) = v["issues"].as_array() {
-                out.extend(a.iter().map(parse_issue));
-            }
-            token = v["nextPageToken"].as_str().map(String::from);
-            if token.is_none() {
+            let page = v["issues"].as_array().map(Vec::as_slice).unwrap_or_default();
+            out.extend(page.iter().map(parse_issue));
+            let next = v["nextPageToken"].as_str().map(String::from);
+            // Guard against a misbehaving server: stop on an empty page or a repeated token.
+            if next.is_none() || page.is_empty() || next == token {
                 break;
             }
+            token = next;
         }
         Ok(out)
     }
@@ -523,6 +524,30 @@ pub mod tests {
         assert!(matches!(c.myself(), Err(Error::Other(_))));
         assert!(matches!(map_status(401, "x"), Error::Unauthorized(_)));
         assert!(matches!(map_status(429, "x"), Error::RateLimited(_)));
+    }
+
+    #[test]
+    fn search_stops_on_empty_page_with_token() {
+        let page = serde_json::json!({ "issues": [], "nextPageToken": "same" });
+        let (base, _rx) = stub_server(vec![("POST", "/rest/api/3/search/jql", page)]);
+        let got = client(&base).search("project = CI", &["summary"]).unwrap();
+        assert!(got.is_empty());
+    }
+
+    #[test]
+    fn base64_known_vectors() {
+        assert_eq!(base64_lite::encode("a".into()), "YQ==");
+        assert_eq!(base64_lite::encode("ab".into()), "YWI=");
+        assert_eq!(base64_lite::encode("abc".into()), "YWJj");
+        assert_eq!(base64_lite::encode("me@x.com:tok".into()), "bWVAeC5jb206dG9r");
+    }
+
+    #[test]
+    fn map_status_extracts_jira_errors() {
+        let body = r#"{"errorMessages":["Issue does not exist"],"errors":{"resolution":"Resolution is required"}}"#;
+        let msg = map_status(400, body).to_string();
+        assert!(msg.contains("Issue does not exist"), "{msg}");
+        assert!(msg.contains("resolution: Resolution is required"), "{msg}");
     }
 
     #[test]
