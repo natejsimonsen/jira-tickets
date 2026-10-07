@@ -195,9 +195,13 @@ Layout from `github-rs`: collapsible list panel on the left (`⌘B`), the
 selected issue on the right.
 
 List rows: key, summary, configured columns. Status is coloured by status
-category. Filters above the list: epic picker, quick filters from config, a
-"Mine" toggle, and a search box (`/` or `⌘F`) that takes JQL. `⌘K` jumps to
-a key or pasted browse link.
+category. Filters above the list: epic picker, a sprint scope (All, the
+board's active sprint, each future sprint, or Backlog; defaults to the
+active sprint, as jira-cli did), quick filters from config, a "Mine"
+toggle, and a search box (`/` or `⌘F`) that takes JQL. `⌘K` jumps to a key
+or pasted browse link. The sprint list comes from board 101's active and
+future sprints, refreshed with the lists; filtering is local on each
+issue's latest non-closed sprint.
 
 Keys: `j`/`k` move, `Enter` opens detail, `t` transition, `a` assign, `s`
 sprint move, `e` edit labels/priority/points, `J`/`K` rank the selected
