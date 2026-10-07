@@ -53,6 +53,8 @@ Only a token you paste is saved. Signing out deletes that file.
 
 Only `⌘1`–`⌘4`, `⌘R`, and `⌘W` work on every screen. The rest are bound on the Issues screen only. Plain letter keys do nothing while a text field has focus. While a picker is open, only `Esc`, the arrow keys (and `j` / `k`, except in the Assign picker), and `Enter` apply. Selecting a row shows its detail.
 
+Above the Issues list are an epic picker, a sprint picker, the config's quick filters, a Mine toggle, and the search box. The sprint picker offers All sprints, the board's active and future sprints, and Backlog (issues in no open sprint). It starts on the active sprint, or All sprints if the board has none.
+
 ## Developer switches
 
 - `JIRA_TICKETS_READONLY` blocks every write to Jira.
@@ -80,7 +82,7 @@ Screenshots need the `snapshot` feature:
 | `src/jira.rs` | Jira REST client, read-only guard |
 | `src/store.rs` | Issue store and list ids |
 | `src/cache.rs` | On-disk cache |
-| `src/filter.rs` | Search and quick-filter logic |
+| `src/filter.rs` | Search, quick-filter, and sprint-scope logic |
 | `src/adf.rs` | Atlassian document format parsing |
 | `src/theme.rs` | Colors and styling |
 | `src/views/mod.rs` | Screen shell, sign-in, toast, shared widgets |

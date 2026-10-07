@@ -1,10 +1,20 @@
 //! Pure list filtering, column formatting, and ⌘K parsing for the Issues view.
 
-use crate::jira::Issue;
+use crate::jira::{Issue, Sprint};
+
+/// Which sprint the Issues list is scoped to, matched against each issue's latest non-closed sprint.
+#[derive(Clone, Debug, PartialEq, Default)]
+pub enum SprintScope {
+    #[default]
+    All,
+    Backlog,
+    Named(String),
+}
 
 #[derive(Default, Clone, Debug)]
 pub struct IssueFilter {
     pub epic: Option<String>,
+    pub sprint: SprintScope,
     pub quick: Option<usize>,
     pub mine: bool,
     pub text: String,
@@ -16,6 +26,11 @@ pub fn visible<'a>(issues: &[&'a Issue], f: &IssueFilter, me: Option<&str>) -> V
         .iter()
         .copied()
         .filter(|i| f.epic.as_deref().is_none_or(|e| i.parent_key.as_deref() == Some(e)))
+        .filter(|i| match &f.sprint {
+            SprintScope::All => true,
+            SprintScope::Backlog => i.sprint.is_none(),
+            SprintScope::Named(n) => i.sprint.as_deref() == Some(n.as_str()),
+        })
         .filter(|i| !f.mine || i.assignee.as_ref().map(|a| a.display_name.as_str()) == me)
         .filter(|i| {
             needle.is_empty()
@@ -25,6 +40,19 @@ pub fn visible<'a>(issues: &[&'a Issue], f: &IssueFilter, me: Option<&str>) -> V
                 || i.assignee.as_ref().is_some_and(|a| a.display_name.to_lowercase().contains(&needle))
         })
         .collect()
+}
+
+/// Picker entries: "All sprints", each board sprint in Jira's order labelled with its state, then "Backlog".
+pub fn sprint_options(sprints: &[Sprint]) -> Vec<(SprintScope, String)> {
+    std::iter::once((SprintScope::All, "All sprints".to_string()))
+        .chain(sprints.iter().map(|s| (SprintScope::Named(s.name.clone()), format!("{} ({})", s.name, s.state))))
+        .chain(std::iter::once((SprintScope::Backlog, "Backlog".to_string())))
+        .collect()
+}
+
+/// The first active sprint, or `All` when the board has none.
+pub fn default_sprint_scope(sprints: &[Sprint]) -> SprintScope {
+    sprints.iter().find(|s| s.state == "active").map_or(SprintScope::All, |s| SprintScope::Named(s.name.clone()))
 }
 
 pub fn column_value(issue: &Issue, field: &str) -> String {
@@ -83,7 +111,11 @@ fn issue_key(t: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::jira::{Issue, Status, User};
+    use crate::jira::{Issue, Sprint, Status, User};
+
+    fn sprint(id: u64, name: &str, state: &str) -> Sprint {
+        Sprint { id, name: name.into(), state: state.into() }
+    }
 
     fn issue(key: &str, summary: &str, parent: Option<&str>, assignee: Option<&str>, labels: &[&str]) -> Issue {
         Issue {
@@ -140,5 +172,45 @@ mod tests {
         for bad in ["-12", "2CI-1", "C I-1", "CI$-1", "CI-", "CI-1a", "ci-1-2", "é-1"] {
             assert_eq!(parse_goto(bad, "CI"), None, "{bad}");
         }
+    }
+
+    #[test]
+    fn sprint_scope_filters() {
+        let mut a = issue("CI-1", "a", None, None, &[]);
+        a.sprint = Some("Sprint 92".into());
+        let mut b = issue("CI-2", "b", None, None, &[]);
+        b.sprint = Some("Sprint 93".into());
+        let c = issue("CI-3", "c", None, None, &[]);
+        let all = vec![&a, &b, &c];
+        let keys = |f: &IssueFilter| visible(&all, f, None).iter().map(|i| i.key.clone()).collect::<Vec<_>>();
+        let mut f = IssueFilter::default();
+        assert_eq!(f.sprint, SprintScope::All);
+        assert_eq!(keys(&f), ["CI-1", "CI-2", "CI-3"]);
+        f.sprint = SprintScope::Backlog;
+        assert_eq!(keys(&f), ["CI-3"]);
+        f.sprint = SprintScope::Named("Sprint 93".into());
+        assert_eq!(keys(&f), ["CI-2"]);
+    }
+
+    #[test]
+    fn sprint_options_order_and_labels() {
+        let opts = sprint_options(&[sprint(1, "Sprint 92", "active"), sprint(2, "Sprint 93", "future")]);
+        assert_eq!(
+            opts,
+            vec![
+                (SprintScope::All, "All sprints".to_string()),
+                (SprintScope::Named("Sprint 92".into()), "Sprint 92 (active)".to_string()),
+                (SprintScope::Named("Sprint 93".into()), "Sprint 93 (future)".to_string()),
+                (SprintScope::Backlog, "Backlog".to_string()),
+            ]
+        );
+        assert_eq!(sprint_options(&[]), vec![(SprintScope::All, "All sprints".to_string()), (SprintScope::Backlog, "Backlog".to_string())]);
+    }
+
+    #[test]
+    fn default_scope_prefers_active_sprint() {
+        assert_eq!(default_sprint_scope(&[sprint(2, "Sprint 93", "future"), sprint(1, "Sprint 92", "active")]), SprintScope::Named("Sprint 92".into()));
+        assert_eq!(default_sprint_scope(&[sprint(2, "Sprint 93", "future")]), SprintScope::All);
+        assert_eq!(default_sprint_scope(&[]), SprintScope::All);
     }
 }

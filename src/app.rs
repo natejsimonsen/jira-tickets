@@ -63,6 +63,8 @@ pub enum Msg {
         key: String,
         result: jira::Result<Vec<Sprint>>,
     },
+    /// The board's active and future sprints, for the Issues sprint scope.
+    BoardSprints(jira::Result<Vec<Sprint>>),
 }
 
 pub enum Action {
@@ -76,6 +78,7 @@ pub enum Action {
     SignOut,
     Toast(String, bool),
     SetEpic(Option<String>),
+    SetSprint(crate::filter::SprintScope),
     SetQuick(Option<usize>),
     ToggleMine,
     RunSearch(String),
@@ -165,6 +168,10 @@ pub struct App {
     /// When each issue's detail last arrived.
     detail_fetched: HashMap<String, Instant>,
     pub filter: crate::filter::IssueFilter,
+    /// The board's active and future sprints in Jira's order, for the sprint scope picker.
+    pub sprints: Vec<Sprint>,
+    /// The sprint scope has been defaulted to the active sprint once; later refreshes keep the user's choice.
+    pub sprint_default_applied: bool,
     /// Set by ⌘F or `/`; the search box takes focus on its next frame.
     pub focus_search: bool,
     /// The ⌘K box text while it is open.
@@ -245,6 +252,8 @@ impl App {
             detail_loading: Default::default(),
             detail_fetched: HashMap::new(),
             filter: Default::default(),
+            sprints: Vec::new(),
+            sprint_default_applied: false,
             focus_search: false,
             goto: None,
             cursor: 0,
@@ -309,6 +318,10 @@ impl App {
         let fields: Vec<String> = jira::LIST_FIELDS.iter().map(|s| s.to_string()).collect();
         self.load_list(ListId::TeamOpen, store::jql_team_open(&cfg), fields.clone());
         self.load_list(ListId::TeamInProgress, store::jql_team_in_progress(&cfg), fields);
+        let board = cfg.scope.board_id;
+        self.spawn(move |c, tx| {
+            let _ = tx.send(Msg::BoardSprints(c.board_sprints(board, "active,future")));
+        });
     }
 
     /// Epics depend on TeamOpen's parents, so they load after it lands.
@@ -516,6 +529,20 @@ impl App {
                     Err(e) => self.toast(e.to_string(), true),
                 }
             }
+            Msg::BoardSprints(Ok(sprints)) => {
+                self.sprints = sprints;
+                if !self.sprint_default_applied {
+                    self.filter.sprint = crate::filter::default_sprint_scope(&self.sprints);
+                    self.sprint_default_applied = true;
+                    self.cursor = 0;
+                }
+            }
+            // Keep the last good list on a failed refresh; only say so when there is none.
+            Msg::BoardSprints(Err(e)) => {
+                if self.sprints.is_empty() {
+                    self.toast(format!("Couldn't load sprints: {e}"), true);
+                }
+            }
         }
     }
 
@@ -558,6 +585,10 @@ impl App {
             Action::Toast(t, e) => self.toast(t, e),
             Action::SetEpic(e) => {
                 self.filter.epic = e;
+                self.cursor = 0;
+            }
+            Action::SetSprint(s) => {
+                self.filter.sprint = s;
                 self.cursor = 0;
             }
             Action::SetQuick(q) => {

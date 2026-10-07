@@ -53,6 +53,16 @@ fn filters(app: &mut App, ui: &mut Ui, p: &Palette) {
                 }
             }
         });
+        // Sprint scope: All, the board's active and future sprints, or Backlog.
+        let options = crate::filter::sprint_options(&app.sprints);
+        let label = options.iter().find(|(s, _)| *s == app.filter.sprint).map_or("All sprints".to_string(), |(_, l)| l.clone());
+        egui::ComboBox::from_id_salt("sprint").selected_text(label).width(200.0).show_ui(ui, |ui| {
+            for (scope, l) in &options {
+                if ui.selectable_label(app.filter.sprint == *scope, l).clicked() {
+                    app.actions.push(Action::SetSprint(scope.clone()));
+                }
+            }
+        });
         let quick = app.cfg.issues.filters.clone();
         for (i, f) in quick.iter().enumerate() {
             let active = app.filter.quick == Some(i);
