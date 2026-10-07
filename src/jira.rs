@@ -365,6 +365,62 @@ impl Client {
             })
             .unwrap_or_default())
     }
+
+    pub fn transition(&self, key: &str, transition_id: &str, resolution_id: Option<&str>) -> Result<()> {
+        check_writable()?;
+        let mut body = json!({ "transition": { "id": transition_id } });
+        if let Some(r) = resolution_id {
+            body["fields"] = json!({ "resolution": { "id": r } });
+        }
+        self.send("POST", &format!("/rest/api/3/issue/{key}/transitions"), &body)?;
+        Ok(())
+    }
+
+    pub fn rank(&self, key: &str, before: Option<&str>, after: Option<&str>) -> Result<()> {
+        check_writable()?;
+        let mut body = json!({ "issues": [key] });
+        match (before, after) {
+            (Some(b), _) => body["rankBeforeIssue"] = json!(b),
+            (None, Some(a)) => body["rankAfterIssue"] = json!(a),
+            (None, None) => return Err(Error::Other("rank: no neighbour given".into())),
+        }
+        self.send("PUT", "/rest/agile/1.0/issue/rank", &body)?;
+        Ok(())
+    }
+
+    pub fn assign(&self, key: &str, account_id: Option<&str>) -> Result<()> {
+        check_writable()?;
+        self.send("PUT", &format!("/rest/api/3/issue/{key}/assignee"), &json!({ "accountId": account_id }))?;
+        Ok(())
+    }
+
+    pub fn move_to_sprint(&self, sprint_id: u64, keys: &[&str]) -> Result<()> {
+        check_writable()?;
+        self.send("POST", &format!("/rest/agile/1.0/sprint/{sprint_id}/issue"), &json!({ "issues": keys }))?;
+        Ok(())
+    }
+
+    pub fn move_to_backlog(&self, keys: &[&str]) -> Result<()> {
+        check_writable()?;
+        self.send("POST", "/rest/agile/1.0/backlog/issue", &json!({ "issues": keys }))?;
+        Ok(())
+    }
+
+    pub fn update_fields(&self, key: &str, fields: Value) -> Result<()> {
+        check_writable()?;
+        self.send("PUT", &format!("/rest/api/3/issue/{key}"), &json!({ "fields": fields }))?;
+        Ok(())
+    }
+
+    pub fn add_comment(&self, key: &str, text: &str) -> Result<()> {
+        check_writable()?;
+        self.send("POST", &format!("/rest/api/3/issue/{key}/comment"), &json!({ "body": crate::adf::text_doc(text) }))?;
+        Ok(())
+    }
+}
+
+pub fn needs_resolution(e: &Error) -> bool {
+    e.to_string().to_ascii_lowercase().contains("resolution")
 }
 
 fn perf(method: &str, path: &str, start: std::time::Instant) {
@@ -557,5 +613,86 @@ pub mod tests {
         assert!(check_writable().is_err());
         READ_ONLY.store(false, std::sync::atomic::Ordering::Relaxed);
         assert!(check_writable().is_ok());
+    }
+
+    #[test]
+    fn transition_sends_id_and_optional_resolution() {
+        let _g = WRITE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (base, rx) = stub_server(vec![("POST", "/rest/api/3/issue/CI-1/transitions", serde_json::json!({}))]);
+        let c = client(&base);
+        c.transition("CI-1", "11", None).unwrap();
+        let r = rx.recv().unwrap();
+        let body: serde_json::Value = serde_json::from_str(&r.body).unwrap();
+        assert_eq!(body["transition"]["id"], "11");
+        assert!(body.get("fields").is_none());
+        c.transition("CI-1", "31", Some("10000")).unwrap();
+        let r = rx.recv().unwrap();
+        let body: serde_json::Value = serde_json::from_str(&r.body).unwrap();
+        assert_eq!(body["fields"]["resolution"]["id"], "10000");
+    }
+
+    #[test]
+    fn rank_before_and_after() {
+        let _g = WRITE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (base, rx) = stub_server(vec![("PUT", "/rest/agile/1.0/issue/rank", serde_json::json!({}))]);
+        let c = client(&base);
+        c.rank("CI-1", Some("CI-2"), None).unwrap();
+        let body: serde_json::Value = serde_json::from_str(&rx.recv().unwrap().body).unwrap();
+        assert_eq!(body["issues"][0], "CI-1");
+        assert_eq!(body["rankBeforeIssue"], "CI-2");
+        assert!(body.get("rankAfterIssue").is_none());
+        c.rank("CI-1", None, Some("CI-3")).unwrap();
+        let body: serde_json::Value = serde_json::from_str(&rx.recv().unwrap().body).unwrap();
+        assert_eq!(body["rankAfterIssue"], "CI-3");
+    }
+
+    #[test]
+    fn assign_and_unassign() {
+        let _g = WRITE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (base, rx) = stub_server(vec![("PUT", "/rest/api/3/issue/CI-1/assignee", serde_json::json!({}))]);
+        let c = client(&base);
+        c.assign("CI-1", Some("abc")).unwrap();
+        assert_eq!(serde_json::from_str::<serde_json::Value>(&rx.recv().unwrap().body).unwrap()["accountId"], "abc");
+        c.assign("CI-1", None).unwrap();
+        assert!(serde_json::from_str::<serde_json::Value>(&rx.recv().unwrap().body).unwrap()["accountId"].is_null());
+    }
+
+    #[test]
+    fn sprint_moves_and_fields_and_comment() {
+        let _g = WRITE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (base, rx) = stub_server(vec![
+            ("POST", "/rest/agile/1.0/sprint/55/issue", serde_json::json!({})),
+            ("POST", "/rest/agile/1.0/backlog/issue", serde_json::json!({})),
+            ("PUT", "/rest/api/3/issue/CI-1", serde_json::json!({})),
+            ("POST", "/rest/api/3/issue/CI-1/comment", serde_json::json!({ "id": "1" })),
+        ]);
+        let c = client(&base);
+        c.move_to_sprint(55, &["CI-1"]).unwrap();
+        assert_eq!(rx.recv().unwrap().path, "/rest/agile/1.0/sprint/55/issue");
+        c.move_to_backlog(&["CI-1"]).unwrap();
+        assert_eq!(rx.recv().unwrap().path, "/rest/agile/1.0/backlog/issue");
+        c.update_fields("CI-1", serde_json::json!({ "labels": ["PLAT"] })).unwrap();
+        let body: serde_json::Value = serde_json::from_str(&rx.recv().unwrap().body).unwrap();
+        assert_eq!(body["fields"]["labels"][0], "PLAT");
+        c.add_comment("CI-1", "hello\nworld").unwrap();
+        let body: serde_json::Value = serde_json::from_str(&rx.recv().unwrap().body).unwrap();
+        assert_eq!(body["body"]["content"].as_array().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn writes_blocked_in_read_only() {
+        let _g = WRITE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (base, rx) = stub_server(vec![]);
+        let c = client(&base);
+        READ_ONLY.store(true, std::sync::atomic::Ordering::Relaxed);
+        assert!(c.transition("CI-1", "1", None).is_err());
+        READ_ONLY.store(false, std::sync::atomic::Ordering::Relaxed);
+        assert!(rx.try_recv().is_err(), "nothing was sent");
+    }
+
+    #[test]
+    fn detects_resolution_requirement() {
+        assert!(needs_resolution(&Error::Other("Jira returned 400: resolution: Resolution is required".into())));
+        assert!(!needs_resolution(&Error::Other("boom".into())));
     }
 }
