@@ -6,6 +6,7 @@ mod auth;
 mod cache;
 mod config;
 mod jira;
+mod store;
 
 #[cfg(test)]
 pub mod testutil {
