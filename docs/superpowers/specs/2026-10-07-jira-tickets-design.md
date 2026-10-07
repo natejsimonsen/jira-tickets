@@ -1,0 +1,377 @@
+# Jira Tickets: design
+
+Status: approved in brainstorm, 2026-10-07. Next step: implementation plan.
+
+## Purpose
+
+A fast native desktop app for Jira, built the way `github-rs` is built for
+GitHub pull requests. It replaces the `jira-cli` terminal UI, turns the
+Platform grooming runbook into a screen, shows what each team member
+is working on, and renders the roadmap layouts from the 2026-10-06 mockups
+from Jira epics.
+
+Reference material:
+
+- `github-rs` (adalovelace): structure, conventions, look.
+- `jira-cli` (Go, Bubble Tea): the Jira behaviour to port.
+- `the team's grooming runbook`: the
+  grooming runbook this app implements.
+- `~/.claude/plugins/cache/example/parent-team/*/commands/team-pre-check.md`:
+  the Claude-driven pre-check whose report format this app reads and writes.
+- `~/Documents/designs/2026-10-06-roadmap-layout-mockups.html`: the four
+  roadmap views.
+
+## Decisions made in brainstorm
+
+| Question | Decision |
+|---|---|
+| Form factor | Rust + egui desktop app, a sibling of `github-rs`. |
+| Structure | Copy `github-rs`'s layout and conventions; back every view with one cached issue store so Team and Roadmap are projections, not separate fetch paths. |
+| Roadmap data | Jira epics only. No Notion. |
+| Readiness assessment | Human triage with one-key verdicts. If the Claude pre-check already ran, its report is parsed and its verdicts shown and pre-filled. |
+| Team roster | A list in the config file, seeded from the developer portal `platform-team` members. |
+
+## 1. Scope and naming
+
+- Repo `jira-rs` at `/Volumes/example/non-zip/jira-rs`.
+- Binary and app name `jira-tickets` ("Jira Tickets").
+- Rust 2024 edition. Dependencies: eframe/egui 0.36 (wgpu, accesskit,
+  persistence), egui_extras, ureq 3 (json, platform-verifier), serde,
+  serde_json, chrono, dirs, keyring, toml, webbrowser (macOS). No
+  tree-sitter, no diff or image code.
+- One window, four top-level views switched by `⌘1`–`⌘4`: Issues, Grooming,
+  Team, Roadmap.
+- Light and dark themes following the system, using the mockup's colour
+  tokens (`--on-track`, `--at-risk`, `--off-track`, `--no-health`, lane
+  tints, `--today`).
+
+## 2. Config
+
+TOML at `~/.config/jira-tickets/config.toml`. Generated with comments on
+first run, then the app exits with instructions, as `jira-cli` does.
+
+```toml
+site = "https://example.atlassian.net"
+email = "you@example.com"
+# Optional. Accepts a plain token, "op://vault/item/field", or "$(command)".
+# Resolved only when no token is found in the env or the saved token file.
+api_token = "op://Private/Jira API Token/credential"
+
+[scope]
+projects = ["CI", "OPS"]      # projects searched for team members' work
+project = "CI"                 # project the team label lives in
+team_label = "PLAT"
+board_id = 101
+filter_id = 201
+
+[grooming]
+status_new = "New"
+status_planning = "Planning"
+status_ready = "Ready for Work"
+status_backlog = "Backlog"
+planning_transition_id = "11"
+planning_cap = 10
+needs_detail_cap = 10
+ready_soft_ceiling = 10        # amber past this
+ready_hard_ceiling = 15        # red past this
+report_dir = "~/Documents/grooming-reports"
+
+[team]
+members = ["barbara", "edsger.dijkstra", "ada.lovelace", "grace", "sam", "alan"]
+# Jira display names or account ids. Order is column order. The generated
+# file seeds SSO usernames from the team roster; replace each with the
+# name Jira shows, or the Team view marks it "no tickets found".
+
+[issues]
+columns = ["status", "labels", "parent.summary", "assignee"]
+[[issues.filters]]
+name = "Only Opened"
+jql = "status not in (Closed)"
+[[issues.filters]]
+name = "To Do"
+jql = 'statusCategory = "To Do"'
+
+[roadmap]
+# epics = ["CI-1860", "CI-1569"]   # optional allowlist; default is every epic a team-label ticket points at
+lanes = { PLAT = "Platform" }  # label -> lane name
+horizon_by_status = { "In Progress" = "now", "Ready for Work" = "next", "Planning" = "next", "New" = "later", "Backlog" = "later" }
+# health_field = "customfield_XXXXX"
+# target_field = "customfield_XXXXX"   # default: duedate
+# start_field = "customfield_XXXXX"
+# confidence_field = "customfield_XXXXX"
+# next_milestone_field = "customfield_XXXXX"
+# definition_of_done_field = "customfield_XXXXX"
+```
+
+## 3. Auth
+
+Token lookup order:
+
+1. `JIRA_API_TOKEN` environment variable (with `JIRA_EMAIL` overriding the
+   config email if set).
+2. Saved token file `~/Library/Application Support/jira-tickets/token`
+   (`~/.config/jira-tickets/token` on Linux), mode 0600.
+3. `api_token` in config. `op://` runs `op read`; `$(…)` runs `sh -c`. This
+   is the only subprocess the app ever starts.
+4. A paste prompt in the window.
+
+A token found by step 3 or 4 is saved to the file. Every request uses HTTP
+basic auth with email and token. A 401 shows the `jira-cli` diagnostic
+(site, email, masked token, what to check) in a panel with a "sign out"
+action that deletes the file.
+
+## 4. Data layer
+
+`src/jira.rs`: a blocking client over Jira Cloud REST v3 and Agile 1.0,
+called only from background threads that post `Msg` values to the UI
+thread via a channel, exactly as `github-rs` does. Each request logs its
+duration when `JIRA_TICKETS_PERF=1`.
+
+Reads:
+
+- `search`: POST `/rest/api/3/search/jql` with JQL, field list, and
+  `nextPageToken` paging until exhausted.
+- `issue`: GET `/rest/api/3/issue/{key}` with description, comments,
+  `statuscategorychangedate`, and configured custom fields.
+- `transitions`, `resolutions`, `assignable users` for a project,
+  `board sprints`, `board configuration` and `filter` (for the board's JQL).
+
+Writes (ported from `jira-cli`):
+
+- `transition` with optional resolution; on a "resolution" error, fetch
+  resolutions and retry via a picker.
+- `rank before` / `rank after`: PUT `/rest/agile/1.0/issue/rank`.
+- `assign` (account id or `-1` to unassign).
+- `move to sprint` / `move to backlog`.
+- `update fields`: labels, priority, story points.
+- `add comment` (ADF body built from plain text paragraphs).
+
+`src/adf.rs` renders Atlassian Document Format JSON to egui rich text:
+paragraph, heading, bulletList, orderedList, listItem, codeBlock, blockquote,
+rule, panel, table (as plain rows), hardBreak, text with marks (strong, em,
+code, link, strike), mention, emoji (shortname text), inlineCard (URL).
+Unknown nodes fall back to their concatenated text. A `to_plain_text`
+function feeds the pre-check verdict screen and the report.
+
+`JIRA_TICKETS_READONLY=1` makes every write return an error before any
+request is sent.
+
+## 5. Issue store
+
+`src/store.rs`: `Store { issues: HashMap<String, Issue>, lists: HashMap<ListId, Vec<String>>, fetched_at }`.
+
+Three queries populate it on launch and `⌘R`:
+
+| List | JQL | Fields |
+|---|---|---|
+| `team_open` | `project = {project} AND labels = {team_label} AND statusCategory != Done ORDER BY Rank ASC` | summary, status, assignee, reporter, parent, labels, priority, issuetype, created, updated, duedate, rank (customfield_10019), statuscategorychangedate, sprint, story points |
+| `epics` | `project = {project} AND issuetype = Epic AND (labels in ({lane labels}) OR key in ({parents of team_open}))` plus the optional allowlist | summary, status, assignee, labels, priority, duedate, created, updated, description, comments (last 5), configured roadmap custom fields |
+| `team_in_progress` | `project in ({projects}) AND assignee in ({team}) AND statusCategory = "In Progress" ORDER BY updated DESC` | same as `team_open` |
+
+Views are projections:
+
+- Issues: `team_open` filtered by epic, quick filter, Mine, and search JQL
+  (search runs its own query and stores a `search` list).
+- Grooming: `team_open` partitioned by status into New, Planning, Ready for
+  Work, grouped by parent.
+- Team: `team_in_progress` ∪ `team_open` grouped by assignee.
+- Roadmap: `epics` joined to `team_open` children for progress counts.
+
+Detail (full description, all comments) is fetched per issue when opened and
+merged into the same record. The store serialises to JSON under
+`~/Library/Caches/jira-tickets/` so launch shows the last state in under
+0.1 s and refreshes quietly. Every mutation refetches the affected issue
+rather than the whole list.
+
+## 6. Issues view
+
+Layout from `github-rs`: collapsible list panel on the left (`⌘B`), the
+selected issue on the right.
+
+List rows: key, summary, configured columns. Status is coloured by status
+category. Filters above the list: epic picker, quick filters from config, a
+"Mine" toggle, and a search box (`/` or `⌘F`) that takes JQL. `⌘K` jumps to
+a key or pasted browse link.
+
+Keys: `j`/`k` move, `Enter` opens detail, `t` transition, `a` assign, `s`
+sprint move, `e` edit labels/priority/points, `J`/`K` rank the selected
+issue past its neighbour, `c` copies the browse link, `⌘O` opens in the
+browser, `⌘R` refresh, `Esc` back.
+
+Detail: summary, status bar, rendered description, a fields column
+(assignee, reporter, priority, labels, epic, sprint, created, updated,
+story points), comments rendered from ADF, and a comment box with `⌘Enter`
+to post.
+
+Every mutation runs on a background thread, shows a toast, and refetches
+that issue.
+
+## 7. Grooming view
+
+The runbook as a screen, in two modes.
+
+### Pre-check mode
+
+Walks the `New` column in rank order. Each ticket shows title, rendered
+description, epic, age tag (`new (Nd)` when created within 14 days, else
+`older`), and rank position.
+
+Verdict keys: `r` ready, `w` unclear-what, `n` unclear-when, `e` empty, `u`
+undo, `j`/`k` move without judging. A ticket may carry several failure
+codes. The summary screen lists the ready set in rank order, marks those
+beyond `planning_cap` as held back, and offers one "Promote" button that
+performs the `New → Planning` transitions with no fields, no resolution, no
+comment, and nothing else. Transitions that fail are collected and shown;
+the rest continue.
+
+After promotion the app fetches existing `Ready for Work` siblings for the
+promoted epics and writes `report_dir/YYYY-MM-DD.md` in exactly the format
+the Claude-driven command produces: header with JQL and board links,
+"Planning — by epic" with the board URL per epic using the numeric parent
+id, "Needs detail (still in `New`)" capped at `needs_detail_cap`, "Failed
+transitions", and the run summary line. Epic order: newly promoted count
+descending, then key ascending. If a report for today exists, the app asks
+before overwriting.
+
+### Report overlay
+
+At launch and on refresh the app reads the newest `report_dir/*.md`. The
+parser extracts, from "Planning — by epic", each candidate key marked as
+promoted, and from "Needs detail", each key with its `missing:` codes. The
+Grooming view overlays badges: `New` tickets show "needs detail:
+unclear-when (report 2026-10-07)"; `Planning` tickets show "promoted by
+pre-check". Unmentioned tickets show no badge. Pre-check mode starts with
+those verdicts pre-filled so only unlabelled or disputed tickets need
+attention. The report format is the contract; the command is not modified.
+
+### Session mode
+
+Epic-by-epic walk. Left rail: epics with Planning / Ready for Work / New
+counts; epics with nothing in Planning are dimmed and skipped by `]` and
+`[`. Centre: the selected epic's `Ready for Work` queue in rank order with
+its `Planning` candidates beneath, each with the report badge if any.
+
+For the focused candidate:
+
+- `y` accept: enters placement, where `↑`/`↓` move a ghost row through the
+  Ready queue and `Enter` commits one transition to `Ready for Work` plus
+  one rank-before or rank-after call. `Esc` cancels.
+- `b` bounce: an inline box requires a one- or two-line comment; `⌘Enter`
+  posts the comment then transitions to `New`.
+- `p` park: transitions to `Backlog`.
+
+A per-ticket timer starts on focus, amber at 3 minutes, red at 5. The header
+shows total `Ready for Work` against the ceilings, amber past the soft
+ceiling and red past the hard one. Warnings never block.
+
+## 8. Team view
+
+One column per member in config order, plus "Unassigned" last. Each column
+shows the member's In Progress tickets first, then their assigned `Ready for
+Work` tickets, as cards with key, summary, epic chip, status, and days in
+the current status (from `statuscategorychangedate`). A collapsed "done in
+the last 7 days" footer per column, populated by a small per-member query
+run on demand when expanded. The Unassigned column shows the top of the
+`Ready for Work` queue. A member with nothing in progress shows a "nothing
+in progress" marker. Clicking a card opens the issue in the Issues view.
+
+Members are matched by display name or account id; a configured member
+that matches no assignee in any list shows "no tickets found" so a typo is
+visible.
+
+## 9. Roadmap view
+
+Four tabs from the mockup, over `epics` joined to their children. Each
+initiative shows a progress bar of children done / in progress / to do.
+Empty fields render as red "missing" / "not set" flags. Epics with no
+target quarter go to the Unscheduled tray.
+
+Field mapping:
+
+| Concept | Default source | Override |
+|---|---|---|
+| Horizon | `horizon_by_status`; Done status category → Done | Label `horizon:now`, `horizon:next`, `horizon:later` |
+| Health | Labels `health:on-track`, `health:at-risk`, `health:off-track`; absent → no health | `health_field` |
+| Priority chip | Priority Highest → P0, High → P1 | Labels `P0`, `P1` |
+| Target date | Epic `duedate` | `target_field` |
+| Start date | Unset: bar spans the target quarter only | `start_field` |
+| Lane | `lanes` label → name; epics with no lane label go to a "No lane" lane | Add entries |
+| Latest update | Newest epic comment: author, date, first paragraph | None |
+| Next milestone, confidence, definition of done | Missing | Custom field ids |
+| Metrics | Labels prefixed `metric:` | None |
+
+Tabs:
+
+1. Now / Next / Later: three columns of cards sorted P0 first, then worst
+   health; health dot only in Now. A "Shipped in {year}" list of Done epics
+   with their last quarter.
+2. Timeline: lane rows by configured label, quarter columns for the current
+   year, bars from start quarter to target quarter, a today line, done bars
+   muted, P0 bars with a red left edge, and the Unscheduled tray.
+3. Status review: health summary tiles (counts per health, owners set / total)
+   and a table of Now epics sorted worst health first: initiative with lane,
+   key, owner; health; confidence; latest update; next milestone; definition
+   of done; progress.
+4. Outcomes: groups by `metric:` label; each card lists active and later
+   initiatives and shows "Nothing in progress moves this metric" when
+   applicable. With no metric labels anywhere, the tab says so.
+
+## 10. Error handling
+
+- Network failure: cached data stays on screen under an "offline, data from
+  HH:MM" banner; refresh retries.
+- 401: auth panel with diagnostic.
+- 429: one retry after `Retry-After`; then a toast.
+- Failed mutation: Jira's error text in a toast, store untouched, issue
+  refetched. Failed rank snaps the ghost row back.
+- Report write failure: toast with path and error; transitions already made
+  are not rolled back, and the summary stays on screen for copy.
+
+## 11. Testing
+
+Unit tests with fixtures, no live Jira:
+
+- JQL builders for the three store lists and the search filters.
+- ADF renderer against captured JSON from real tickets, checking plain-text
+  output and the sequence of styled spans.
+- Config parsing, defaults, and the generated example round-trip.
+- Horizon, health, priority, and quarter derivations.
+- Report writer against a golden file in today's format.
+- Report parser against a real report copied from `~/Documents/grooming-reports`.
+- Jira client against recorded JSON responses served by a local stub.
+
+An optional `snapshot` cargo feature with egui_kittest renders each view
+offscreen to PNG for UI review (`JIRA_TICKETS_SCREENSHOT=out.png`,
+`JIRA_TICKETS_VIEW=issues|grooming|team|roadmap`, `JIRA_TICKETS_THEME`).
+Snapshot runs block every write.
+
+## 12. Build and distribution
+
+- Cargo, with `github-rs`'s dev profile: `opt-level = 1` for the crate,
+  `opt-level = 3` for dependencies; release with thin LTO and strip.
+- `scripts/bundle-macos.sh` builds `Jira Tickets.app` into `/Applications`.
+- `flake.nix` and `nix/` for Nix and Flox installs.
+- MIT licence. Conventional commits.
+- Out of scope for v1: CI workflows, Homebrew tap, Windows and Linux
+  packaging, modifying the `team-pre-check` command, Notion integration.
+
+## Code map
+
+| File | Role |
+|---|---|
+| `src/main.rs` | Opens the window |
+| `src/app.rs` | App state, `Msg` enum, background loading, keyboard |
+| `src/config.rs` | TOML config, defaults, example generation, secret resolution |
+| `src/auth.rs` | Token lookup and saving |
+| `src/jira.rs` | REST v3 and Agile 1.0 client, data types |
+| `src/adf.rs` | ADF to egui rich text and plain text |
+| `src/store.rs` | Issue store, list ids, projections, disk cache |
+| `src/report.rs` | Pre-check report writer and parser |
+| `src/roadmap.rs` | Epic → initiative derivation (horizon, health, quarters, metrics) |
+| `src/theme.rs` | Colours (light and dark) and fonts |
+| `src/views/mod.rs` | View switcher, panels, toasts |
+| `src/views/issues.rs` | List and detail |
+| `src/views/grooming.rs` | Pre-check and session modes |
+| `src/views/team.rs` | Member columns |
+| `src/views/roadmap.rs` | Four roadmap tabs |
+| `src/snapshot.rs` | Offscreen screenshots (feature `snapshot`) |
