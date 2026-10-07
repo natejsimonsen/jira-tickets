@@ -195,7 +195,7 @@ fn expand_home(p: &str) -> PathBuf {
 pub fn resolve_secret(value: &str) -> Result<String, String> {
     let v = value.trim();
     if v.starts_with("op://") {
-        return run("op", &["read", v]);
+        return op_read(v);
     }
     if let Some(inner) = v.strip_prefix("$(").and_then(|r| r.strip_suffix(')')) {
         return run("sh", &["-c", inner]);
@@ -203,8 +203,31 @@ pub fn resolve_secret(value: &str) -> Result<String, String> {
     Ok(v.to_string())
 }
 
+/// A Finder or Dock launch inherits launchd's PATH, which rarely has `op`;
+/// when it is not found, retry through the user's login shell.
+fn op_read(reference: &str) -> Result<String, String> {
+    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into());
+    op_read_via("op", &shell, reference)
+}
+
+fn op_read_via(op: &str, shell: &str, reference: &str) -> Result<String, String> {
+    match std::process::Command::new(op).args(["read", reference]).output() {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            if reference.contains('\'') {
+                return Err("op reference contains a single quote".into());
+            }
+            run(shell, &["-lc", &format!("op read '{reference}'")])
+        }
+        out => finish(op, out),
+    }
+}
+
 fn run(name: &str, args: &[&str]) -> Result<String, String> {
-    let out = std::process::Command::new(name).args(args).output().map_err(|e| format!("running {name}: {e}"))?;
+    finish(name, std::process::Command::new(name).args(args).output())
+}
+
+fn finish(name: &str, out: std::io::Result<std::process::Output>) -> Result<String, String> {
+    let out = out.map_err(|e| format!("running {name}: {e}"))?;
     if !out.status.success() {
         return Err(format!("{name} failed: {}", String::from_utf8_lossy(&out.stderr).trim()));
     }
@@ -222,8 +245,8 @@ pub const EXAMPLE: &str = r#"# Jira Tickets configuration
 
 site = "https://yourcompany.atlassian.net"
 email = "you@example.com"
-# Optional. Plain token, "op://vault/item/field", or "$(command)". Used only
-# when no token is found in JIRA_API_TOKEN or the saved token file.
+# Optional. Plain token, "op://vault/item/field", or "$(command)".
+# Resolved on every launch, before the saved token file; never written to disk.
 # api_token = "op://Private/Jira API Token/credential"
 
 [scope]
@@ -319,6 +342,23 @@ email = "me@example.com"
     fn resolve_secret_plain_and_shell() {
         assert_eq!(resolve_secret("abc").unwrap(), "abc");
         assert_eq!(resolve_secret("$(echo hi)").unwrap(), "hi");
+    }
+
+    #[test]
+    fn op_not_on_path_retries_through_login_shell() {
+        let dir = tempfile::tempdir().unwrap();
+        // A stand-in shell that prints the command it was asked to run.
+        let sh = dir.path().join("fake-shell");
+        std::fs::write(&sh, "#!/bin/sh\nprintf '%s %s' \"$1\" \"$2\"\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&sh, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let missing = dir.path().join("no-such-op");
+        let got = op_read_via(missing.to_str().unwrap(), sh.to_str().unwrap(), "op://Private/Jira/credential").unwrap();
+        assert_eq!(got, "-lc op read 'op://Private/Jira/credential'");
+        assert!(op_read_via(missing.to_str().unwrap(), sh.to_str().unwrap(), "op://a/it's/x").is_err());
     }
 
     #[test]

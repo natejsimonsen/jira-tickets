@@ -110,17 +110,35 @@ pub fn sign_in(app: &mut App, ui: &mut Ui) {
             ui.vertical(|ui| {
                 if let Some(e) = &app.token_error {
                     ui.label(RichText::new(e).color(p.off_track).size(13.0));
+                    ui.add_space(4.0);
+                }
+                // A login means Jira rejected it (401): show what was sent.
+                let prompt = if let Some(login) = &app.login {
                     ui.label(
                         RichText::new(format!(
-                            "Site: {}\nEmail: {}\nCheck that the email matches your Atlassian account and the token is valid (https://id.atlassian.com/manage-profile/security/api-tokens).",
-                            app.cfg.site, app.cfg.email
+                            "Site: {}\nEmail: {}\nToken: {} ({})\nCheck that the email matches your Atlassian account and the token is valid (https://id.atlassian.com/manage-profile/security/api-tokens).",
+                            app.cfg.site,
+                            login.email,
+                            crate::auth::mask_token(&login.token),
+                            login.source.describe()
                         ))
                         .color(p.muted)
                         .size(12.0),
                     );
+                    ui.add_space(6.0);
+                    if ui.add(button("Sign out", p)).on_hover_text("Forget the saved token").clicked() {
+                        app.actions.push(Action::SignOut);
+                    }
                     ui.add_space(8.0);
-                }
-                ui.label(RichText::new("No JIRA_API_TOKEN, saved token, or config api_token was found. Paste an Atlassian API token.").size(13.0).color(p.muted));
+                    "Paste a new Atlassian API token."
+                } else if app.cfg.api_token.is_some() && app.token_error.is_some() {
+                    "The config api_token could not be resolved. Fix it and look again, or paste an Atlassian API token."
+                } else if app.cfg.api_token.is_some() {
+                    "Signed out. Look again to use the config api_token, or paste an Atlassian API token."
+                } else {
+                    "No JIRA_API_TOKEN, saved token, or config api_token was found. Paste an Atlassian API token."
+                };
+                ui.label(RichText::new(prompt).size(13.0).color(p.muted));
                 ui.add_space(10.0);
                 let r = ui.add(egui::TextEdit::singleline(&mut app.token_input).password(true).desired_width(f32::INFINITY).margin(vec2(8.0, 6.0)));
                 if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {

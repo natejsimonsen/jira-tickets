@@ -24,7 +24,8 @@ pub enum Screen {
 
 #[allow(clippy::large_enum_variant)] // Msgs are few and short-lived; keep the plain Result shape.
 pub enum Msg {
-    Login(Option<Login>),
+    /// The token search: a login, or why each configured source failed.
+    Login(Result<Login, Vec<String>>),
     Me(jira::Result<User>),
     List {
         id: ListId,
@@ -300,9 +301,28 @@ impl App {
 
     fn handle(&mut self, msg: Msg) {
         match msg {
-            Msg::Login(Some(login)) => self.connect(login),
-            Msg::Login(None) => self.finding_token = false,
-            Msg::Me(Ok(u)) => self.me = Some(u),
+            Msg::Login(Ok(login)) => {
+                self.token_error = None;
+                self.connect(login);
+            }
+            Msg::Login(Err(errors)) => {
+                self.finding_token = false;
+                self.login = None;
+                self.token_error = (!errors.is_empty()).then(|| errors.join("\n"));
+            }
+            Msg::Me(Ok(u)) => {
+                self.me = Some(u);
+                // A pasted token is saved only once Jira accepted it.
+                if let Some(login) = &self.login
+                    && matches!(login.source, auth::Source::Pasted)
+                {
+                    let token = login.token.clone();
+                    if let Err(e) = auth::save_token(&token) {
+                        self.toast(format!("Signed in, but couldn't save the token: {e}"), true);
+                    }
+                    self.token_input.clear();
+                }
+            }
             Msg::Me(Err(jira::Error::Unauthorized(m))) => {
                 self.client = None;
                 self.token_error = Some(m);
@@ -430,9 +450,8 @@ impl App {
                 if t.is_empty() {
                     return;
                 }
-                let _ = auth::save_token(&t);
                 self.token_error = None;
-                self.connect(Login { email: self.cfg.email.clone(), token: t, source: auth::Source::Pasted });
+                self.connect(Login { email: auth::login_email(&self.cfg.email), token: t, source: auth::Source::Pasted });
             }
             Action::FindToken => {
                 self.finding_token = true;
@@ -444,6 +463,7 @@ impl App {
             }
             Action::SignOut => {
                 auth::forget_token();
+                self.token_error = None;
                 self.client = None;
                 self.login = None;
                 self.me = None;
