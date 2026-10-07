@@ -45,7 +45,8 @@ pub fn check_writable() -> Result<()> {
 pub fn map_status(code: u16, body: &str) -> Error {
     let msg = extract_error(body).unwrap_or_else(|| body.chars().take(300).collect());
     match code {
-        401 | 403 => Error::Unauthorized(format!("authentication failed ({code}): {msg}")),
+        // Only 401 signs the user out; a 403 is a permission problem on one call.
+        401 => Error::Unauthorized(format!("authentication failed ({code}): {msg}")),
         429 => Error::RateLimited(format!("rate limited (429): {msg}")),
         _ => Error::Other(format!("Jira returned {code}: {msg}")),
     }
@@ -254,8 +255,10 @@ impl Client {
 
     fn get(&self, path: &str) -> Result<Value> {
         let t = std::time::Instant::now();
-        let mut resp = self.agent.get(format!("{}{path}", self.base)).header("Authorization", &self.auth).header("Accept", "application/json").call()?;
-        let out = self.finish(resp.status().as_u16(), resp.body_mut().read_to_string()?);
+        let out = self.retrying(|| {
+            let resp = self.agent.get(format!("{}{path}", self.base)).header("Authorization", &self.auth).header("Accept", "application/json").call()?;
+            reply(resp)
+        });
         perf("GET", path, t);
         out
     }
@@ -263,16 +266,30 @@ impl Client {
     fn send(&self, method: &str, path: &str, body: &Value) -> Result<Value> {
         let t = std::time::Instant::now();
         let url = format!("{}{path}", self.base);
-        let req = match method {
-            "POST" => self.agent.post(&url),
-            "PUT" => self.agent.put(&url),
-            _ => unreachable!("method {method}"),
-        };
-        let mut resp =
-            req.header("Authorization", &self.auth).header("Accept", "application/json").header("Content-Type", "application/json").send_json(body)?;
-        let out = self.finish(resp.status().as_u16(), resp.body_mut().read_to_string()?);
+        let out = self.retrying(|| {
+            let req = match method {
+                "POST" => self.agent.post(&url),
+                "PUT" => self.agent.put(&url),
+                _ => unreachable!("method {method}"),
+            };
+            let resp =
+                req.header("Authorization", &self.auth).header("Accept", "application/json").header("Content-Type", "application/json").send_json(body)?;
+            reply(resp)
+        });
         perf(method, path, t);
         out
+    }
+
+    /// Runs `call`; on a 429 waits the Retry-After time once and tries again.
+    /// A second 429 is returned as RateLimited.
+    fn retrying(&self, call: impl Fn() -> Result<(u16, Duration, String)>) -> Result<Value> {
+        let (code, wait, text) = call()?;
+        if code != 429 {
+            return self.finish(code, text);
+        }
+        std::thread::sleep(wait);
+        let (code, _, text) = call()?;
+        self.finish(code, text)
     }
 
     fn finish(&self, code: u16, text: String) -> Result<Value> {
@@ -421,6 +438,17 @@ impl Client {
     }
 }
 
+/// Status, Retry-After wait, and body text of a response.
+fn reply(mut resp: ureq::http::Response<ureq::Body>) -> Result<(u16, Duration, String)> {
+    let wait = retry_after(resp.headers().get("Retry-After").and_then(|v| v.to_str().ok()));
+    Ok((resp.status().as_u16(), wait, resp.body_mut().read_to_string()?))
+}
+
+/// Retry-After in seconds: 2 when absent or not a number, at most 10.
+fn retry_after(header: Option<&str>) -> Duration {
+    Duration::from_secs(header.and_then(|v| v.trim().parse::<u64>().ok()).unwrap_or(2).min(10))
+}
+
 pub fn needs_resolution(e: &Error) -> bool {
     e.to_string().to_ascii_lowercase().contains("resolution")
 }
@@ -483,10 +511,17 @@ pub mod tests {
     /// A tiny HTTP/1.1 server. Each route is (method, path prefix, JSON reply).
     /// Unmatched requests get 404. Answers one request per accepted connection.
     pub fn stub_server(routes: Vec<(&'static str, &'static str, serde_json::Value)>) -> (String, Receiver<Recorded>) {
+        stub_server_throttled(routes.into_iter().map(|(m, p, v)| (m, p, v, 0)).collect())
+    }
+
+    /// Like `stub_server`, but each route first answers its last element's
+    /// count of requests with 429 (Retry-After: 0).
+    pub fn stub_server_throttled(routes: Vec<(&'static str, &'static str, serde_json::Value, usize)>) -> (String, Receiver<Recorded>) {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let base = format!("http://{}", listener.local_addr().unwrap());
         let (tx, rx) = channel();
         std::thread::spawn(move || {
+            let mut throttle: Vec<usize> = routes.iter().map(|r| r.3).collect();
             for stream in listener.incoming() {
                 let Ok(mut s) = stream else { break };
                 let mut buf = Vec::new();
@@ -520,10 +555,14 @@ pub mod tests {
                 let method = first.next().unwrap_or("").to_string();
                 let path = first.next().unwrap_or("").to_string();
                 let body = String::from_utf8_lossy(&buf[h..h + content_len]).to_string();
-                let reply = routes.iter().find(|(m, p, _)| *m == method && path.starts_with(p)).map(|(_, _, v)| v.to_string());
+                let route = routes.iter().position(|(m, p, _, _)| *m == method && path.starts_with(p));
                 let _ = tx.send(Recorded { method, path, body });
-                let (code, text) = match reply {
-                    Some(t) => ("200 OK", t),
+                let (code, text) = match route {
+                    Some(i) if throttle[i] > 0 => {
+                        throttle[i] -= 1;
+                        ("429 Too Many Requests\r\nRetry-After: 0", "{}".to_string())
+                    }
+                    Some(i) => ("200 OK", routes[i].2.to_string()),
                     None => ("404 Not Found", "{}".to_string()),
                 };
                 let _ = write!(s, "HTTP/1.1 {code}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{text}", text.len());
@@ -595,7 +634,31 @@ pub mod tests {
         // 404 from the stub is "Other"; a real 401 is tested through status mapping.
         assert!(matches!(c.myself(), Err(Error::Other(_))));
         assert!(matches!(map_status(401, "x"), Error::Unauthorized(_)));
+        assert!(matches!(map_status(403, "x"), Error::Other(_)), "a 403 must not sign the user out");
         assert!(matches!(map_status(429, "x"), Error::RateLimited(_)));
+    }
+
+    #[test]
+    fn retries_once_after_429() {
+        let me = serde_json::json!({ "accountId": "a1", "displayName": "Me" });
+        let (base, rx) = stub_server_throttled(vec![("GET", "/rest/api/3/myself", me.clone(), 1)]);
+        assert_eq!(client(&base).myself().unwrap().display_name, "Me");
+        assert_eq!(rx.try_iter().count(), 2, "one 429, one retry");
+        let page = serde_json::json!({ "issues": [] });
+        let (base, rx) = stub_server_throttled(vec![("POST", "/rest/api/3/search/jql", page, 1)]);
+        assert!(client(&base).search("project = CI", &["summary"]).is_ok());
+        assert_eq!(rx.try_iter().count(), 2);
+        let (base, rx) = stub_server_throttled(vec![("GET", "/rest/api/3/myself", me, 2)]);
+        assert!(matches!(client(&base).myself(), Err(Error::RateLimited(_))));
+        assert_eq!(rx.try_iter().count(), 2, "retried only once");
+    }
+
+    #[test]
+    fn retry_after_defaults_and_caps() {
+        assert_eq!(retry_after(None), Duration::from_secs(2));
+        assert_eq!(retry_after(Some("x")), Duration::from_secs(2));
+        assert_eq!(retry_after(Some(" 3 ")), Duration::from_secs(3));
+        assert_eq!(retry_after(Some("120")), Duration::from_secs(10));
     }
 
     #[test]
