@@ -56,7 +56,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                     names.extend(items.iter().map(|s| format!("{} ({})", s.name, s.state)));
                     rows(ui, p, names, &mut confirm, cursor);
                 }
-                Picker::Edit { key, labels, priority, points } => {
+                Picker::Edit { key, labels, priority, points, .. } => {
                     title(ui, p, &format!("Edit {key}"));
                     ui.label(RichText::new("Labels (comma separated)").color(p.muted).size(12.0));
                     ui.add(egui::TextEdit::singleline(labels).desired_width(f32::INFINITY));

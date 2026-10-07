@@ -49,8 +49,15 @@ pub enum Msg {
         result: jira::Result<Vec<Transition>>,
     },
     Resolutions(jira::Result<Vec<Resolution>>),
-    Users(jira::Result<Vec<User>>),
-    Sprints(jira::Result<Vec<Sprint>>),
+    /// `key` is the issue selected when the picker was asked for.
+    Users {
+        key: String,
+        result: jira::Result<Vec<User>>,
+    },
+    Sprints {
+        key: String,
+        result: jira::Result<Vec<Sprint>>,
+    },
 }
 
 pub enum Action {
@@ -84,11 +91,38 @@ pub enum Action {
 /// The open modal picker. `cursor` indexes the rows the picker draws; Assign
 /// and Sprint put a synthetic first row ("Unassigned", "Backlog") at 0.
 pub enum Picker {
-    Transition { key: String, items: Vec<Transition>, cursor: usize },
-    Resolution { key: String, transition_id: String, items: Vec<Resolution>, cursor: usize },
-    Assign { key: String, items: Vec<User>, cursor: usize, filter: String },
-    Sprint { key: String, items: Vec<Sprint>, cursor: usize },
-    Edit { key: String, labels: String, priority: String, points: String },
+    Transition {
+        key: String,
+        items: Vec<Transition>,
+        cursor: usize,
+    },
+    Resolution {
+        key: String,
+        transition_id: String,
+        items: Vec<Resolution>,
+        cursor: usize,
+    },
+    Assign {
+        key: String,
+        items: Vec<User>,
+        cursor: usize,
+        filter: String,
+    },
+    Sprint {
+        key: String,
+        items: Vec<Sprint>,
+        cursor: usize,
+    },
+    /// The `orig_*` fields hold the values the dialog opened with; only changed fields are sent.
+    Edit {
+        key: String,
+        labels: String,
+        priority: String,
+        points: String,
+        orig_labels: String,
+        orig_priority: String,
+        orig_points: String,
+    },
 }
 
 #[derive(Default)]
@@ -413,20 +447,18 @@ impl App {
                     _ => {}
                 }
             }
-            Msg::Users(result) => {
+            Msg::Users { key, result } => {
                 self.picker_loading = false;
-                match (result, self.selected.clone()) {
-                    (Ok(items), Some(key)) => self.picker = Some(Picker::Assign { key, items, cursor: 0, filter: String::new() }),
-                    (Err(e), _) => self.toast(e.to_string(), true),
-                    _ => {}
+                match result {
+                    Ok(items) => self.picker = Some(Picker::Assign { key, items, cursor: 0, filter: String::new() }),
+                    Err(e) => self.toast(e.to_string(), true),
                 }
             }
-            Msg::Sprints(result) => {
+            Msg::Sprints { key, result } => {
                 self.picker_loading = false;
-                match (result, self.selected.clone()) {
-                    (Ok(items), Some(key)) => self.picker = Some(Picker::Sprint { key, items, cursor: 0 }),
-                    (Err(e), _) => self.toast(e.to_string(), true),
-                    _ => {}
+                match result {
+                    Ok(items) => self.picker = Some(Picker::Sprint { key, items, cursor: 0 }),
+                    Err(e) => self.toast(e.to_string(), true),
                 }
             }
         }
@@ -555,23 +587,25 @@ impl App {
                 });
             }
             Action::OpenAssign => {
-                if self.selected.is_none() || self.client.is_none() || self.picker_loading {
+                let Some(key) = self.selected.clone() else { return };
+                if self.client.is_none() || self.picker_loading {
                     return;
                 }
                 self.picker_loading = true;
                 let project = self.cfg.scope.project.clone();
                 self.spawn(move |c, tx| {
-                    let _ = tx.send(Msg::Users(c.assignable_users(&project)));
+                    let _ = tx.send(Msg::Users { key, result: c.assignable_users(&project) });
                 });
             }
             Action::OpenSprint => {
-                if self.selected.is_none() || self.client.is_none() || self.picker_loading {
+                let Some(key) = self.selected.clone() else { return };
+                if self.client.is_none() || self.picker_loading {
                     return;
                 }
                 self.picker_loading = true;
                 let board = self.cfg.scope.board_id;
                 self.spawn(move |c, tx| {
-                    let _ = tx.send(Msg::Sprints(c.board_sprints(board, "active,future")));
+                    let _ = tx.send(Msg::Sprints { key, result: c.board_sprints(board, "active,future") });
                 });
             }
             Action::OpenEdit => {
@@ -580,11 +614,15 @@ impl App {
                     return;
                 }
                 let Some(i) = self.selected.as_ref().and_then(|k| self.store.get(k)) else { return };
+                let (labels, priority, points) = (i.labels.join(", "), i.priority.clone(), i.story_points.map(|n| n.to_string()).unwrap_or_default());
                 self.picker = Some(Picker::Edit {
                     key: i.key.clone(),
-                    labels: i.labels.join(", "),
-                    priority: i.priority.clone(),
-                    points: i.story_points.map(|n| n.to_string()).unwrap_or_default(),
+                    labels: labels.clone(),
+                    priority: priority.clone(),
+                    points: points.clone(),
+                    orig_labels: labels,
+                    orig_priority: priority,
+                    orig_points: points,
                 });
             }
             Action::PickerMove(d) => {
@@ -671,8 +709,11 @@ impl App {
                     let _ = tx.send(Msg::Done { key: key.clone(), what: "Sprint move", result: r });
                 });
             }
-            Picker::Edit { key, labels, priority, points } => {
-                let fields = edit_fields(&labels, &priority, &points);
+            Picker::Edit { key, labels, priority, points, orig_labels, orig_priority, orig_points } => {
+                let Some(fields) = edit_fields(&labels, &priority, &points, &orig_labels, &orig_priority, &orig_points) else {
+                    self.toast("No changes", false);
+                    return;
+                };
                 self.spawn(move |c, tx| {
                     let _ = tx.send(Msg::Done { key: key.clone(), what: "Edit", result: c.update_fields(&key, fields) });
                 });
@@ -800,17 +841,26 @@ fn wrap_cursor(cur: usize, d: i32, len: usize) -> usize {
     (cur as i32 + d).rem_euclid(len as i32) as usize
 }
 
-/// The `fields` body for the Edit picker: labels always (comma split, trimmed,
-/// empties dropped), priority when named, points when they parse.
-fn edit_fields(labels: &str, priority: &str, points: &str) -> serde_json::Value {
-    let mut fields = serde_json::json!({ "labels": labels.split(',').map(str::trim).filter(|l| !l.is_empty()).collect::<Vec<_>>() });
-    if !priority.trim().is_empty() {
-        fields["priority"] = serde_json::json!({ "name": priority.trim() });
+/// The `fields` body for the Edit picker, holding only what changed from the
+/// values it opened with, so a save never overwrites someone else's edit to
+/// another field: labels when the list differs (comma split, trimmed, empties
+/// dropped), priority when it differs and is named, points when they differ
+/// and parse. None when nothing changed.
+fn edit_fields(labels: &str, priority: &str, points: &str, orig_labels: &str, orig_priority: &str, orig_points: &str) -> Option<serde_json::Value> {
+    let split = |s: &str| s.split(',').map(str::trim).filter(|l| !l.is_empty()).map(String::from).collect::<Vec<_>>();
+    let mut fields = serde_json::Map::new();
+    if split(labels) != split(orig_labels) {
+        fields.insert("labels".into(), serde_json::json!(split(labels)));
     }
-    if let Ok(n) = points.trim().parse::<f64>() {
-        fields[jira::POINTS_FIELD] = serde_json::json!(n);
+    if !priority.trim().is_empty() && priority.trim() != orig_priority.trim() {
+        fields.insert("priority".into(), serde_json::json!({ "name": priority.trim() }));
     }
-    fields
+    if let Ok(n) = points.trim().parse::<f64>()
+        && orig_points.trim().parse::<f64>().ok() != Some(n)
+    {
+        fields.insert(jira::POINTS_FIELD.into(), serde_json::json!(n));
+    }
+    (!fields.is_empty()).then_some(serde_json::Value::Object(fields))
 }
 
 /// A load starts only with a client to run it and none already in flight;
@@ -951,10 +1001,20 @@ mod tests {
 
     #[test]
     fn edit_fields_body() {
-        let f = edit_fields(" a, ,b ", "  ", "3.5");
-        assert_eq!(f, serde_json::json!({ "labels": ["a", "b"], "customfield_10016": 3.5 }));
-        let f = edit_fields("", "High", "x");
-        assert_eq!(f, serde_json::json!({ "labels": [], "priority": { "name": "High" } }));
+        let f = edit_fields(" a, ,b ", "  ", "3.5", "", "Low", "");
+        assert_eq!(f, Some(serde_json::json!({ "labels": ["a", "b"], "customfield_10016": 3.5 })));
+        let f = edit_fields("", "High", "x", "old", "Low", "2");
+        assert_eq!(f, Some(serde_json::json!({ "labels": [], "priority": { "name": "High" } })));
+    }
+
+    #[test]
+    fn edit_fields_omit_unchanged() {
+        // Only priority changed; labels (reformatted) and points (same value) stay out.
+        let f = edit_fields("a,b", "High", "3.0", "a, b", "Low", "3");
+        assert_eq!(f, Some(serde_json::json!({ "priority": { "name": "High" } })));
+        let f = edit_fields("a, b", "Low", "3", "a, b", "Low", "3");
+        assert_eq!(f, None, "nothing changed");
+        assert_eq!(edit_fields("a, b", "Low", "5", "a, b", "Low", "3"), Some(serde_json::json!({ "customfield_10016": 5.0 })));
     }
 
     #[test]
