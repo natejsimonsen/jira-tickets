@@ -457,6 +457,20 @@ pub mod tests {
 
     pub static WRITE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+    /// Sets READ_ONLY for the guard's lifetime and always restores false on drop.
+    struct ReadOnlyGuard;
+    impl ReadOnlyGuard {
+        fn new() -> Self {
+            READ_ONLY.store(true, Ordering::Relaxed);
+            ReadOnlyGuard
+        }
+    }
+    impl Drop for ReadOnlyGuard {
+        fn drop(&mut self) {
+            READ_ONLY.store(false, Ordering::Relaxed);
+        }
+    }
+
     #[derive(Debug)]
     pub struct Recorded {
         pub method: String,
@@ -609,9 +623,10 @@ pub mod tests {
     #[test]
     fn read_only_blocks_writes() {
         let _g = WRITE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        READ_ONLY.store(true, std::sync::atomic::Ordering::Relaxed);
-        assert!(check_writable().is_err());
-        READ_ONLY.store(false, std::sync::atomic::Ordering::Relaxed);
+        {
+            let _ro = ReadOnlyGuard::new();
+            assert!(check_writable().is_err());
+        }
         assert!(check_writable().is_ok());
     }
 
@@ -644,6 +659,9 @@ pub mod tests {
         c.rank("CI-1", None, Some("CI-3")).unwrap();
         let body: serde_json::Value = serde_json::from_str(&rx.recv().unwrap().body).unwrap();
         assert_eq!(body["rankAfterIssue"], "CI-3");
+        assert!(body.get("rankBeforeIssue").is_none());
+        assert!(c.rank("CI-1", None, None).is_err());
+        assert!(rx.try_recv().is_err(), "nothing was sent");
     }
 
     #[test]
@@ -684,9 +702,11 @@ pub mod tests {
         let _g = WRITE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let (base, rx) = stub_server(vec![]);
         let c = client(&base);
-        READ_ONLY.store(true, std::sync::atomic::Ordering::Relaxed);
-        assert!(c.transition("CI-1", "1", None).is_err());
-        READ_ONLY.store(false, std::sync::atomic::Ordering::Relaxed);
+        {
+            let _ro = ReadOnlyGuard::new();
+            let err = c.transition("CI-1", "1", None).unwrap_err();
+            assert!(err.to_string().contains("read-only"), "{err}");
+        }
         assert!(rx.try_recv().is_err(), "nothing was sent");
     }
 
