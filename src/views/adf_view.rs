@@ -118,11 +118,10 @@ fn span_format(sp: &Span, p: &Palette, size: f32, heading: bool) -> TextFormat {
 
 fn spans(ui: &mut Ui, s: &[Span], p: &Palette, size: f32, heading: bool) {
     let mut job = LayoutJob::default();
-    job.wrap.max_width = ui.available_width();
     for sp in s {
         job.append(&sp.text, 0.0, span_format(sp, p, size, heading));
     }
-    let r = ui.add(egui::Label::new(job).sense(egui::Sense::click()));
+    let r = ui.add(egui::Label::new(job).wrap().sense(egui::Sense::click()));
     // One link per paragraph is the common case; open the first on click.
     if r.clicked()
         && let Some(url) = s.iter().find_map(|sp| sp.link.clone())

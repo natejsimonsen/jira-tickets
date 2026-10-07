@@ -80,14 +80,15 @@ pub fn show(app: &mut App, ui: &mut Ui) {
                     });
                 }
                 ui.add_space(10.0);
-                ui.add(egui::TextEdit::multiline(&mut app.composer).hint_text("Add a comment (⌘Enter to post)").desired_rows(3).desired_width(f32::INFINITY));
-                let post = ui.input_mut(|i| i.consume_shortcut(&egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::Enter)));
+                let draft = app.drafts.entry(key.clone()).or_default();
+                let resp = ui.add(egui::TextEdit::multiline(draft).hint_text("Add a comment (⌘Enter to post)").desired_rows(3).desired_width(f32::INFINITY));
+                let enabled = comment_enabled(draft, &app.posting);
+                let post = resp.has_focus() && ui.input_mut(|i| i.consume_shortcut(&egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::Enter)));
                 ui.horizontal(|ui| {
-                    let enabled = !app.composer.trim().is_empty() && !app.posting;
                     if ui.add_enabled(enabled, primary_button("Comment", p)).clicked() || (post && enabled) {
                         app.actions.push(Action::Comment);
                     }
-                    if app.posting {
+                    if app.posting.is_some() {
                         ui.add(egui::Spinner::new().size(14.0));
                     }
                 });
@@ -116,7 +117,38 @@ fn field(ui: &mut Ui, p: &Palette, name: &str, value: &str) {
     ui.add_space(6.0);
 }
 
+/// The Comment button and ⌘Enter work when the draft has text and no post is in flight.
+pub fn comment_enabled(draft: &str, posting: &Option<String>) -> bool {
+    !draft.trim().is_empty() && posting.is_none()
+}
+
 /// "2026-10-03T09:00:00.000-0700" → "2026-10-03 09:00"
 pub fn short_date(s: &str) -> String {
-    if s.len() >= 16 { format!("{} {}", &s[..10], &s[11..16]) } else { s.to_string() }
+    match s.get(..10).zip(s.get(11..16)) {
+        Some((day, time)) => format!("{day} {time}"),
+        None => s.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn comment_enabled_needs_text_and_idle() {
+        assert!(comment_enabled("hi", &None));
+        assert!(!comment_enabled("  \n ", &None));
+        assert!(!comment_enabled("", &None));
+        assert!(!comment_enabled("hi", &Some("ABC-1".into())));
+    }
+
+    #[test]
+    fn short_date_formats_and_never_panics() {
+        assert_eq!(short_date("2026-10-03T09:00:00.000-0700"), "2026-10-03 09:00");
+        assert_eq!(short_date("2026-10"), "2026-10");
+        // Byte 10 and 11 fall inside multi-byte chars; slicing would panic.
+        let odd = "2026-10-0éé:00:00";
+        assert_eq!(short_date(odd), odd);
+        assert_eq!(short_date("ééééééééééééé"), "ééééééééééééé");
+    }
 }

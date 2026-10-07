@@ -117,10 +117,10 @@ pub struct App {
     pub search_seq: u64,
     /// The JQL of the running search, for Retry.
     pub last_search_jql: Option<String>,
-    /// The comment composer's text for the selected issue.
-    pub composer: String,
-    /// A comment post is in flight.
-    pub posting: bool,
+    /// Unposted comment text, keyed by issue key.
+    pub drafts: HashMap<String, String>,
+    /// The issue key of the comment post in flight.
+    pub posting: Option<String>,
     pub(crate) client: Option<Arc<Client>>,
     tx: Sender<Msg>,
     rx: Receiver<Msg>,
@@ -165,8 +165,8 @@ impl App {
             search_active: false,
             search_seq: 0,
             last_search_jql: None,
-            composer: String::new(),
-            posting: false,
+            drafts: HashMap::new(),
+            posting: None,
             client: None,
             tx,
             rx,
@@ -316,9 +316,9 @@ impl App {
             }
             Msg::Done { key, what, result } => {
                 if what == "Comment" {
-                    self.posting = false;
+                    self.posting = None;
                     if result.is_ok() {
-                        self.composer.clear();
+                        self.drafts.remove(&key);
                     }
                 }
                 match result {
@@ -430,13 +430,17 @@ impl App {
                 }
             }
             Action::Comment => {
-                let (Some(key), false) = (self.selected.clone(), self.posting) else { return };
-                let text = self.composer.trim().to_string();
-                // spawn is a no-op without a client; don't leave `posting` stuck.
-                if text.is_empty() || self.client.is_none() {
+                let Some(key) = self.selected.clone() else { return };
+                let draft = self.drafts.get(&key).map(String::as_str).unwrap_or_default();
+                if !views::detail::comment_enabled(draft, &self.posting) {
                     return;
                 }
-                self.posting = true;
+                let text = draft.trim().to_string();
+                // spawn is a no-op without a client; don't leave `posting` stuck.
+                if self.client.is_none() {
+                    return;
+                }
+                self.posting = Some(key.clone());
                 self.spawn(move |c, tx| {
                     let _ = tx.send(Msg::Done { key: key.clone(), what: "Comment", result: c.add_comment(&key, &text) });
                 });
