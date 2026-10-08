@@ -116,8 +116,7 @@ pub const HINT_BAR_H: f32 = 24.0;
 
 pub fn show(app: &mut App, ui: &mut Ui) {
     let p = theme::palette(ui.ctx());
-    let width = ui.available_width();
-    let list_w = (width * 0.42).clamp(360.0, 720.0);
+    let (list_w, list_range) = list_pane_width(ui.available_width());
     // First, so the strip spans the full width under both panels.
     egui::Panel::bottom("hints")
         .exact_size(HINT_BAR_H)
@@ -134,7 +133,7 @@ pub fn show(app: &mut App, ui: &mut Ui) {
     egui::Panel::left("issue-list")
         .resizable(true)
         .default_size(list_w)
-        .size_range(320.0..=list_w.max(320.0))
+        .size_range(list_range)
         .frame(Frame::new().fill(p.bg).inner_margin(Margin { left: 16, right: 16, top: 12, bottom: 0 }))
         .show(ui, |ui| {
             // The filter block's gaps are explicit (all V_GAP), so no implicit item spacing is added on top.
@@ -147,6 +146,20 @@ pub fn show(app: &mut App, ui: &mut Ui) {
         .frame(Frame::new().fill(p.surface).inner_margin(Margin { left: 24, right: 24, top: 16, bottom: 0 }))
         .show(ui, |ui| super::detail::show(app, ui));
     goto_box(app, ui.ctx(), p);
+}
+
+/// Below this window width the list pane is fixed near 370 px and the detail pane gets the rest.
+const NARROW: f32 = 1200.0;
+
+/// The list pane's default width and the range it may be dragged in: 42% of the window (360–720) when
+/// wide; a fixed 360–380 band below NARROW, so the description keeps a readable measure.
+pub fn list_pane_width(window_w: f32) -> (f32, std::ops::RangeInclusive<f32>) {
+    if window_w < NARROW {
+        (370.0, 360.0..=380.0)
+    } else {
+        let w = (window_w * 0.42).clamp(360.0, 720.0);
+        (w, 320.0..=w)
+    }
 }
 
 /// Gap between filter controls in a row.
@@ -462,52 +475,62 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
             let epic = i.parent_key.as_deref().map(|k| theme::epic_tint(k, p, epic_colors));
             // The fill goes under the content once we know whether the pointer is over the row.
             let bg = ui.painter().add(egui::Shape::Noop);
-            let r = Frame::new().stroke(Stroke::new(1.0, p.border)).corner_radius(6).inner_margin(Margin::symmetric(12, ROW_PAD_Y)).show(ui, |ui| {
-                ui.set_width(ui.available_width());
-                ui.spacing_mut().item_spacing.y = 4.0;
-                ui.horizontal(|ui| {
-                    ui.add(egui::Label::new(RichText::new(&i.key).font(theme::mono(12.5)).color(p.muted)).selectable(false));
-                    ui.add(egui::Label::new(RichText::new(&i.summary).font(theme::bold(13.5)).color(p.text)).truncate().selectable(false))
-                        .on_hover_text(&i.summary);
-                });
-                // One line of pills, never wrapped: see `fit_pills`.
-                let mut pills: Vec<(PillKind, String, egui::Color32, egui::Color32)> = Vec::new();
-                if let Some((t, bg, fg)) = team_pill(&app.filter, i, p) {
-                    pills.push((PillKind::Other, t, bg, fg));
-                }
-                for c in &columns {
-                    let v = match c.as_str() {
-                        "labels" => row_labels(&i.labels, team_filter.as_deref()),
-                        _ => filter::column_value(i, c),
-                    };
-                    if v.is_empty() {
-                        continue;
-                    }
-                    let (kind, bg, fg) = match (c.as_str(), epic) {
-                        ("status", _) => {
-                            let t = theme::status_tint(&i.status.name, &i.status.category, p, status_colors);
-                            (PillKind::Other, t.bg, t.fg)
+            let r = Frame::new()
+                .stroke(Stroke::new(1.0, p.border))
+                .corner_radius(6)
+                .inner_margin(Margin { left: 12, right: 12, top: ROW_PAD_TOP, bottom: ROW_PAD_BOTTOM })
+                .show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    ui.spacing_mut().item_spacing.y = 2.0;
+                    ui.horizontal(|ui| {
+                        ui.add(egui::Label::new(RichText::new(&i.key).font(theme::mono(12.5)).color(p.muted)).selectable(false));
+                        let painter = ui.painter().clone();
+                        let title = crate::views::truncate_text(&i.summary, ui.available_width(), |t| {
+                            painter.layout_no_wrap(t.to_string(), theme::bold(13.5), p.text).size().x
+                        });
+                        let r = ui.add(egui::Label::new(RichText::new(&title).font(theme::bold(13.5)).color(p.text)).extend().selectable(false));
+                        if title != i.summary {
+                            r.on_hover_text(&i.summary);
                         }
-                        ("parent.summary" | "parent.key", Some(t)) => (PillKind::Epic, t.bg, t.fg),
-                        ("parent.summary" | "parent.key", None) => (PillKind::Epic, p.surface_2, p.muted),
-                        ("assignee", _) => (PillKind::Assignee, p.surface_2, p.muted),
-                        _ => (PillKind::Other, p.surface_2, p.muted),
-                    };
-                    pills.push((kind, v, bg, fg));
-                }
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing = vec2(PILL_GAP, 4.0);
-                    let painter = ui.painter().clone();
-                    let measure = |t: &str| painter.layout_no_wrap(t.to_string(), theme::body(12.0), p.text).size().x;
-                    let widths: Vec<(PillKind, f32)> = pills.iter().map(|(k, t, _, _)| (*k, measure(t) + 2.0 * crate::views::PILL_MARGIN.x)).collect();
-                    let fit = fit_pills(&widths, ui.available_width(), PILL_GAP);
-                    for ((_, text, bg, fg), w) in pills.iter().zip(fit) {
-                        let Some(w) = w else { continue };
-                        let text = crate::views::truncate_text(text, w - 2.0 * crate::views::PILL_MARGIN.x, measure);
-                        pill_outlined(ui, &text, *bg, *fg);
+                    });
+                    // One line of pills, never wrapped: see `fit_pills`.
+                    let mut pills: Vec<(PillKind, String, egui::Color32, egui::Color32)> = Vec::new();
+                    if let Some((t, bg, fg)) = team_pill(&app.filter, i, p) {
+                        pills.push((PillKind::Other, t, bg, fg));
                     }
+                    for c in &columns {
+                        let v = match c.as_str() {
+                            "labels" => row_labels(&i.labels, team_filter.as_deref()),
+                            _ => filter::column_value(i, c),
+                        };
+                        if v.is_empty() {
+                            continue;
+                        }
+                        let (kind, bg, fg) = match (c.as_str(), epic) {
+                            ("status", _) => {
+                                let t = theme::status_tint(&i.status.name, &i.status.category, p, status_colors);
+                                (PillKind::Other, t.bg, t.fg)
+                            }
+                            ("parent.summary" | "parent.key", Some(t)) => (PillKind::Epic, t.bg, t.fg),
+                            ("parent.summary" | "parent.key", None) => (PillKind::Epic, p.surface_2, p.muted),
+                            ("assignee", _) => (PillKind::Assignee, p.surface_2, p.muted),
+                            _ => (PillKind::Other, p.surface_2, p.muted),
+                        };
+                        pills.push((kind, v, bg, fg));
+                    }
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing = vec2(PILL_GAP, 4.0);
+                        let painter = ui.painter().clone();
+                        let measure = |t: &str| painter.layout_no_wrap(t.to_string(), theme::body(12.0), p.text).size().x;
+                        let widths: Vec<(PillKind, f32)> = pills.iter().map(|(k, t, _, _)| (*k, measure(t) + 2.0 * crate::views::ROW_PILL_MARGIN.x)).collect();
+                        let fit = fit_pills(&widths, ui.available_width(), PILL_GAP);
+                        for ((_, text, bg, fg), w) in pills.iter().zip(fit) {
+                            let Some(w) = w else { continue };
+                            let text = crate::views::truncate_text(text, w - 2.0 * crate::views::ROW_PILL_MARGIN.x, measure);
+                            pill_outlined(ui, &text, *bg, *fg);
+                        }
+                    });
                 });
-            });
             let rect = r.response.rect;
             let r = ui.interact(rect, row_id(&i.key), Sense::click());
             let fill = row_fill(is_sel, r.hovered(), p);
@@ -538,10 +561,12 @@ const COUNT_TO_ROWS: f32 = 4.0;
 const PILL_GAP: f32 = 6.0;
 /// Clearance under the last row: a toast's height (~34) plus its 16 px gap, rounded up.
 const LIST_BOTTOM_PAD: f32 = 56.0;
-/// Space between cards.
-const ROW_GAP: f32 = 4.0;
-/// Card inner vertical padding: 4 keeps the two-line card near a 48 pt pitch (≥14 rows at 900 px).
-const ROW_PAD_Y: i8 = 4;
+/// Cards stack edge to edge: −1 overlaps neighbouring borders, so one 1 px line separates rows.
+const ROW_GAP: f32 = -1.0;
+/// Card inner vertical padding (the pill line's descender room makes 3 below read as 4); with 2 px between
+/// the lines and 8/1 pills the pitch is about 46 px, 14+ rows at 900 px.
+const ROW_PAD_TOP: i8 = 4;
+const ROW_PAD_BOTTOM: i8 = 3;
 
 fn row_id(key: &str) -> egui::Id {
     egui::Id::new(("issue-row", key))
@@ -726,6 +751,15 @@ mod tests {
         assert_eq!(row_labels(&l, Some("PLAT")), "infra");
         assert_eq!(row_labels(&l, None), "PLAT, infra");
         assert_eq!(row_labels(&l[..1], Some("PLAT")), "", "nothing left: no pill");
+    }
+
+    #[test]
+    fn narrow_windows_fix_the_list_pane() {
+        assert_eq!(list_pane_width(1000.0), (370.0, 360.0..=380.0));
+        assert_eq!(list_pane_width(1199.0).0, 370.0);
+        let (w, r) = list_pane_width(1440.0);
+        assert_eq!(w, (1440.0f32 * 0.42).clamp(360.0, 720.0));
+        assert_eq!(r, 320.0..=w);
     }
 
     #[test]

@@ -377,9 +377,12 @@ pub fn row_pill_stroke(fg: Color32) -> Stroke {
     Stroke::new(1.0, fg.gamma_multiply(0.35))
 }
 
+/// List-row pills are a little flatter (8/1), for a ~45 px two-line row.
+pub const ROW_PILL_MARGIN: egui::Vec2 = vec2(8.0, 1.0);
+
 /// A list-row pill: one treatment on every row (plain, hovered, selected).
 pub fn pill_outlined(ui: &mut Ui, text: &str, bg: Color32, fg: Color32) -> egui::Response {
-    pill_sized(ui, text, bg, fg, row_pill_stroke(fg), PILL_MARGIN)
+    pill_sized(ui, text, bg, fg, row_pill_stroke(fg), ROW_PILL_MARGIN)
 }
 
 /// Small text in an exact `text + 2×margin` rect (radius 10); the stroke is drawn inside, so outlined
