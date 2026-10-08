@@ -82,7 +82,7 @@ pub fn show(app: &mut App, ui: &mut Ui) {
         .size_range(320.0..=list_w.max(320.0))
         .frame(Frame::new().fill(p.bg).inner_margin(Margin { left: 16, right: 16, top: 12, bottom: 0 }))
         .show(ui, |ui| {
-            filters(app, ui, p);
+            ui.scope(|ui| filters(app, ui, p));
             ui.add_space(8.0);
             list(app, ui, p);
         });
@@ -307,7 +307,7 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
             let bg = ui.painter().add(egui::Shape::Noop);
             let hovered_before = ui.ctx().read_response(row_id(&i.key)).is_some_and(|r| r.hovered());
             let outlined = is_sel || hovered_before;
-            let r = Frame::new().stroke(Stroke::new(1.0, p.border)).corner_radius(6).inner_margin(Margin::symmetric(12, 8)).show(ui, |ui| {
+            let r = Frame::new().stroke(Stroke::new(1.0, p.border)).corner_radius(6).inner_margin(Margin::symmetric(12, ROW_PAD_Y)).show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 ui.spacing_mut().item_spacing.y = 4.0;
                 ui.horizontal(|ui| {
@@ -359,6 +359,8 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
 
 /// Space between cards.
 const ROW_GAP: f32 = 4.0;
+/// Card inner vertical padding: 4 keeps the two-line card near a 48 pt pitch (≥14 rows at 900 px).
+const ROW_PAD_Y: i8 = 4;
 
 fn row_id(key: &str) -> egui::Id {
     egui::Id::new(("issue-row", key))
