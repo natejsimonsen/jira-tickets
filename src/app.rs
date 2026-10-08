@@ -193,6 +193,8 @@ pub struct App {
     pub search_active: bool,
     /// Bumped by every `RunSearch`; Search results from older runs are dropped.
     pub search_seq: u64,
+    /// The seq of the search in flight; the list keeps its previous rows until it lands.
+    pub search_pending: Option<u64>,
     /// The JQL of the running search, for Retry.
     pub last_search_jql: Option<String>,
     /// Jira rejected a configured member, so team queries match labels only until restart.
@@ -279,6 +281,7 @@ impl App {
             last_cursor: 0,
             search_active: false,
             search_seq: 0,
+            search_pending: None,
             last_search_jql: None,
             members_disabled: false,
             drafts: HashMap::new(),
@@ -408,6 +411,15 @@ impl App {
         }
     }
 
+    /// The list the Issues view draws its rows from.
+    pub fn rows_list(&self) -> ListId {
+        let has_result = self.store.lists.contains_key(&ListId::Search);
+        match rows_source(self.search_active, self.search_pending.is_some(), has_result) {
+            RowsSource::Search => ListId::Search,
+            RowsSource::TeamOpen => ListId::TeamOpen,
+        }
+    }
+
     /// The search the team picker and quick filter call for: the quick filter
     /// ANDed with the team clause, or under No team label the no-team query
     /// alone. None when neither applies (the list shows TeamOpen).
@@ -431,6 +443,8 @@ impl App {
         let full = format!("project = {} AND ({}) ORDER BY Rank ASC", store::jql_quote(&self.cfg.scope.project), jql.trim());
         let fields: Vec<String> = jira::LIST_FIELDS.iter().map(|s| s.to_string()).collect();
         self.lists.entry(ListId::Search).or_default().loading = false;
+        // Without a client nothing is spawned, so nothing would ever clear it.
+        self.search_pending = self.client.is_some().then_some(self.search_seq);
         self.load_list_seq(ListId::Search, full, fields, Some(self.search_seq), with_members);
     }
 
@@ -479,8 +493,15 @@ impl App {
             }
             Msg::Me(Err(e)) => self.toast(e.to_string(), true),
             Msg::List { id, result, stale: _, seq, with_members } => {
-                if id == ListId::Search && !accept_search(self.search_seq, seq, self.search_active) {
-                    return;
+                if id == ListId::Search {
+                    if !accept_search(self.search_seq, seq, self.search_active) {
+                        // A pending seq older than the current run can never land.
+                        if self.search_pending.is_some_and(|p| p != self.search_seq) {
+                            self.search_pending = None;
+                        }
+                        return;
+                    }
+                    self.search_pending = None;
                 }
                 // Gated on what this query carried, not on members_disabled: TeamOpen and
                 // TeamInProgress can both fail on the same member and the second must still
@@ -529,6 +550,10 @@ impl App {
                             self.offline = true;
                         }
                         entry.error = Some(e.to_string());
+                        // The previous search's rows were kept while this one ran; drop them so the error shows.
+                        if id == ListId::Search {
+                            self.store.lists.remove(&ListId::Search);
+                        }
                     }
                 }
                 if reload {
@@ -727,6 +752,7 @@ impl App {
                     self.search_active = false;
                     self.filter.quick = None;
                     self.last_search_jql = None;
+                    self.search_pending = None;
                     self.store.lists.remove(&ListId::Search);
                     // Drops the error and any in-flight flag; late results are ignored by seq.
                     self.lists.remove(&ListId::Search);
@@ -840,7 +866,7 @@ impl App {
                 if self.client.is_none() {
                     return;
                 }
-                let src = if self.search_active { ListId::Search } else { ListId::TeamOpen };
+                let src = self.rows_list();
                 let rows: Vec<String> = views::issues::current_rows(self).iter().map(|i| i.key.clone()).collect();
                 let Some((neighbour, before)) = rank_target(&rows, &key, delta) else { return };
                 // Move the row now; a failed rank snaps back on the refresh that follows Done.
@@ -1090,6 +1116,23 @@ fn defer_load(client_present: bool, already_loading: bool) -> bool {
     client_present && already_loading
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RowsSource {
+    Search,
+    TeamOpen,
+}
+
+/// Which list the Issues view shows. While a search runs with no earlier result
+/// it keeps the TeamOpen rows on screen rather than an empty list; with an
+/// earlier result it keeps that until the new one lands.
+fn rows_source(search_active: bool, pending: bool, has_search_result: bool) -> RowsSource {
+    match (search_active, pending, has_search_result) {
+        (false, _, _) => RowsSource::TeamOpen,
+        (true, true, false) => RowsSource::TeamOpen,
+        (true, _, _) => RowsSource::Search,
+    }
+}
+
 /// A Search result lands only while a search is active and only for the latest run.
 fn accept_search(current_seq: u64, msg_seq: Option<u64>, active: bool) -> bool {
     active && msg_seq == Some(current_seq)
@@ -1212,6 +1255,16 @@ mod tests {
         assert!(!defer_load(true, false), "starts now instead");
         assert!(!defer_load(false, true), "no client to run it");
         assert!(!defer_load(false, false));
+    }
+
+    #[test]
+    fn rows_stay_on_screen_while_a_search_runs() {
+        assert_eq!(rows_source(false, false, false), RowsSource::TeamOpen, "no search");
+        assert_eq!(rows_source(false, false, true), RowsSource::TeamOpen, "no search, stale result");
+        assert_eq!(rows_source(true, false, true), RowsSource::Search, "search with result");
+        assert_eq!(rows_source(true, true, false), RowsSource::TeamOpen, "first search in flight");
+        assert_eq!(rows_source(true, true, true), RowsSource::Search, "keeps the previous result");
+        assert_eq!(rows_source(true, false, false), RowsSource::Search, "failed search shows its error");
     }
 
     #[test]

@@ -15,14 +15,15 @@ pub fn roadmap_epics(app: &App) -> BTreeSet<String> {
 }
 
 pub fn current_rows(app: &App) -> Vec<&Issue> {
-    let src = if app.search_active { ListId::Search } else { ListId::TeamOpen };
+    let src = app.rows_list();
+    let searched = src == ListId::Search;
     let all = filter::action_items(&app.store.list(src));
     let me = app.me.as_ref().map(|m| m.display_name.as_str());
     if app.filter.roadmap {
         let f = filter::IssueFilter { roadmap_epics: roadmap_epics(app), ..app.filter.clone() };
-        filter::visible(&all, &f, app.search_active, me)
+        filter::visible(&all, &f, searched, me)
     } else {
-        filter::visible(&all, &app.filter, app.search_active, me)
+        filter::visible(&all, &app.filter, searched, me)
     }
 }
 
@@ -102,8 +103,8 @@ fn filters(app: &mut App, ui: &mut Ui, p: &Palette) {
             }
         });
         // Epic picker: parents of the scoped team's issues (other filters ignored), by summary.
-        let src = if app.search_active { ListId::Search } else { ListId::TeamOpen };
-        let mut epics: Vec<(String, String)> = filter::in_team(&app.store.list(src), &app.filter, app.search_active)
+        let src = app.rows_list();
+        let mut epics: Vec<(String, String)> = filter::in_team(&app.store.list(src), &app.filter, src == ListId::Search)
             .iter()
             .filter_map(|i| Some((i.parent_key.clone()?, i.parent_summary.clone().unwrap_or_default())))
             .collect();
@@ -171,7 +172,7 @@ fn filters(app: &mut App, ui: &mut Ui, p: &Palette) {
 
 fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
     let rows: Vec<Issue> = current_rows(app).into_iter().cloned().collect();
-    let src = if app.search_active { ListId::Search } else { ListId::TeamOpen };
+    let src = app.rows_list();
     let loaded = app.lists.get(&src);
     if let Some(e) = loaded.and_then(|l| l.error.clone())
         && rows.is_empty()
@@ -185,6 +186,10 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
     }
     ui.horizontal(|ui| {
         ui.label(RichText::new(format!("{} issues", rows.len())).color(p.muted).size(12.0));
+        if app.search_pending.is_some() {
+            ui.add(egui::Spinner::new().size(14.0));
+            ui.label(RichText::new("updating…").color(p.muted).size(12.0));
+        }
         if app.search_active && ui.add(button("Clear search", p)).clicked() {
             app.actions.push(Action::RunSearch(String::new()));
         }
