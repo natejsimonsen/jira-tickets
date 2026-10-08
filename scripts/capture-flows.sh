@@ -79,7 +79,7 @@ flow issues-sprint-picker 'click:(active);wait:200;shot:01-open.png' \
     '01-open.png|Sprint picker ComboBox open'
 flow issues-epic-picker 'click:All epics;wait:200;shot:01-open.png' \
     '01-open.png|Epic picker ComboBox open'
-flow issues-quick-filter 'click:Only Opened;shot:01-updating.png;wait:2500;shot:02-loaded.png' \
+flow issues-quick-filter 'click:Only opened;shot:01-updating.png;wait:2500;shot:02-loaded.png' \
     '01-updating.png|Quick filter toggled on, search in flight' \
     '02-loaded.png|Quick filter results loaded'
 flow issues-mine-roadmap 'key:m;wait:200;shot:01-roadmap.png;click:Mine;wait:200;shot:02-mine-roadmap.png' \
@@ -128,6 +128,20 @@ flow issues-selected-hints 'key:j;wait:800;shot:01-selected.png' \
 # CI-4055 had the most comments (4) in the local cache when this flow was written.
 flow detail-comments 'key:cmd+k;type:CI-4055;wait:300;key:enter;wait:2000;shot:01-comments.png' \
     '01-comments.png|An issue with several comments, opened via the go-to box'
+flow header-sync 'key:cmd+r;shot:01-syncing.png' \
+    '01-syncing.png|Header sync spinner right after cmd+r'
+# CI-4091 has a code block and CI-2119 a smart link (inlineCard) in the local cache; no cached issue has a panel.
+flow detail-rich 'key:cmd+k;type:CI-4091;wait:300;key:enter;wait:2000;shot:01-code-block.png;key:cmd+k;type:CI-2119;wait:300;key:enter;wait:2000;shot:02-smart-link.png' \
+    '01-code-block.png|A description with a code block' \
+    '02-smart-link.png|A description with a smart link (inlineCard)'
+
+# First load with nothing cached: an empty cache dir and no wait for data, then a quick filter at once.
+flow_env=(JIRA_TICKETS_CACHE_DIR="$out/empty-cache" JIRA_TICKETS_NO_WAIT=1)
+rm -rf "$out/empty-cache"
+flow loading-empty 'wait:400;shot:01-first-load.png;click:Only opened;shot:02-loading.png' \
+    '01-first-load.png|First launch with no cache: "Loading issues…"' \
+    '02-loading.png|Quick filter clicked before any rows arrived'
+flow_env=()
 
 # Sign-in: a config with site/email but no token reference, no env token, no saved token file.
 signin_cfg="$out/signin-config.toml"

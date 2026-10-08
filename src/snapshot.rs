@@ -117,15 +117,20 @@ fn texts(n: &egui_kittest::kittest::AccessKitNode<'_>) -> [Option<String>; 3] {
     [n.label(), n.value(), n.placeholder().map(str::to_owned)]
 }
 
+/// `click:` matching ignores case, so a flow names a chip the same way under any config's capitalisation.
+fn label_matches(text: &str, label: &str) -> bool {
+    text.to_lowercase().contains(&label.to_lowercase())
+}
+
 fn click(harness: &mut Harness<'_, App>, label: &str) {
     // Prefer widgets labelled by their text (buttons), then widgets whose value or placeholder
     // matches (ComboBox selected text, TextEdit hint), then plain text, so `click:Roadmap` hits the toggle, not the nav tab.
     let plain = |n: &egui_kittest::kittest::AccessKitNode<'_>| matches!(n.role(), egui::accesskit::Role::Label | egui::accesskit::Role::TextRun);
     let rect = harness
-        .query_all_by(|n| n.label().is_some_and(|t| t.contains(label)))
+        .query_all_by(|n| n.label().is_some_and(|t| label_matches(&t, label)))
         .next()
-        .or_else(|| harness.query_all_by(|n| !plain(n) && texts(n)[1..].iter().flatten().any(|t| t.contains(label))).next())
-        .or_else(|| harness.query_all_by(|n| texts(n).iter().flatten().any(|t| t.contains(label))).next())
+        .or_else(|| harness.query_all_by(|n| !plain(n) && texts(n)[1..].iter().flatten().any(|t| label_matches(t, label))).next())
+        .or_else(|| harness.query_all_by(|n| texts(n).iter().flatten().any(|t| label_matches(t, label))).next())
         .map(|n| n.rect());
     match rect {
         Some(r) => {
@@ -194,8 +199,10 @@ pub fn run(out: Option<&str>, cfg: Config) {
         .with_max_steps(4)
         .wgpu()
         .build_eframe(move |cc| App::new(cc, cfg));
+    // JIRA_TICKETS_NO_WAIT: start the script at once (with an empty cache, the first-load states show).
+    let no_wait = std::env::var_os("JIRA_TICKETS_NO_WAIT").is_some();
     let start = Instant::now();
-    while !harness.state().shot_ready() && start.elapsed() < Duration::from_secs(20) {
+    while !no_wait && !harness.state().shot_ready() && start.elapsed() < Duration::from_secs(20) {
         frames(&mut harness, 1);
     }
     eprintln!("snapshot: data {} after {:.1}s", if harness.state().shot_ready() { "ready" } else { "not ready" }, start.elapsed().as_secs_f32());
@@ -209,7 +216,7 @@ pub fn run(out: Option<&str>, cfg: Config) {
     if let Ok(n) = std::env::var("JIRA_TICKETS_ROW").map(|v| v.parse::<i32>().unwrap_or(0)) {
         harness.state_mut().actions.push(Action::Move(n));
     }
-    frames(&mut harness, 30);
+    frames(&mut harness, if no_wait { 1 } else { 30 });
     let script = std::env::var("JIRA_TICKETS_SCRIPT").unwrap_or_default();
     for step in parse_steps(&script) {
         eprintln!("snapshot: {step:?}");
@@ -274,6 +281,13 @@ mod tests {
         for bad in ["nope", "key:hyper+j", "key:", "wait:soon", "at:1", "theme:blue", "width:-3", "click:", "frobnicate:1"] {
             assert_eq!(parse_steps(bad), vec![Step::Unknown(bad.into())], "{bad}");
         }
+    }
+
+    #[test]
+    fn click_labels_ignore_case() {
+        assert!(label_matches("Only Opened", "Only opened"));
+        assert!(label_matches("✓ Only opened", "only Opened"));
+        assert!(!label_matches("To Do", "Only"));
     }
 
     #[test]
