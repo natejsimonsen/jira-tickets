@@ -370,17 +370,21 @@ pub fn field_hint(text: &str, font: egui::FontId, p: &Palette) -> egui::text::La
 /// How far a placeholder starts past the text start (the caret).
 pub const HINT_INSET: f32 = 3.0;
 
+/// An input's text inset: with HINT_INSET the placeholder starts at 12, the filter row's one text inset.
+pub const INPUT_PAD_X: f32 = 9.0;
+
 /// Height of every single-line input (search, go-to, token, picker fields).
 pub const INPUT_H: f32 = 32.0;
 
-/// The one single-line input: 8/6 inner margin, INPUT_H tall, full width, `font` for text and placeholder
-/// (the placeholder inset past the caret). Focus draws the theme's one 1 px accent stroke.
+/// The one single-line input: 9/6 inner margin (so the placeholder, HINT_INSET past the caret, starts 12 in
+/// like combo and chip text), INPUT_H tall, full width, `font` for text and placeholder. Focus draws the
+/// theme's one 1 px accent stroke.
 pub fn input_field<'a>(text: &'a mut String, hint: &str, font: egui::FontId, p: &Palette) -> egui::TextEdit<'a> {
     egui::TextEdit::singleline(text)
         .font(font.clone())
         .hint_text(field_hint(hint, font, p))
         .desired_width(f32::INFINITY)
-        .margin(vec2(8.0, 6.0))
+        .margin(vec2(INPUT_PAD_X, 6.0))
         .min_size(vec2(0.0, INPUT_H))
 }
 
@@ -441,7 +445,7 @@ pub fn active_chip_fill(p: &Palette) -> Color32 {
     p.accent
 }
 
-/// A filter toggle chip: 28 px tall, radius 10 like the pills, label centred with 12 px padding.
+/// A filter toggle chip: 28 px tall (BUTTON_H, like the combos), radius 6 like every button, label 12 in.
 pub fn toggle_chip(ui: &mut Ui, text: &str, active: bool, p: &Palette) -> egui::Response {
     let fg = if active { p.on_accent } else { p.text };
     let label = ui.painter().layout_no_wrap(text.to_string(), theme::body(14.0), fg);
@@ -454,7 +458,7 @@ pub fn toggle_chip(ui: &mut Ui, text: &str, active: bool, p: &Palette) -> egui::
             (false, true) => (p.hover_row, p.border),
             (false, false) => (p.surface_2, p.border),
         };
-        ui.painter().rect(rect, 10.0, fill, Stroke::new(1.0, stroke), egui::StrokeKind::Inside);
+        ui.painter().rect(rect, 6.0, fill, Stroke::new(1.0, stroke), egui::StrokeKind::Inside);
         let y = (rect.center().y - label.size().y / 2.0).round();
         ui.painter().galley(egui::pos2(rect.left() + CHIP_PAD, y), label, fg);
     }
@@ -580,6 +584,7 @@ mod widget_tests {
     fn chips_pad_12_either_side() {
         assert_eq!(chip_width(40.0), 64.0);
         assert_eq!(chip_width(40.2), 65.0);
+        assert_eq!(INPUT_PAD_X + HINT_INSET, CHIP_PAD, "the search placeholder starts where chip text does");
     }
 
     #[test]

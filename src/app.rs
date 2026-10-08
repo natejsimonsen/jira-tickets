@@ -284,7 +284,7 @@ impl App {
         };
         let app = App {
             cfg: cfg.clone(),
-            store: Store::load_cached().unwrap_or_default(),
+            store: Store::for_launch(Store::load_cached()),
             lists: HashMap::new(),
             screen: Screen::Issues,
             me: None,
@@ -1333,7 +1333,9 @@ pub enum RowsSource {
 
 /// Which list the Issues view shows. While a search runs with no earlier result
 /// it keeps the TeamOpen rows on screen rather than an empty list; with an
-/// earlier result it keeps that until the new one lands.
+/// earlier result it keeps that until the new one lands. Either way the rows in flight are the ones the
+/// user was looking at: a Search result only exists once this session accepted one (`Store::for_launch`
+/// drops a cached one, and clearing a search removes it).
 fn rows_source(search_active: bool, pending: bool, has_search_result: bool) -> RowsSource {
     match (search_active, pending, has_search_result) {
         (false, _, _) => RowsSource::TeamOpen,
@@ -1474,6 +1476,14 @@ mod tests {
         assert_eq!(rows_source(true, true, false), RowsSource::TeamOpen, "first search in flight");
         assert_eq!(rows_source(true, true, true), RowsSource::Search, "keeps the previous result");
         assert_eq!(rows_source(true, false, false), RowsSource::Search, "failed search shows its error");
+        // A quick filter started at launch: the cache's Search list is gone (Store::for_launch), so the
+        // rows in flight are the team list the user was looking at, not an old search.
+        let store = Store::for_launch(Some({
+            let mut s = Store::default();
+            s.lists.insert(ListId::Search, vec!["CI-9".into()]);
+            s
+        }));
+        assert_eq!(rows_source(true, true, store.lists.contains_key(&ListId::Search)), RowsSource::TeamOpen);
     }
 
     #[test]

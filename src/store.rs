@@ -92,6 +92,14 @@ impl Store {
         crate::cache::load(CACHE_KEY)
     }
 
+    /// The store a launch starts from: the cache without its Search list. That list answered some earlier
+    /// run's search, so it must never be the base the list shows (or keeps on screen while a filter loads).
+    pub fn for_launch(cached: Option<Store>) -> Store {
+        let mut s = cached.unwrap_or_default();
+        s.lists.remove(&ListId::Search);
+        s
+    }
+
     pub fn save_cached(&self) {
         crate::cache::store(CACHE_KEY, self);
     }
@@ -329,6 +337,18 @@ mod tests {
         let i = s.get("CI-1").unwrap();
         assert_eq!(i.status.name, "Planning");
         assert!(i.description.is_some());
+    }
+
+    #[test]
+    fn a_cached_search_list_is_never_the_launch_base() {
+        let mut cached = Store::default();
+        cached.absorb(ListId::TeamOpen, vec![issue("CI-1", "New", None, None)]);
+        cached.absorb(ListId::Search, vec![issue("CI-2", "Blocked", None, None)]);
+        let s = Store::for_launch(Some(cached));
+        assert!(!s.lists.contains_key(&ListId::Search), "the previous run's search is dropped");
+        assert_eq!(s.list(ListId::TeamOpen).len(), 1, "the team list stays");
+        assert!(s.get("CI-2").is_some(), "issue records stay for the detail pane");
+        assert!(Store::for_launch(None).lists.is_empty());
     }
 
     #[test]
