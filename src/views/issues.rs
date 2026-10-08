@@ -85,8 +85,17 @@ pub enum PillKind {
 /// An epic pill narrower than this is dropped rather than cut to a stub.
 const EPIC_PILL_MIN: f32 = 64.0;
 
+/// Below this row width no row shows the assignee pill; at or above it every row does (unless a row is so
+/// crowded that even a cut epic does not fit). Decided once per list width, so rows never disagree.
+const ASSIGNEE_ROW_MIN: f32 = 420.0;
+
+pub fn rows_show_assignee(row_w: f32) -> bool {
+    row_w >= ASSIGNEE_ROW_MIN
+}
+
 /// Fits a row's pills on one line: each gets Some(width) or None (dropped). When they do not all fit the
-/// assignee pill goes first, then the epic pill is cut to the remaining room (dropped below EPIC_PILL_MIN).
+/// epic pill is cut to the remaining room (dropped below EPIC_PILL_MIN); only when the rest still overflows
+/// does the assignee go, and the epic gets the room it frees.
 pub fn fit_pills(pills: &[(PillKind, f32)], available: f32, spacing: f32) -> Vec<Option<f32>> {
     let total = |ws: &[Option<f32>]| {
         let n = ws.iter().flatten().count();
@@ -96,20 +105,24 @@ pub fn fit_pills(pills: &[(PillKind, f32)], available: f32, spacing: f32) -> Vec
     if total(&out) <= available {
         return out;
     }
+    let epic = pills.iter().position(|(k, _)| *k == PillKind::Epic);
+    let fit_epic = |out: &mut Vec<Option<f32>>| {
+        if let Some(e) = epic {
+            out[e] = None;
+            let room = available - total(out) - if out.iter().flatten().count() > 0 { spacing } else { 0.0 };
+            out[e] = (room >= EPIC_PILL_MIN).then_some(room.min(pills[e].1).floor());
+        }
+    };
+    fit_epic(&mut out);
+    if total(&out) <= available {
+        return out;
+    }
     for (o, (k, _)) in out.iter_mut().zip(pills) {
         if *k == PillKind::Assignee {
             *o = None;
         }
     }
-    if total(&out) <= available {
-        return out;
-    }
-    if let Some(e) = pills.iter().position(|(k, _)| *k == PillKind::Epic) {
-        out[e] = None;
-        let rest = total(&out);
-        let room = available - rest - if out.iter().flatten().count() > 0 { spacing } else { 0.0 };
-        out[e] = (room >= EPIC_PILL_MIN).then_some(room.min(pills[e].1).floor());
-    }
+    fit_epic(&mut out);
     out
 }
 
@@ -465,6 +478,10 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
     // Keyboard moves change the cursor; bring its row into view once per change.
     let scroll_cursor = app.cursor != app.last_cursor;
     app.last_cursor = app.cursor;
+    // Row width less the 12 px card padding either side; one assignee decision for every row.
+    let show_assignee = rows_show_assignee(ui.available_width() - 24.0);
+    // The same fade under the last visible row at every width: a full row's height.
+    ui.spacing_mut().scroll.fade = egui::style::ScrollFadeStyle { strength: 0.5, size: ROW_PITCH };
     egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
         ui.spacing_mut().item_spacing.y = ROW_GAP;
         for (idx, i) in rows.iter().enumerate() {
@@ -472,13 +489,14 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
             let epic = i.parent_key.as_deref().map(|k| theme::epic_tint_in(k, &slots, p, epic_colors));
             // The fill goes under the content once we know whether the pointer is over the row.
             let bg = ui.painter().add(egui::Shape::Noop);
+            let corners = row_corners(idx, rows.len());
             let r = Frame::new()
                 .stroke(Stroke::new(1.0, p.border))
-                .corner_radius(6)
+                .corner_radius(corners)
                 .inner_margin(Margin { left: 12, right: 12, top: ROW_PAD_TOP, bottom: ROW_PAD_BOTTOM })
                 .show(ui, |ui| {
                     ui.set_width(ui.available_width());
-                    ui.spacing_mut().item_spacing.y = 2.0;
+                    ui.spacing_mut().item_spacing.y = ROW_LINE_GAP;
                     ui.horizontal(|ui| {
                         ui.add(egui::Label::new(RichText::new(&i.key).font(theme::mono(12.5)).color(p.muted)).selectable(false));
                         let painter = ui.painter().clone();
@@ -515,6 +533,9 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
                         };
                         pills.push((kind, v, look));
                     }
+                    if !show_assignee {
+                        pills.retain(|(k, _, _)| *k != PillKind::Assignee);
+                    }
                     ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing = vec2(PILL_GAP, 4.0);
                         let painter = ui.painter().clone();
@@ -534,9 +555,10 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
             let rect = r.response.rect;
             let r = ui.interact(rect, row_id(&i.key), Sense::click());
             let fill = row_fill(is_sel, r.hovered(), p);
-            ui.painter().set(bg, egui::epaint::RectShape::filled(rect, 6, fill));
+            ui.painter().set(bg, egui::epaint::RectShape::filled(rect, corners, fill));
             if let Some(t) = epic {
-                ui.painter().rect_filled(Rect::from_min_size(rect.min, vec2(3.0, rect.height())), CornerRadius { nw: 6, sw: 6, ne: 0, se: 0 }, t.stripe);
+                let stripe = CornerRadius { nw: corners.nw, sw: corners.sw, ne: 0, se: 0 };
+                ui.painter().rect_filled(Rect::from_min_size(rect.min, vec2(3.0, rect.height())), stripe, t.stripe);
             }
             if r.clicked() {
                 app.cursor = idx;
@@ -561,12 +583,23 @@ const COUNT_TO_ROWS: f32 = 4.0;
 const PILL_GAP: f32 = 6.0;
 /// Clearance under the last row: a toast's height (~34) plus its 16 px gap, rounded up.
 const LIST_BOTTOM_PAD: f32 = 56.0;
-/// Cards stack edge to edge: −1 overlaps neighbouring borders, so one 1 px line separates rows.
+/// Rows stack as one list: −1 overlaps neighbouring borders, so a single 1 px divider separates rows, and
+/// only the list's outer corners are rounded (no doubled lines or notches at the seams).
 const ROW_GAP: f32 = -1.0;
-/// Card inner vertical padding (the pill line's descender room makes 3 below read as 4); with 2 px between
-/// the lines and 8/1 pills the pitch is about 46 px, 14+ rows at 900 px.
-const ROW_PAD_TOP: i8 = 4;
-const ROW_PAD_BOTTOM: i8 = 3;
+/// Row inner vertical padding. The title's line box carries ~4 px of leading above the caps, so 3 above reads
+/// as ~7–8 and 5 under the pills as ~6–7; with 2 px between the lines the pitch is 47 px, which keeps 14 full
+/// rows at 1440×900 (a 4 px gap or 8/4/8 code padding would drop it to 12–13).
+const ROW_PAD_TOP: i8 = 3;
+const ROW_PAD_BOTTOM: i8 = 5;
+const ROW_LINE_GAP: f32 = 2.0;
+/// One row's pitch, for the scroll fade.
+const ROW_PITCH: f32 = 47.0;
+
+/// The list's outer corners are rounded (6); the seams between rows are square.
+pub fn row_corners(idx: usize, n: usize) -> CornerRadius {
+    let (top, bottom) = (if idx == 0 { 6 } else { 0 }, if idx + 1 == n { 6 } else { 0 });
+    CornerRadius { nw: top, ne: top, sw: bottom, se: bottom }
+}
 
 fn row_id(key: &str) -> egui::Id {
     egui::Id::new(("issue-row", key))
@@ -732,15 +765,31 @@ mod tests {
         let row = [(Other, 100.0), (Other, 40.0), (Epic, 150.0), (Assignee, 110.0)];
         // Everything fits: 400 + 3 gaps of 6.
         assert_eq!(fit_pills(&row, 418.0, 6.0), vec![Some(100.0), Some(40.0), Some(150.0), Some(110.0)]);
-        // The assignee goes first.
-        assert_eq!(fit_pills(&row, 417.0, 6.0), vec![Some(100.0), Some(40.0), Some(150.0), None]);
-        assert_eq!(fit_pills(&row, 302.0, 6.0), vec![Some(100.0), Some(40.0), Some(150.0), None]);
-        // Then the epic is cut to the room left (300 − 140 − 2 gaps).
-        assert_eq!(fit_pills(&row, 300.0, 6.0), vec![Some(100.0), Some(40.0), Some(148.0), None]);
-        assert_eq!(fit_pills(&row, 220.0, 6.0), vec![Some(100.0), Some(40.0), Some(68.0), None]);
-        // Below the minimum it is dropped rather than shown as a stub.
+        // The epic is cut first (417 − 250 − 3 gaps), keeping the assignee.
+        assert_eq!(fit_pills(&row, 417.0, 6.0), vec![Some(100.0), Some(40.0), Some(149.0), Some(110.0)]);
+        assert_eq!(fit_pills(&row, 332.0, 6.0), vec![Some(100.0), Some(40.0), Some(64.0), Some(110.0)]);
+        // Below the epic minimum it is dropped; while the rest fits the assignee stays.
+        assert_eq!(fit_pills(&row, 300.0, 6.0), vec![Some(100.0), Some(40.0), None, Some(110.0)]);
+        // Only when even that overflows does the assignee go, and the epic gets its room back.
+        assert_eq!(fit_pills(&row, 250.0, 6.0), vec![Some(100.0), Some(40.0), Some(98.0), None]);
         assert_eq!(fit_pills(&row, 200.0, 6.0), vec![Some(100.0), Some(40.0), None, None]);
         assert!(fit_pills(&[], 10.0, 6.0).is_empty());
+    }
+
+    #[test]
+    fn assignee_shows_on_all_rows_or_none() {
+        assert!(!rows_show_assignee(314.0), "1000 px window");
+        assert!(rows_show_assignee(548.0), "1440 px window");
+        assert!(rows_show_assignee(ASSIGNEE_ROW_MIN));
+    }
+
+    #[test]
+    fn only_the_list_ends_are_rounded() {
+        let r = |nw, ne, sw, se| CornerRadius { nw, ne, sw, se };
+        assert_eq!(row_corners(0, 1), r(6, 6, 6, 6));
+        assert_eq!(row_corners(0, 3), r(6, 6, 0, 0));
+        assert_eq!(row_corners(1, 3), r(0, 0, 0, 0));
+        assert_eq!(row_corners(2, 3), r(0, 0, 6, 6));
     }
 
     #[test]
