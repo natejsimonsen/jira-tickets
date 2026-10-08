@@ -27,7 +27,9 @@ pub fn show(app: &mut App, ui: &mut Ui) {
             if let (Some(pk), Some(ps)) = (&issue.parent_key, &issue.parent_summary) {
                 ui.label(RichText::new("·").color(p.muted));
                 let epic = theme::epic_tint_in(pk, &app.epic_slots, p, &app.cfg.issues.epic_colors);
-                if ui.link(RichText::new(format!("{pk} {ps}")).color(epic.fg).size(13.0)).clicked() {
+                // In the epic's text colour, underlined on hover like every other link.
+                let tip = super::issues::epic_tip(pk, ps);
+                if crate::views::text_link(ui, &format!("{pk} {ps}"), theme::body(13.0), epic.fg).on_hover_text(tip).clicked() {
                     app.actions.push(Action::SetEpic(Some(pk.clone())));
                 }
             }

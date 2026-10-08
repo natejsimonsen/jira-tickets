@@ -529,10 +529,14 @@ pub fn primary_colors(p: &Palette) -> (Color32, Color32) {
 
 /// A 12 px accent text link (no frame), underlined while hovered: "Clear filters", "Clear search".
 pub fn small_link(ui: &mut Ui, text: &str, p: &Palette) -> egui::Response {
-    let galley = ui.painter().layout_no_wrap(text.to_string(), theme::body(12.0), p.accent);
+    text_link(ui, text, theme::body(12.0), p.accent)
+}
+
+/// A text link (no frame) in `color`, underlined while hovered.
+pub fn text_link(ui: &mut Ui, text: &str, font: egui::FontId, color: Color32) -> egui::Response {
+    let galley = ui.painter().layout_no_wrap(text.to_string(), font, color);
     let (rect, resp) = ui.allocate_exact_size(galley.size(), Sense::click());
     if ui.is_rect_visible(rect) {
-        let color = p.accent;
         if resp.hovered() {
             ui.painter().hline(rect.x_range(), rect.bottom() - 1.0, Stroke::new(1.0, color));
         }

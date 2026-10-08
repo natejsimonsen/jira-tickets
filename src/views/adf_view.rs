@@ -19,10 +19,13 @@ pub fn show_value(ui: &mut Ui, v: &serde_json::Value, p: &Palette, container: eg
 const BLOCK_GAP: f32 = 12.0;
 /// The one gap between list items.
 const LIST_ITEM_GAP: f32 = 4.0;
+/// Above a later block (a second paragraph, a nested list) inside one list item.
+const LIST_BLOCK_GAP: f32 = 8.0;
 const BODY: f32 = 14.0;
 /// The bullet's slot: about a numeral's width, so bulleted and numbered text line up.
 const BULLET_W: f32 = 10.0;
-/// Inline code is this fraction of the surrounding size, exactly, in every context (headings included).
+/// Inline code is this fraction of the surrounding size, exactly, capped at 0.9× body (so a heading's code
+/// is never the largest mono on screen).
 const CODE_SCALE: f32 = 0.9;
 /// An inline code chip's padding either side (the text keeps the same room from its neighbours).
 const CODE_PAD_X: f32 = 4.0;
@@ -95,7 +98,7 @@ fn block(ui: &mut Ui, b: &Block, p: &Palette, size: f32, chip: egui::Color32) {
                         ui.spacing_mut().item_spacing.y = 0.0;
                         for (j, ib) in item.iter().enumerate() {
                             if j > 0 {
-                                ui.add_space(LIST_ITEM_GAP);
+                                ui.add_space(LIST_BLOCK_GAP);
                             }
                             block(ui, ib, p, size, chip);
                         }
@@ -158,7 +161,7 @@ fn block(ui: &mut Ui, b: &Block, p: &Palette, size: f32, chip: egui::Color32) {
 fn span_format(sp: &Span, p: &Palette, size: f32, heading: bool) -> TextFormat {
     let mut fmt = TextFormat { font_id: if sp.bold || heading { theme::bold(size) } else { theme::body(size) }, color: p.text, ..Default::default() };
     if sp.code {
-        fmt.font_id = theme::mono(size * CODE_SCALE);
+        fmt.font_id = theme::mono(code_size(size));
         // Centre the smaller mono run on the surrounding text's line.
         fmt.valign = egui::Align::Center;
     }
@@ -179,6 +182,11 @@ fn span_format(sp: &Span, p: &Palette, size: f32, heading: bool) -> TextFormat {
     fmt
 }
 
+/// Inline code's size in a context of `size`: 0.9×, at most 0.9× body.
+pub fn code_size(size: f32) -> f32 {
+    CODE_SCALE * size.min(BODY)
+}
+
 /// A smart link that shows an issue key (an inlineCard to /browse/KEY).
 fn is_key_link(sp: &Span) -> bool {
     sp.link.as_deref().and_then(adf::browse_key) == Some(sp.text.as_str())
@@ -192,10 +200,31 @@ pub fn number_gutter(widths: impl IntoIterator<Item = f32>) -> f32 {
 /// One glyph on a laid-out row, for `code_runs`: (char, in inline code, left, right, top, bottom).
 pub type GlyphBox = (char, bool, f32, f32, f32, f32);
 
-/// The inline-code chips on one laid-out row, as (left, right, top, bottom) around their glyphs: one per
-/// run of code glyphs, with whitespace at either end of a run left out, so a code span that wraps never
-/// carries a trailing space's fill to the line end.
-pub fn code_runs(glyphs: &[GlyphBox]) -> Vec<(f32, f32, f32, f32)> {
+/// One inline-code chip on a row: its glyphs' (left, right, top, bottom), and whether each side hugs
+/// punctuation (an opening mark just before it, a closing one just after), where the chip pads less.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CodeRun {
+    pub left: f32,
+    pub right: f32,
+    pub top: f32,
+    pub bottom: f32,
+    pub tight_left: bool,
+    pub tight_right: bool,
+}
+
+/// Punctuation that hugs the code after it ("(`x`").
+pub fn opens(c: char) -> bool {
+    matches!(c, '(' | '[' | '{' | '"' | '\'' | '“' | '‘')
+}
+
+/// Punctuation that hugs the code before it ("`x`),").
+pub fn closes(c: char) -> bool {
+    matches!(c, ')' | ']' | '}' | ',' | '.' | ';' | ':' | '!' | '?' | '"' | '\'' | '”' | '’')
+}
+
+/// The inline-code chips on one laid-out row: one per run of code glyphs, with whitespace at either end of
+/// a run left out, so a code span that wraps never carries a trailing space's fill to the line end.
+pub fn code_runs(glyphs: &[GlyphBox]) -> Vec<CodeRun> {
     let mut out = Vec::new();
     let mut i = 0;
     while i < glyphs.len() {
@@ -207,17 +236,55 @@ pub fn code_runs(glyphs: &[GlyphBox]) -> Vec<(f32, f32, f32, f32)> {
         while i < glyphs.len() && glyphs[i].1 {
             i += 1;
         }
-        let run: Vec<&GlyphBox> = glyphs[start..i].iter().skip_while(|g| g.0.is_whitespace()).collect();
+        let lead = glyphs[start..i].iter().take_while(|g| g.0.is_whitespace()).count();
+        let run = &glyphs[start + lead..i];
         let n = run.iter().rposition(|g| !g.0.is_whitespace()).map_or(0, |k| k + 1);
         if n > 0 {
             let run = &run[..n];
             let top = run.iter().map(|g| g.4).fold(f32::INFINITY, f32::min);
             let bottom = run.iter().map(|g| g.5).fold(f32::NEG_INFINITY, f32::max);
-            out.push((run[0].2, run[n - 1].3, top, bottom));
+            // Hugging only when the neighbour touches the run's glyphs, with no space in between.
+            let before = (lead == 0 && start > 0).then(|| glyphs[start - 1].0);
+            let after = (start + lead + n == i && i < glyphs.len()).then(|| glyphs[i].0);
+            out.push(CodeRun {
+                left: run[0].2,
+                right: run[n - 1].3,
+                top,
+                bottom,
+                tight_left: before.is_some_and(opens),
+                tight_right: after.is_some_and(closes),
+            });
         }
     }
     out
 }
+
+/// How far to move a laid-out row right so a chip that starts it keeps its 4 px pad inside the text column
+/// (its fill starts at the text edge) instead of hanging into the margin.
+pub fn row_inset(glyphs: &[GlyphBox]) -> f32 {
+    match glyphs.first() {
+        Some(&(c, true, left, ..)) if !c.is_whitespace() => (CODE_PAD_X - left).max(0.0),
+        _ => 0.0,
+    }
+}
+
+/// The leading space before span `i`: the chip's pad before inline code and before what follows it, except
+/// where punctuation hugs the code ("(`07-31`)" sets no gap between the paren and the chip).
+pub fn span_lead(s: &[Span], i: usize) -> f32 {
+    let sp = &s[i];
+    let prev = i.checked_sub(1).map(|j| &s[j]);
+    if sp.code {
+        let hugged = prev.is_some_and(|q| !q.code && q.text.chars().last().is_some_and(opens));
+        if hugged { 0.0 } else { CODE_PAD_X }
+    } else if prev.is_some_and(|q| q.code) {
+        if sp.text.chars().next().is_some_and(closes) { 0.0 } else { CODE_PAD_X }
+    } else {
+        0.0
+    }
+}
+
+/// A chip's fill reach past its glyphs on a side that hugs punctuation.
+const CODE_PAD_TIGHT: f32 = 2.0;
 
 fn spans(ui: &mut Ui, s: &[Span], p: &Palette, size: f32, heading: bool, chip: egui::Color32) {
     let s = adf::tidy_code_spans(&adf::linkify(s));
@@ -226,27 +293,23 @@ fn spans(ui: &mut Ui, s: &[Span], p: &Palette, size: f32, heading: bool, chip: e
     // Each char of the job's text, and whether it is inline code.
     let mut chars: Vec<(char, bool)> = Vec::new();
     for (i, sp) in s.iter().enumerate() {
-        // The chip's padding either side of inline code: before it, and before whatever follows it.
-        let after_code = i > 0 && s[i - 1].code;
-        let pad = if sp.code || after_code { CODE_PAD_X } else { 0.0 };
-        job.append(&sp.text, pad, span_format(sp, p, size, heading));
+        job.append(&sp.text, span_lead(&s, i), span_format(sp, p, size, heading));
         chars.extend(sp.text.chars().map(|c| (c, sp.code)));
     }
-    // The chips go under the label: lay the job out as the label will (wrapped at the available width) and
-    // paint a padded fill around each run of code glyphs, row by row.
-    let chips = ui.painter().add(egui::Shape::Noop);
-    let laid = chars.iter().any(|c| c.1).then(|| {
-        let mut j = job.clone();
-        j.wrap.max_width = ui.available_width();
-        ui.fonts_mut(|f| f.layout_job(j))
-    });
     let sense = if has_link { egui::Sense::click() } else { egui::Sense::hover() };
-    let r = ui.add(egui::Label::new(job).wrap().sense(sense));
-    if let Some(g) = laid {
-        let mut shapes = Vec::new();
+    let chips = ui.painter().add(egui::Shape::Noop);
+    let r = if chars.iter().any(|c| c.1) {
+        // Lay the paragraph out ourselves, 8 px narrower so a row moved in by `row_inset` (and a chip's pad at
+        // the row end) still fits; move rows that start with a chip in by its pad; paint a padded fill around
+        // each run of code glyphs, row by row; then show that exact galley.
+        let mut j = job;
+        j.wrap.max_width = (ui.available_width() - 2.0 * CODE_PAD_X).max(1.0);
+        let laid = ui.fonts_mut(|f| f.layout_job(j));
+        let mut g = (*laid).clone();
+        let mut runs: Vec<(f32, CodeRun)> = Vec::new();
         // Glyphs come in text order; a row ending in a newline drops it, so walk the chars alongside.
         let mut at_char = 0;
-        for row in &g.rows {
+        for row in &mut g.rows {
             let boxes: Vec<GlyphBox> = row
                 .row
                 .glyphs
@@ -261,14 +324,30 @@ fn spans(ui: &mut Ui, s: &[Span], p: &Palette, size: f32, heading: bool, chip: e
                     (gl.chr, code, lr.left(), lr.right(), lr.top(), lr.bottom())
                 })
                 .collect();
-            for (l, rt, t, b) in code_runs(&boxes) {
-                let at = r.rect.min + row.pos.to_vec2();
-                let rect = egui::Rect::from_min_max(at + egui::vec2(l, t), at + egui::vec2(rt, b)).expand2(egui::vec2(CODE_PAD_X, CODE_PAD_Y));
-                shapes.push(egui::Shape::rect_filled(rect, 4.0, chip));
+            let shift = row_inset(&boxes);
+            row.pos.x += shift;
+            for run in code_runs(&boxes) {
+                runs.push((row.pos.y, CodeRun { left: run.left + row.pos.x, right: run.right + row.pos.x, ..run }));
             }
         }
+        let widest = g.rows.iter().map(|r| r.pos.x + r.row.size.x).fold(0.0, f32::max);
+        g.rect.max.x = g.rect.max.x.max(g.rect.min.x + widest);
+        g.mesh_bounds.max.x = g.mesh_bounds.max.x.max(g.mesh_bounds.min.x + widest);
+        let r = ui.add(egui::Label::new(std::sync::Arc::new(g)).sense(sense));
+        let shapes = runs
+            .into_iter()
+            .map(|(y, run)| {
+                let pad = |tight: bool| if tight { CODE_PAD_TIGHT } else { CODE_PAD_X };
+                let min = r.rect.min + egui::vec2(run.left - pad(run.tight_left), y + run.top - CODE_PAD_Y);
+                let max = r.rect.min + egui::vec2(run.right + pad(run.tight_right), y + run.bottom + CODE_PAD_Y);
+                egui::Shape::rect_filled(egui::Rect::from_min_max(min, max), 4.0, chip)
+            })
+            .collect();
         ui.painter().set(chips, egui::Shape::Vec(shapes));
-    }
+        r
+    } else {
+        ui.add(egui::Label::new(job).wrap().sense(sense))
+    };
     if has_link {
         r.clone().on_hover_cursor(egui::CursorIcon::PointingHand);
     }
@@ -331,7 +410,8 @@ mod tests {
         let code = span_format(&Span { code: true, ..span("c") }, &p, 14.0, false);
         assert_eq!(code.font_id, theme::mono(14.0 * 0.9), "exactly 0.9 × 14");
         assert_eq!(code.background, Color32::TRANSPARENT, "the chip is painted under the label, not by the section");
-        assert_eq!(span_format(&Span { code: true, ..span("c") }, &p, 14.5, true).font_id, theme::mono(14.5 * 0.9), "the same ratio in a heading");
+        assert_eq!(span_format(&Span { code: true, ..span("c") }, &p, 18.0, true).font_id, theme::mono(14.0 * 0.9), "capped at 0.9 × body in a heading");
+        assert_eq!(code_size(13.0), 13.0 * 0.9, "smaller contexts keep the ratio");
 
         let styled = span_format(&Span { italic: true, strike: true, ..span("s") }, &p, 14.0, false);
         assert!(styled.italics);
@@ -352,9 +432,34 @@ mod tests {
         let g = |c: char, code: bool, x: f32| (c, code, x, x + 5.0, 0.0, 14.0);
         // "a `b c ` d" wrapped so the code run ends in a space on this row.
         let row = [g('a', false, 0.0), g(' ', true, 5.0), g('b', true, 10.0), g(' ', true, 15.0), g('c', true, 20.0), g(' ', true, 25.0), g('d', false, 30.0)];
-        assert_eq!(code_runs(&row), vec![(10.0, 25.0, 0.0, 14.0)]);
+        let r = code_runs(&row);
+        assert_eq!(r.len(), 1);
+        assert_eq!((r[0].left, r[0].right, r[0].top, r[0].bottom), (10.0, 25.0, 0.0, 14.0));
         assert!(code_runs(&[g(' ', true, 0.0)]).is_empty(), "a run of only spaces gets no chip");
         assert_eq!(code_runs(&[g('x', true, 0.0), g('y', false, 5.0), g('z', true, 10.0)]).len(), 2);
+    }
+
+    #[test]
+    fn chips_hug_punctuation() {
+        let g = |c: char, code: bool, x: f32| (c, code, x, x + 5.0, 0.0, 14.0);
+        let row =
+            [g('(', false, 0.0), g('0', true, 5.0), g('7', true, 10.0), g(')', false, 15.0), g(' ', false, 20.0), g('x', true, 25.0), g(' ', false, 30.0)];
+        let r = code_runs(&row);
+        assert!(r[0].tight_left && r[0].tight_right, "( 07 ): both sides hug");
+        assert!(!r[1].tight_left && !r[1].tight_right, "spaces either side");
+        let s = |text: &str, code: bool| Span { code, ..span(text) };
+        let para = [s("(", false), s("07-31", true), s(") then ", false), s("x", true), s(" y", false)];
+        assert_eq!([span_lead(&para, 1), span_lead(&para, 2), span_lead(&para, 3), span_lead(&para, 4)], [0.0, 0.0, CODE_PAD_X, CODE_PAD_X]);
+        assert_eq!(span_lead(&para, 0), 0.0);
+    }
+
+    #[test]
+    fn a_chip_starting_a_row_keeps_its_pad_inside_the_column() {
+        let g = |c: char, code: bool, x: f32| (c, code, x, x + 5.0, 0.0, 14.0);
+        assert_eq!(row_inset(&[g('m', true, 0.0), g('o', true, 5.0)]), CODE_PAD_X, "a wrapped row starting in code moves in 4");
+        assert_eq!(row_inset(&[g('m', true, CODE_PAD_X)]), 0.0, "the paragraph's own leading pad already insets it");
+        assert_eq!(row_inset(&[g('a', false, 0.0), g('m', true, 9.0)]), 0.0);
+        assert_eq!(row_inset(&[]), 0.0);
     }
 
     #[test]

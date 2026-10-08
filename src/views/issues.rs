@@ -230,7 +230,7 @@ pub fn show(app: &mut App, ui: &mut Ui) {
             list(app, ui, p);
         });
     let detail = egui::CentralPanel::default()
-        .frame(Frame::new().fill(p.surface).inner_margin(Margin { left: 24, right: 16, top: 16, bottom: 0 }))
+        .frame(Frame::new().fill(p.surface).inner_margin(Margin { left: 16, right: 16, top: 16, bottom: 0 }))
         .show(ui, |ui| super::detail::show(app, ui));
     let r = detail.response.rect;
     app.detail_x = Some((r.left(), r.right()));
@@ -254,9 +254,9 @@ fn text_focus(ui: &Ui, app: &App) -> crate::keys::Focus {
 
 /// Below this window width the list pane takes a 45% share, held back so the description keeps 400 px.
 const NARROW: f32 = 1200.0;
-/// What the detail pane needs beside the list below NARROW: its 24 + 16 margins, a 400 px description
+/// What the detail pane needs beside the list below NARROW: its 16 + 16 margins, a 400 px description
 /// column, the 16 px gutter and the 140 px fields column (`detail::detail_columns`).
-const NARROW_DETAIL_MIN: f32 = 40.0 + 400.0 + 16.0 + 140.0;
+const NARROW_DETAIL_MIN: f32 = 32.0 + 400.0 + 16.0 + 140.0;
 
 /// The list pane's default width and the range it may be dragged in: 42% of the window (360–720) when
 /// wide; below NARROW 45% of the window, but never so wide that the description column drops under 400.
@@ -1205,7 +1205,7 @@ mod tests {
 
     #[test]
     fn narrow_windows_share_the_list_pane() {
-        assert_eq!(list_pane_width(1000.0), (404.0, 320.0..=404.0), "45% held back so the description keeps 400");
+        assert_eq!(list_pane_width(1000.0), (412.0, 320.0..=412.0), "45% held back so the description keeps 400");
         assert_eq!(list_pane_width(1199.0).0, (1199.0f32 * 0.45).floor());
         assert!(list_pane_width(700.0).0 >= 320.0);
         let (w, r) = list_pane_width(1440.0);
