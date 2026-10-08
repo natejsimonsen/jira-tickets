@@ -150,9 +150,8 @@ pub fn show(app: &mut App, ui: &mut Ui) {
         .show(ui, |ui| {
             ui.horizontal_centered(|ui| {
                 let edit = app.picker.as_ref().map(|pk| matches!(pk, crate::app::Picker::Edit { .. }));
-                let search_focused = ui.memory(|m| m.has_focus(egui::Id::new("issue-search")));
-                let c =
-                    crate::keys::hint_context(app.help_open, app.goto.is_some(), edit, app.selected.is_some(), ui.ctx().text_edit_focused(), search_focused);
+                let focus = text_focus(ui, app);
+                let c = crate::keys::hint_context(app.help_open, app.goto.is_some(), edit, app.selected.is_some(), focus);
                 hint_bar(ui, crate::keys::hints(c), p);
             });
         });
@@ -174,6 +173,21 @@ pub fn show(app: &mut App, ui: &mut Ui) {
     let r = detail.response.rect;
     app.detail_x = Some((r.left(), r.right()));
     goto_box(app, ui.ctx(), p);
+}
+
+/// Which text field holds the keyboard, for the hint bar.
+fn text_focus(ui: &Ui, app: &App) -> crate::keys::Focus {
+    use crate::keys::Focus;
+    let has = |id: egui::Id| ui.memory(|m| m.has_focus(id));
+    if has(egui::Id::new("issue-search")) {
+        Focus::Search
+    } else if app.selected.as_deref().is_some_and(|k| has(super::detail::composer_id(k))) {
+        Focus::Composer
+    } else if ui.ctx().text_edit_focused() {
+        Focus::OtherText
+    } else {
+        Focus::None
+    }
 }
 
 /// Below this window width the list pane is fixed near 370 px and the detail pane gets the rest.

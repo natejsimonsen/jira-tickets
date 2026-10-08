@@ -132,16 +132,21 @@ fn section_heading(ui: &mut Ui, p: &Palette, text: &str) {
     ui.add_space(8.0);
 }
 
+/// The composer's text field id for an issue.
+pub fn composer_id(key: &str) -> egui::Id {
+    egui::Id::new(("composer", key))
+}
+
 /// Always-visible comment box (border, accent when focused) with the Comment button right-aligned under it.
 fn composer(app: &mut App, ui: &mut Ui, p: &Palette, key: &str) {
-    let id = egui::Id::new(("composer", key));
+    let id = composer_id(key);
     let focused = ui.memory(|m| m.has_focus(id));
     let draft = app.drafts.entry(key.to_string()).or_default();
     let resp = Frame::new()
         .fill(p.surface)
         .stroke(Stroke::new(1.0, if focused { p.accent } else { p.border }))
         .corner_radius(6)
-        .inner_margin(Margin::same(8))
+        .inner_margin(Margin::symmetric(12, 8))
         .show(ui, |ui| {
             ui.add_sized(
                 [ui.available_width(), COMPOSER_H - 16.0],
@@ -156,10 +161,13 @@ fn composer(app: &mut App, ui: &mut Ui, p: &Palette, key: &str) {
     // Clicking the frame's padding focuses the box too.
     let enabled = comment_enabled(draft, &app.posting);
     let post = resp.has_focus() && ui.input_mut(|i| i.consume_shortcut(&egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::Enter)));
-    ui.add_space(8.0);
+    // 12 px box → button, counting the layout's own item spacing.
+    ui.add_space(BOX_TO_BUTTON - ui.spacing().item_spacing.y);
+    let read_only = crate::jira::READ_ONLY.load(std::sync::atomic::Ordering::Relaxed);
     ui.allocate_ui_with_layout(vec2(ui.available_width(), crate::views::BUTTON_H), egui::Layout::right_to_left(egui::Align::Center), |ui| {
         ui.spacing_mut().item_spacing.x = 8.0;
-        if ui.add(primary_button_if("Comment", enabled, p)).on_hover_text("Post the comment (⌘Enter)").clicked() || (post && enabled) {
+        let tip = if read_only { "Writes are blocked (JIRA_TICKETS_READONLY)" } else { "Post the comment (⌘Enter)" };
+        if ui.add(primary_button_if("Comment", comment_primary(enabled, read_only), p)).on_hover_text(tip).clicked() || (post && enabled) {
             app.actions.push(Action::Comment);
         }
         if app.posting.is_some() {
@@ -191,6 +199,15 @@ pub fn detail_columns(window_w: f32, available: f32) -> (f32, f32) {
     (main, (available - main - FIELDS_GUTTER).max(fields_min))
 }
 
+/// Composer box → Comment button.
+const BOX_TO_BUTTON: f32 = 12.0;
+
+/// The Comment button is the accent primary only when a post would be sent: never in read-only mode
+/// (⌘Enter still posts there, and the refusal toast explains).
+pub fn comment_primary(enabled: bool, read_only: bool) -> bool {
+    enabled && !read_only
+}
+
 /// The Comment button and ⌘Enter work when the draft has text and no post is in flight.
 pub fn comment_enabled(draft: &str, posting: &Option<String>) -> bool {
     !draft.trim().is_empty() && posting.is_none()
@@ -214,6 +231,13 @@ mod tests {
         assert_eq!(detail_columns(1000.0, 580.0), (424.0, 140.0));
         assert_eq!(detail_columns(1000.0, 300.0).0, 300.0, "floor");
         assert_eq!(detail_columns(2560.0, 1800.0).0, MAIN_MAX);
+    }
+
+    #[test]
+    fn read_only_keeps_the_comment_button_quiet() {
+        assert!(comment_primary(true, false));
+        assert!(!comment_primary(true, true));
+        assert!(!comment_primary(false, false));
     }
 
     #[test]
