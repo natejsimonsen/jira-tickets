@@ -87,6 +87,7 @@ pub enum Action {
     ApplyTeamLabel,
     SetQuick(Option<usize>),
     ToggleMine,
+    ToggleRoadmap,
     RunSearch(String),
     ToggleGoTo,
     GoTo,
@@ -715,6 +716,10 @@ impl App {
                 self.filter.mine = !self.filter.mine;
                 self.cursor = 0;
             }
+            Action::ToggleRoadmap => {
+                self.filter.roadmap = !self.filter.roadmap;
+                self.cursor = 0;
+            }
             Action::RunSearch(jql) => {
                 self.cursor = 0;
                 self.search_seq += 1;
@@ -1000,6 +1005,7 @@ impl App {
             (Key::S, Action::OpenSprint),
             (Key::E, Action::OpenEdit),
             (Key::L, Action::ApplyTeamLabel),
+            (Key::M, Action::ToggleRoadmap),
         ] {
             if shortcut(Modifiers::NONE, k) {
                 self.actions.push(a);

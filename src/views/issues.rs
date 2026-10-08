@@ -7,11 +7,23 @@ use crate::store::ListId;
 use crate::theme::{self, Palette};
 use crate::views::{button, pill};
 use egui::{CornerRadius, Frame, Margin, Rect, RichText, Sense, Stroke, Ui, vec2};
+use std::collections::BTreeSet;
+
+/// Keys of the loaded epics labelled as roadmap initiatives (cheap: a few dozen epics).
+pub fn roadmap_epics(app: &App) -> BTreeSet<String> {
+    filter::roadmap_epic_keys(&app.store.list(ListId::Epics), &app.cfg.roadmap.initiative_label)
+}
 
 pub fn current_rows(app: &App) -> Vec<&Issue> {
     let src = if app.search_active { ListId::Search } else { ListId::TeamOpen };
-    let all = app.store.list(src);
-    filter::visible(&all, &app.filter, app.search_active, app.me.as_ref().map(|m| m.display_name.as_str()))
+    let all = filter::action_items(&app.store.list(src));
+    let me = app.me.as_ref().map(|m| m.display_name.as_str());
+    if app.filter.roadmap {
+        let f = filter::IssueFilter { roadmap_epics: roadmap_epics(app), ..app.filter.clone() };
+        filter::visible(&all, &f, app.search_active, me)
+    } else {
+        filter::visible(&all, &app.filter, app.search_active, me)
+    }
 }
 
 /// The row's leading pills: under All teams, its team labels in a neutral pill;
@@ -97,14 +109,15 @@ fn filters(app: &mut App, ui: &mut Ui, p: &Palette) {
             .collect();
         epics.sort();
         epics.dedup();
-        let label =
-            app.filter.epic.as_ref().and_then(|k| epics.iter().find(|(key, _)| key == k)).map(|(k, s)| format!("{k} · {s}")).unwrap_or("All epics".into());
+        let on_roadmap = roadmap_epics(app);
+        let entry = |k: &str, s: &str| if on_roadmap.contains(k) { format!("{k} · {s} · roadmap") } else { format!("{k} · {s}") };
+        let label = app.filter.epic.as_ref().and_then(|k| epics.iter().find(|(key, _)| key == k)).map(|(k, s)| entry(k, s)).unwrap_or("All epics".into());
         egui::ComboBox::from_id_salt("epic").selected_text(label).width(220.0).show_ui(ui, |ui| {
             if ui.selectable_label(app.filter.epic.is_none(), "All epics").clicked() {
                 app.actions.push(Action::SetEpic(None));
             }
             for (k, s) in &epics {
-                if ui.selectable_label(app.filter.epic.as_deref() == Some(k), format!("{k} · {s}")).clicked() {
+                if ui.selectable_label(app.filter.epic.as_deref() == Some(k), entry(k, s)).clicked() {
                     app.actions.push(Action::SetEpic(Some(k.clone())));
                 }
             }
@@ -128,6 +141,9 @@ fn filters(app: &mut App, ui: &mut Ui, p: &Palette) {
         }
         if ui.add(button("Mine", p).fill(if app.filter.mine { p.selected_row } else { p.surface_2 })).clicked() {
             app.actions.push(Action::ToggleMine);
+        }
+        if ui.add(button("Roadmap", p).fill(if app.filter.roadmap { p.selected_row } else { p.surface_2 })).clicked() {
+            app.actions.push(Action::ToggleRoadmap);
         }
     });
     ui.add_space(6.0);

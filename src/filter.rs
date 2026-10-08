@@ -2,7 +2,7 @@
 
 use crate::config::TeamEntry;
 use crate::jira::{Issue, Sprint};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// Which sub-team the Issues list is scoped to.
 #[derive(Clone, Debug, PartialEq, Default)]
@@ -36,6 +36,20 @@ pub struct IssueFilter {
     pub team_labels: Vec<String>,
     /// Team label → member display names or account ids, from config at startup.
     pub team_members: BTreeMap<String, Vec<String>>,
+    /// Show only issues under a roadmap epic.
+    pub roadmap: bool,
+    /// Keys of the loaded epics carrying the roadmap initiative label (computed per frame).
+    pub roadmap_epics: BTreeSet<String>,
+}
+
+/// Issues that are action items: epics are containers and never listed.
+pub fn action_items<'a>(issues: &[&'a Issue]) -> Vec<&'a Issue> {
+    issues.iter().copied().filter(|i| !i.issue_type.eq_ignore_ascii_case("epic")).collect()
+}
+
+/// Keys of the epics that carry `label` (exact, like team labels).
+pub fn roadmap_epic_keys(epics: &[&Issue], label: &str) -> BTreeSet<String> {
+    epics.iter().filter(|e| e.labels.iter().any(|l| l == label)).map(|e| e.key.clone()).collect()
 }
 
 /// The issue's assignee is one of `members`, by display name or account id, case-insensitively.
@@ -92,6 +106,7 @@ pub fn visible<'a>(issues: &[&'a Issue], f: &IssueFilter, searched: bool, me: Op
             SprintScope::Backlog => i.sprint.is_none(),
             SprintScope::Named(n) => i.sprint.as_deref() == Some(n.as_str()),
         })
+        .filter(|i| !f.roadmap || i.parent_key.as_ref().is_some_and(|k| f.roadmap_epics.contains(k)))
         .filter(|i| !f.mine || i.assignee.as_ref().map(|a| a.display_name.as_str()) == me)
         .filter(|i| {
             needle.is_empty()
@@ -215,6 +230,32 @@ mod tests {
         f.mine = false;
         f.text = "INFRA".into();
         assert_eq!(visible(&all, &f, false, None)[0].key, "CI-2");
+    }
+
+    #[test]
+    fn epics_are_not_action_items() {
+        let mut e = issue("CI-10", "An epic", None, None, &[]);
+        e.issue_type = "epic".into();
+        let mut s = issue("CI-11", "A story", Some("CI-10"), None, &[]);
+        s.issue_type = "Story".into();
+        let keys: Vec<_> = action_items(&[&e, &s]).iter().map(|i| i.key.clone()).collect();
+        assert_eq!(keys, ["CI-11"]);
+    }
+
+    #[test]
+    fn roadmap_epics_by_label_and_filter() {
+        let e1 = issue("E-1", "on roadmap", None, None, &["roadmap", "PLAT"]);
+        let e2 = issue("E-2", "not", None, None, &["PLAT", "Roadmap"]);
+        let keys = roadmap_epic_keys(&[&e1, &e2], "roadmap");
+        assert_eq!(keys.iter().map(String::as_str).collect::<Vec<_>>(), ["E-1"], "label is exact");
+        let a = issue("CI-1", "a", Some("E-1"), None, &[]);
+        let b = issue("CI-2", "b", Some("E-2"), None, &[]);
+        let c = issue("CI-3", "c", None, None, &[]);
+        let all = vec![&a, &b, &c];
+        let mut f = IssueFilter { roadmap_epics: keys, ..Default::default() };
+        assert_eq!(visible(&all, &f, false, None).len(), 3);
+        f.roadmap = true;
+        assert_eq!(visible(&all, &f, false, None).iter().map(|i| i.key.as_str()).collect::<Vec<_>>(), ["CI-1"]);
     }
 
     fn team_filter() -> IssueFilter {

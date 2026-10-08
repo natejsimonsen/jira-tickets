@@ -168,7 +168,7 @@ pub fn quick_scope_jql(scope: &TeamScope, cfg: &Config, include_members: bool) -
 
 pub fn jql_epics(cfg: &Config, parent_keys: &[String]) -> String {
     let labels: Vec<String> = cfg.roadmap.lanes.keys().map(|l| jql_quote(l)).collect();
-    let mut clauses = vec![format!("labels in ({})", labels.join(", "))];
+    let mut clauses = vec![format!("labels in ({})", labels.join(", ")), format!("labels = {}", jql_quote(&cfg.roadmap.initiative_label))];
     if !parent_keys.is_empty() {
         clauses.push(format!("key in ({})", parent_keys.join(", ")));
     }
@@ -218,9 +218,9 @@ mod tests {
         );
         assert_eq!(
             jql_epics(&c, &["CI-1".into(), "CI-2".into()]),
-            r#"project = "CI" AND issuetype = Epic AND (labels in ("PLAT") OR key in (CI-1, CI-2)) ORDER BY Rank ASC"#
+            r#"project = "CI" AND issuetype = Epic AND (labels in ("PLAT") OR labels = "roadmap" OR key in (CI-1, CI-2)) ORDER BY Rank ASC"#
         );
-        assert_eq!(jql_epics(&c, &[]), r#"project = "CI" AND issuetype = Epic AND (labels in ("PLAT")) ORDER BY Rank ASC"#);
+        assert_eq!(jql_epics(&c, &[]), r#"project = "CI" AND issuetype = Epic AND (labels in ("PLAT") OR labels = "roadmap") ORDER BY Rank ASC"#);
         assert_eq!(
             jql_team_in_progress(&c, true).as_deref(),
             Some(r#"project in ("CI", "OPS") AND assignee in ("Ada Lovelace", "Shawn Sorichetti") AND statusCategory = "In Progress" ORDER BY updated DESC"#)
@@ -297,7 +297,7 @@ mod tests {
         c.roadmap.epics = vec!["CI-9".into()];
         assert_eq!(
             jql_epics(&c, &["CI-1".into()]),
-            r#"project = "CI" AND issuetype = Epic AND (labels in ("PLAT") OR key in (CI-1) OR key in (CI-9)) ORDER BY Rank ASC"#
+            r#"project = "CI" AND issuetype = Epic AND (labels in ("PLAT") OR labels = "roadmap" OR key in (CI-1) OR key in (CI-9)) ORDER BY Rank ASC"#
         );
     }
 

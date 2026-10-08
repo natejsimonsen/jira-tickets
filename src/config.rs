@@ -96,6 +96,8 @@ pub struct Roadmap {
     pub confidence_field: Option<String>,
     pub next_milestone_field: Option<String>,
     pub definition_of_done_field: Option<String>,
+    /// Epics with this label are roadmap initiatives.
+    pub initiative_label: String,
 }
 
 fn s(v: &str) -> String {
@@ -197,6 +199,7 @@ impl Default for Roadmap {
             confidence_field: None,
             next_milestone_field: None,
             definition_of_done_field: None,
+            initiative_label: s("roadmap"),
         }
     }
 }
@@ -372,6 +375,7 @@ jql = 'statusCategory = "To Do"'
 [roadmap]
 # epics = ["CI-1860"]            # optional allowlist
 lanes = { PLAT = "Platform" }
+initiative_label = "roadmap"     # epics with this label are roadmap initiatives
 horizon_by_status = { "In Progress" = "now", "Ready for Work" = "next", "Planning" = "next", "New" = "later", "Backlog" = "later" }
 # health_field = "customfield_XXXXX"
 # target_field = "customfield_XXXXX"   # default: duedate
@@ -405,6 +409,7 @@ email = "me@example.com"
         assert_eq!(c.issues.columns, vec!["status", "labels", "parent.summary", "assignee"]);
         assert_eq!(c.roadmap.lanes.get("PLAT").map(String::as_str), Some("Platform"));
         assert_eq!(c.roadmap.horizon_by_status.get("In Progress").map(String::as_str), Some("now"));
+        assert_eq!(c.roadmap.initiative_label, "roadmap");
         assert!(c.validate().is_ok());
     }
 

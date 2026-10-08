@@ -44,6 +44,7 @@ pub const BINDINGS: &[KeyBinding] = &[
     b(Group::Issues, "s", "Sprint"),
     b(Group::Issues, "e", "Edit labels, priority, points"),
     b(Group::Issues, "l", "Add the picked team's label"),
+    b(Group::Issues, "m", "Toggle Roadmap filter"),
     b(Group::Issues, "J, K", "Move down (J) or up (K) in rank"),
     b(Group::Issues, "c", "Copy the issue link"),
     b(Group::Issues, "⌘O", "Open in Jira"),
