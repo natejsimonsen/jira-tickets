@@ -70,7 +70,8 @@ pub fn text_button(ui: &mut Ui, text: &str, tip: &str, p: &Palette) -> Response 
 pub fn spinner_button(ui: &mut Ui, p: &Palette) -> Response {
     let (rect, resp) = ui.allocate_exact_size(Vec2::splat(BUTTON), Sense::hover());
     let glyph = button_frame(ui, rect, false, p);
-    paint_spinner(ui, glyph, p.muted);
+    // `text`, like the idle sync glyph it replaces.
+    paint_spinner(ui, glyph, p.text);
     resp
 }
 

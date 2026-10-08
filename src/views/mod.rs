@@ -39,9 +39,25 @@ fn placeholder(ui: &mut Ui, p: &Palette, tab: &str) {
 /// The tabs, in ⌘1–⌘4 order.
 const TABS: [(Screen, &str); 4] = [(Screen::Issues, "Issues"), (Screen::Grooming, "Grooming"), (Screen::Team, "Team"), (Screen::Roadmap, "Roadmap")];
 
-/// Each tab is as wide as its bold (active) label, so switching tabs never moves its neighbours.
-pub fn tab_width(bold_w: f32, regular_w: f32) -> f32 {
-    bold_w.max(regular_w).ceil()
+/// Every tab label is regular 14 (the underline marks the active one), so a tab's slot is its label's width
+/// whatever its state and switching tabs never moves anything.
+pub fn tab_width(label_w: f32) -> f32 {
+    label_w.ceil()
+}
+
+/// Gap from the title to the first tab and between tabs.
+const TAB_GAP: f32 = 24.0;
+/// Gap between the signed-in name and "Read-only".
+const NAME_GAP: f32 = 16.0;
+
+/// The y of a galley's first baseline, from its top.
+fn baseline(g: &egui::Galley) -> f32 {
+    g.rows.first().map_or(0.0, |r| r.pos.y + r.row.glyphs.first().map_or(0.0, |gl| gl.pos.y))
+}
+
+/// The top at which to paint a galley so its baseline lands on `line_baseline`.
+pub fn top_for_baseline(line_baseline: f32, galley_baseline: f32) -> f32 {
+    line_baseline - galley_baseline
 }
 
 /// The header spinner is for syncing the refresh lists; a search shows its own spinner in the count row.
@@ -52,17 +68,15 @@ pub fn header_syncing<'a>(lists: impl IntoIterator<Item = (&'a crate::store::Lis
 fn header(app: &mut App, ui: &mut Ui, p: &Palette) {
     let panel = egui::Panel::top("header").exact_size(48.0).frame(Frame::new().fill(p.surface).inner_margin(Margin::symmetric(16, 0))).show(ui, |ui| {
         ui.horizontal_centered(|ui| {
+            ui.spacing_mut().item_spacing.x = TAB_GAP;
             ui.label(RichText::new("Jira Tickets").font(theme::bold(15.0)).color(p.text));
-            ui.add_space(16.0);
-            ui.spacing_mut().item_spacing.x = 16.0;
             for (i, (s, name)) in TABS.into_iter().enumerate() {
                 let active = app.screen == s;
-                let bold = ui.painter().layout_no_wrap(name.to_string(), theme::bold(14.0), p.text);
-                let regular = ui.painter().layout_no_wrap(name.to_string(), theme::body(14.0), p.muted);
-                let w = tab_width(bold.size().x, regular.size().x);
+                let galley = ui.painter().layout_no_wrap(name.to_string(), theme::body(14.0), if active { p.text } else { p.muted });
+                let w = tab_width(galley.size().x);
                 let (rect, r) = ui.allocate_exact_size(vec2(w, 32.0), Sense::click());
-                let galley = if active { bold } else { regular };
-                let pos = rect.center() - galley.size() / 2.0;
+                // Left-aligned in its slot, so every gap is exactly TAB_GAP.
+                let pos = egui::pos2(rect.left(), (rect.center().y - galley.size().y / 2.0).round());
                 ui.painter().galley(pos, galley, p.text);
                 if active {
                     ui.painter().hline(rect.x_range(), rect.bottom() + 7.0, Stroke::new(2.0, p.accent));
@@ -74,18 +88,34 @@ fn header(app: &mut App, ui: &mut Ui, p: &Palette) {
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.spacing_mut().item_spacing.x = 8.0;
-                // Right to left: "Read-only" sits after (right of) the signed-in name.
-                if crate::jira::READ_ONLY.load(std::sync::atomic::Ordering::Relaxed) {
-                    ui.add(egui::Label::new(RichText::new("Read-only").color(p.muted).size(12.0)).selectable(false))
-                        .on_hover_text("Writes are blocked (JIRA_TICKETS_READONLY)");
-                }
-                if let Some(me) = &app.me {
-                    let r = ui.add(egui::Label::new(RichText::new(&me.display_name).color(p.muted).size(14.0)).selectable(false).sense(Sense::click()));
-                    r.on_hover_text("Right-click to sign out").context_menu(|ui| {
-                        if ui.button("Sign out").clicked() {
-                            app.actions.push(Action::SignOut);
-                        }
-                    });
+                // The name (14, text) and "Read-only" (12, muted) share one baseline, 16 apart.
+                let read_only = crate::jira::READ_ONLY.load(std::sync::atomic::Ordering::Relaxed);
+                let name = app.me.as_ref().map(|me| ui.painter().layout_no_wrap(me.display_name.clone(), theme::body(14.0), p.text));
+                let ro = read_only.then(|| ui.painter().layout_no_wrap("Read-only".into(), theme::body(12.0), p.muted));
+                if name.is_some() || ro.is_some() {
+                    let name_w = name.as_ref().map_or(0.0, |g| g.size().x);
+                    let ro_w = ro.as_ref().map_or(0.0, |g| g.size().x + if name.is_some() { NAME_GAP } else { 0.0 });
+                    let (rect, _) = ui.allocate_exact_size(vec2((name_w + ro_w).ceil(), 32.0), Sense::hover());
+                    let name_h = name.as_ref().map_or(0.0, |g| g.size().y);
+                    let name_base = name.as_ref().map_or(0.0, |g| baseline(g));
+                    let line = (rect.center().y - name_h / 2.0).round() + name_base;
+                    if let Some(g) = name {
+                        let top = top_for_baseline(line, baseline(&g));
+                        let r = egui::Rect::from_min_size(egui::pos2(rect.left(), top), g.size());
+                        ui.painter().galley(r.min, g, p.text);
+                        let resp = ui.interact(r, egui::Id::new("header-name"), Sense::click());
+                        resp.on_hover_text("Right-click to sign out").context_menu(|ui| {
+                            if ui.button("Sign out").clicked() {
+                                app.actions.push(Action::SignOut);
+                            }
+                        });
+                    }
+                    if let Some(g) = ro {
+                        let top = if name_w > 0.0 { top_for_baseline(line, baseline(&g)) } else { (rect.center().y - g.size().y / 2.0).round() };
+                        let r = egui::Rect::from_min_size(egui::pos2(rect.right() - g.size().x, top), g.size());
+                        ui.painter().galley(r.min, g, p.muted);
+                        ui.interact(r, egui::Id::new("header-read-only"), Sense::hover()).on_hover_text("Writes are blocked (JIRA_TICKETS_READONLY)");
+                    }
                 }
                 // One fixed 32×32 slot: the spinner replaces the button at the same size.
                 if header_syncing(&app.lists) {
@@ -479,9 +509,15 @@ mod widget_tests {
     }
 
     #[test]
-    fn tabs_reserve_their_bold_width() {
-        assert_eq!(tab_width(52.3, 48.0), 53.0);
-        assert_eq!(tab_width(40.0, 41.0), 41.0, "never narrower than either face");
+    fn tabs_take_their_label_width() {
+        assert_eq!(tab_width(52.3), 53.0);
+        assert_eq!(tab_width(41.0), 41.0);
+    }
+
+    #[test]
+    fn small_label_sits_on_the_names_baseline() {
+        // A 14 px name with its baseline 13 down, drawn at top 10: a 12 px label (baseline 11 down) goes at 12.
+        assert_eq!(top_for_baseline(10.0 + 13.0, 11.0), 12.0);
     }
 
     #[test]
