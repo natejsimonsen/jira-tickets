@@ -237,10 +237,10 @@ const CHEVRON_W: f32 = 14.0;
 /// text at that width), plus 2 px so rounding never cuts the last glyph.
 const COMBO_CHROME: f32 = 2.0 * INNER_X + CHEVRON_GAP + CHEVRON_W + 2.0;
 
-/// Narrowest the epic combo gets before the team combo gives way (about "All epics" and its chevron).
-const EPIC_MIN: f32 = 88.0;
-/// Narrowest the team combo is cut to when even its short labels do not fit.
-const TEAM_MIN: f32 = 64.0;
+/// Narrowest the epic combo gets before the team combo gives way: "All epics" whole with the combo chrome.
+const EPIC_MIN: f32 = 108.0;
+/// Narrowest the team combo is cut to when even its short labels do not fit: "PLAT" whole with the chrome.
+const TEAM_MIN: f32 = 72.0;
 /// Sizes the sprint combo before the board's sprints load, so its width does not change when they land.
 const SPRINT_SAMPLE: &str = "Sprint 0 (active)";
 
@@ -912,17 +912,17 @@ mod tests {
         let (w, _) = combo_widths(187.0, 124.0, 140.0, 900.0, 572.0);
         assert!(fill(w, 572.0), "{w:?}");
         // Narrower: epic shrinks to its minimum before team goes short.
-        let (w, short) = combo_widths(187.0, 124.0, 140.0, 300.0, 431.0);
+        let (w, short) = combo_widths(187.0, 124.0, 140.0, 300.0, 451.0);
         assert_eq!((w[0], w[1], short), (187.0, 140.0, false));
-        assert!(w[2] >= EPIC_MIN && fill(w, 431.0), "{w:?}");
+        assert!(w[2] >= EPIC_MIN && fill(w, 451.0), "{w:?}");
         // Then team takes its short labels.
         let (w, short) = combo_widths(187.0, 124.0, 140.0, 300.0, 400.0);
         assert_eq!((w[0], w[1], short), (124.0, 140.0, true));
-        // 1000 px window (338 px row): sprint whole, epic at its minimum, team cut to what is left.
+        // A narrow row (338 px): sprint whole, epic at its minimum, team cut to what is left.
         let (w, short) = combo_widths(187.0, 124.0, 140.0, 300.0, 338.0);
         assert_eq!((w[1], w[2], short), (140.0, EPIC_MIN, true));
         assert!(fill(w, 338.0), "{w:?}");
-        assert_eq!(w[0], 94.0);
+        assert_eq!(w[0], 74.0);
         // A short epic list never takes more than its widest option.
         assert_eq!(combo_widths(187.0, 124.0, 140.0, 80.0, 572.0).0[2], 80.0);
     }
