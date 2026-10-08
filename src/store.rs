@@ -112,9 +112,13 @@ fn team_clause(labels: &[String], members: &[String]) -> String {
     format!("({labels} OR assignee in ({}))", members.join(", "))
 }
 
-/// Every team's members, de-duplicated, in team order (own team falls back to `[team].members`).
-fn all_members(cfg: &Config) -> Vec<String> {
+/// Every team's members, de-duplicated, in team order (own team falls back to
+/// `[team].members`); none when `include` is false (a member did not resolve).
+fn all_members(cfg: &Config, include: bool) -> Vec<String> {
     let mut members: Vec<String> = Vec::new();
+    if !include {
+        return members;
+    }
     for l in cfg.scope.team_labels() {
         for m in cfg.scope.members_of(&l, &cfg.team.members) {
             if !members.contains(&m) {
@@ -126,18 +130,20 @@ fn all_members(cfg: &Config) -> Vec<String> {
 }
 
 /// Every configured team's open work: tickets carrying a team label, or
-/// assigned to any team's members.
-pub fn jql_team_open(cfg: &Config) -> String {
-    let team = team_clause(&cfg.scope.team_labels(), &all_members(cfg));
+/// assigned to any team's members. `include_members: false` drops the assignee
+/// group (labels only), for when Jira rejects a configured member.
+pub fn jql_team_open(cfg: &Config, include_members: bool) -> String {
+    let team = team_clause(&cfg.scope.team_labels(), &all_members(cfg, include_members));
     format!("project = {} AND {team} AND statusCategory != Done ORDER BY Rank ASC", jql_quote(&cfg.scope.project))
 }
 
 /// Tickets no team claims: without any team label, and not assigned to any
-/// team's member (the assignee group is left out when no members are configured).
-pub fn jql_no_team(cfg: &Config) -> String {
+/// team's member (the assignee group is left out when no members are configured
+/// or `include_members` is false).
+pub fn jql_no_team(cfg: &Config, include_members: bool) -> String {
     let labels: Vec<String> = cfg.scope.team_labels().iter().map(|l| jql_quote(l)).collect();
     let labels = format!("(labels is EMPTY OR labels not in ({}))", labels.join(", "));
-    let members: Vec<String> = all_members(cfg).iter().map(|m| jql_quote(m)).collect();
+    let members: Vec<String> = all_members(cfg, include_members).iter().map(|m| jql_quote(m)).collect();
     if members.is_empty() {
         return labels;
     }
@@ -146,15 +152,17 @@ pub fn jql_no_team(cfg: &Config) -> String {
 
 /// The team clause a quick filter is ANDed with: the picked team's label or
 /// members, every team's under All teams, and no team's under No team label.
-pub fn quick_scope_jql(scope: &TeamScope, cfg: &Config) -> String {
+/// `include_members: false` leaves out every member (labels only).
+pub fn quick_scope_jql(scope: &TeamScope, cfg: &Config, include_members: bool) -> String {
     match scope {
         TeamScope::Label(l) => {
             let label = format!("labels = {}", jql_quote(l));
-            let members: Vec<String> = cfg.scope.members_of(l, &cfg.team.members).iter().map(|m| jql_quote(m)).collect();
+            let members: Vec<String> =
+                if include_members { cfg.scope.members_of(l, &cfg.team.members).iter().map(|m| jql_quote(m)).collect() } else { Vec::new() };
             if members.is_empty() { label } else { format!("({label} OR assignee in ({}))", members.join(", ")) }
         }
-        TeamScope::All => team_clause(&cfg.scope.team_labels(), &all_members(cfg)),
-        TeamScope::None => jql_no_team(cfg),
+        TeamScope::All => team_clause(&cfg.scope.team_labels(), &all_members(cfg, include_members)),
+        TeamScope::None => jql_no_team(cfg, include_members),
     }
 }
 
@@ -199,7 +207,7 @@ mod tests {
     fn jql_builders() {
         let c = cfg();
         assert_eq!(
-            jql_team_open(&c),
+            jql_team_open(&c, true),
             r#"project = "CI" AND (labels in ("PLAT", "TOOLS") OR assignee in ("Ada Lovelace", "Shawn Sorichetti")) AND statusCategory != Done ORDER BY Rank ASC"#
         );
         assert_eq!(
@@ -219,30 +227,30 @@ mod tests {
         let mut c = cfg();
         c.scope.teams[1].members = vec!["acct-1".into(), "Ada Lovelace".into()];
         assert_eq!(
-            jql_team_open(&c),
+            jql_team_open(&c, true),
             r#"project = "CI" AND (labels in ("PLAT", "TOOLS") OR assignee in ("Ada Lovelace", "Shawn Sorichetti", "acct-1")) AND statusCategory != Done ORDER BY Rank ASC"#
         );
         c.scope.teams.truncate(1);
         c.team.members.clear();
-        assert_eq!(jql_team_open(&c), r#"project = "CI" AND labels in ("PLAT") AND statusCategory != Done ORDER BY Rank ASC"#);
+        assert_eq!(jql_team_open(&c, true), r#"project = "CI" AND labels in ("PLAT") AND statusCategory != Done ORDER BY Rank ASC"#);
         c.scope.teams.clear();
         c.team.members = vec!["Ann".into()];
-        assert_eq!(jql_team_open(&c), r#"project = "CI" AND (labels in ("PLAT") OR assignee in ("Ann")) AND statusCategory != Done ORDER BY Rank ASC"#);
+        assert_eq!(jql_team_open(&c, true), r#"project = "CI" AND (labels in ("PLAT") OR assignee in ("Ann")) AND statusCategory != Done ORDER BY Rank ASC"#);
     }
 
     #[test]
     fn quick_filters_follow_the_team_scope() {
         let mut c = cfg();
         c.scope.teams[1].members = vec!["acct-1".into()];
-        assert_eq!(quick_scope_jql(&TeamScope::Label("PLAT".into()), &c), r#"(labels = "PLAT" OR assignee in ("Ada Lovelace", "Shawn Sorichetti"))"#);
-        assert_eq!(quick_scope_jql(&TeamScope::Label("TOOLS".into()), &c), r#"(labels = "TOOLS" OR assignee in ("acct-1"))"#);
+        assert_eq!(quick_scope_jql(&TeamScope::Label("PLAT".into()), &c, true), r#"(labels = "PLAT" OR assignee in ("Ada Lovelace", "Shawn Sorichetti"))"#);
+        assert_eq!(quick_scope_jql(&TeamScope::Label("TOOLS".into()), &c, true), r#"(labels = "TOOLS" OR assignee in ("acct-1"))"#);
         let all = r#"(labels in ("PLAT", "TOOLS") OR assignee in ("Ada Lovelace", "Shawn Sorichetti", "acct-1"))"#;
-        assert_eq!(quick_scope_jql(&TeamScope::All, &c), all);
-        assert_eq!(quick_scope_jql(&TeamScope::None, &c), jql_no_team(&c));
+        assert_eq!(quick_scope_jql(&TeamScope::All, &c, true), all);
+        assert_eq!(quick_scope_jql(&TeamScope::None, &c, true), jql_no_team(&c, true));
         c.scope.teams[1].members.clear();
-        assert_eq!(quick_scope_jql(&TeamScope::Label("TOOLS".into()), &c), r#"labels = "TOOLS""#, "no members, no assignee part");
+        assert_eq!(quick_scope_jql(&TeamScope::Label("TOOLS".into()), &c, true), r#"labels = "TOOLS""#, "no members, no assignee part");
         c.team.members.clear();
-        assert_eq!(quick_scope_jql(&TeamScope::All, &c), r#"labels in ("PLAT", "TOOLS")"#);
+        assert_eq!(quick_scope_jql(&TeamScope::All, &c, true), r#"labels in ("PLAT", "TOOLS")"#);
     }
 
     #[test]
@@ -250,12 +258,23 @@ mod tests {
         let mut c = cfg();
         c.scope.teams[1].members = vec!["acct-1".into()];
         assert_eq!(
-            jql_no_team(&c),
+            jql_no_team(&c, true),
             r#"(labels is EMPTY OR labels not in ("PLAT", "TOOLS")) AND (assignee is EMPTY OR assignee not in ("Ada Lovelace", "Shawn Sorichetti", "acct-1"))"#
         );
         c.scope.teams[1].members.clear();
         c.team.members.clear();
-        assert_eq!(jql_no_team(&c), r#"(labels is EMPTY OR labels not in ("PLAT", "TOOLS"))"#, "no members, no assignee group");
+        assert_eq!(jql_no_team(&c, true), r#"(labels is EMPTY OR labels not in ("PLAT", "TOOLS"))"#, "no members, no assignee group");
+    }
+
+    #[test]
+    fn labels_only_queries_drop_the_assignee_group() {
+        let mut c = cfg();
+        c.scope.teams[1].members = vec!["acct-1".into()];
+        assert_eq!(jql_team_open(&c, false), r#"project = "CI" AND labels in ("PLAT", "TOOLS") AND statusCategory != Done ORDER BY Rank ASC"#);
+        assert_eq!(quick_scope_jql(&TeamScope::Label("PLAT".into()), &c, false), r#"labels = "PLAT""#);
+        assert_eq!(quick_scope_jql(&TeamScope::All, &c, false), r#"labels in ("PLAT", "TOOLS")"#);
+        assert_eq!(jql_no_team(&c, false), r#"(labels is EMPTY OR labels not in ("PLAT", "TOOLS"))"#);
+        assert_eq!(quick_scope_jql(&TeamScope::None, &c, false), jql_no_team(&c, false));
     }
 
     #[test]

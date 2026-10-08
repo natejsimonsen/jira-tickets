@@ -460,6 +460,11 @@ pub fn needs_resolution(e: &Error) -> bool {
     e.to_string().to_ascii_lowercase().contains("resolution")
 }
 
+/// Jira rejected the JQL because a configured member (`assignee in (...)`) is not a user it knows.
+pub fn is_unresolved_assignee(e: &Error) -> bool {
+    matches!(e, Error::Other(m) if m.contains("does not exist for the field 'assignee'"))
+}
+
 fn perf(method: &str, path: &str, start: std::time::Instant) {
     if std::env::var_os("JIRA_TICKETS_PERF").is_some() {
         eprintln!("{method} {path} {:.0} ms", start.elapsed().as_secs_f64() * 1000.0);
@@ -803,6 +808,15 @@ pub mod tests {
             assert!(err.to_string().contains("read-only"), "{err}");
         }
         assert!(rx.try_recv().is_err(), "nothing was sent");
+    }
+
+    #[test]
+    fn detects_unresolved_assignee() {
+        let e = Error::Other("Jira returned 400: The value 'Gone Person' does not exist for the field 'assignee'.".into());
+        assert!(is_unresolved_assignee(&e));
+        assert!(!is_unresolved_assignee(&Error::Other("Jira returned 400: The value 'x' does not exist for the field 'labels'.".into())));
+        assert!(!is_unresolved_assignee(&Error::Network("does not exist for the field 'assignee'".into())), "only Jira's own reply");
+        assert!(!is_unresolved_assignee(&Error::Other("boom".into())));
     }
 
     #[test]

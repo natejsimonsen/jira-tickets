@@ -189,6 +189,8 @@ pub struct App {
     pub search_seq: u64,
     /// The JQL of the running search, for Retry.
     pub last_search_jql: Option<String>,
+    /// Jira rejected a configured member, so team queries match labels only until restart.
+    pub members_disabled: bool,
     /// Unposted comment text, keyed by issue key.
     pub drafts: HashMap<String, String>,
     /// The issue key of the comment post in flight.
@@ -270,6 +272,7 @@ impl App {
             search_active: false,
             search_seq: 0,
             last_search_jql: None,
+            members_disabled: false,
             drafts: HashMap::new(),
             posting: None,
             picker: None,
@@ -325,7 +328,7 @@ impl App {
         self.last_refresh = Instant::now();
         let cfg = self.cfg.clone();
         let fields: Vec<String> = jira::LIST_FIELDS.iter().map(|s| s.to_string()).collect();
-        self.load_list(ListId::TeamOpen, store::jql_team_open(&cfg), fields.clone());
+        self.load_list(ListId::TeamOpen, store::jql_team_open(&cfg, !self.members_disabled), fields.clone());
         self.load_list(ListId::TeamInProgress, store::jql_team_in_progress(&cfg), fields);
         let board = cfg.scope.board_id;
         self.spawn(move |c, tx| {
@@ -381,7 +384,7 @@ impl App {
     fn reload(&mut self, id: ListId) {
         let fields: Vec<String> = jira::LIST_FIELDS.iter().map(|s| s.to_string()).collect();
         match id {
-            ListId::TeamOpen => self.load_list(id, store::jql_team_open(&self.cfg), fields),
+            ListId::TeamOpen => self.load_list(id, store::jql_team_open(&self.cfg, !self.members_disabled), fields),
             ListId::TeamInProgress => self.load_list(id, store::jql_team_in_progress(&self.cfg), fields),
             ListId::Epics => self.load_epics(),
             ListId::Search => {}
@@ -394,9 +397,19 @@ impl App {
     fn scoped_search_jql(&self) -> Option<String> {
         let quick = self.filter.quick.and_then(|i| self.cfg.issues.filters.get(i));
         match (quick, &self.filter.team) {
-            (Some(f), team) => Some(format!("{} AND ({})", store::quick_scope_jql(team, &self.cfg), f.jql)),
-            (None, crate::filter::TeamScope::None) => Some(store::jql_no_team(&self.cfg)),
+            (Some(f), team) => Some(format!("{} AND ({})", store::quick_scope_jql(team, &self.cfg, !self.members_disabled), f.jql)),
+            (None, crate::filter::TeamScope::None) => Some(store::jql_no_team(&self.cfg, !self.members_disabled)),
             (None, _) => None,
+        }
+    }
+
+    /// A failed `id` load is one of ours that carries the members' assignee
+    /// group: TeamOpen, or the team-scoped search (not a JQL the user typed).
+    fn has_member_clause(&self, id: ListId) -> bool {
+        match id {
+            ListId::TeamOpen => true,
+            ListId::Search => self.scoped_search_jql().is_some_and(|j| self.last_search_jql.as_deref() == Some(j.trim())),
+            ListId::Epics | ListId::TeamInProgress => false,
         }
     }
 
@@ -448,6 +461,7 @@ impl App {
                 if id == ListId::Search && !accept_search(self.search_seq, seq, self.search_active) {
                     return;
                 }
+                let member_retry = matches!(&result, Err(e) if jira::is_unresolved_assignee(e)) && !self.members_disabled && self.has_member_clause(id);
                 let entry = self.lists.entry(id).or_default();
                 entry.loading = false;
                 let reload = std::mem::take(&mut entry.reload_after);
@@ -467,6 +481,19 @@ impl App {
                     Err(jira::Error::Unauthorized(m)) => {
                         self.client = None;
                         self.token_error = Some(m);
+                    }
+                    // A configured member Jira doesn't know fails the whole query; retry on labels alone.
+                    Err(_) if member_retry => {
+                        self.members_disabled = true;
+                        self.toast("A team member in the config did not resolve; showing labelled tickets only", true);
+                        match id {
+                            ListId::Search => {
+                                if let Some(jql) = self.scoped_search_jql() {
+                                    self.actions.push(Action::RunSearch(jql));
+                                }
+                            }
+                            _ => self.reload(id),
+                        }
                     }
                     Err(e) => {
                         if marks_offline(id, &e) {
