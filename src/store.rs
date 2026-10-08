@@ -178,10 +178,16 @@ pub fn jql_epics(cfg: &Config, parent_keys: &[String]) -> String {
     format!("project = {} AND issuetype = Epic AND ({}) ORDER BY Rank ASC", jql_quote(&cfg.scope.project), clauses.join(" OR "))
 }
 
-pub fn jql_team_in_progress(cfg: &Config) -> String {
+/// The members' in-progress work across the scope's projects. The list is by
+/// assignee only, with no label alternative, so it is None (not loaded) when
+/// `include_members` is false or no members are configured.
+pub fn jql_team_in_progress(cfg: &Config, include_members: bool) -> Option<String> {
+    if !include_members || cfg.team.members.is_empty() {
+        return None;
+    }
     let projects: Vec<String> = cfg.scope.projects.iter().map(|p| jql_quote(p)).collect();
     let members: Vec<String> = cfg.team.members.iter().map(|m| jql_quote(m)).collect();
-    format!("project in ({}) AND assignee in ({}) AND statusCategory = \"In Progress\" ORDER BY updated DESC", projects.join(", "), members.join(", "))
+    Some(format!("project in ({}) AND assignee in ({}) AND statusCategory = \"In Progress\" ORDER BY updated DESC", projects.join(", "), members.join(", ")))
 }
 
 #[cfg(test)]
@@ -216,10 +222,18 @@ mod tests {
         );
         assert_eq!(jql_epics(&c, &[]), r#"project = "CI" AND issuetype = Epic AND (labels in ("PLAT")) ORDER BY Rank ASC"#);
         assert_eq!(
-            jql_team_in_progress(&c),
-            r#"project in ("CI", "OPS") AND assignee in ("Ada Lovelace", "Shawn Sorichetti") AND statusCategory = "In Progress" ORDER BY updated DESC"#
+            jql_team_in_progress(&c, true).as_deref(),
+            Some(r#"project in ("CI", "OPS") AND assignee in ("Ada Lovelace", "Shawn Sorichetti") AND statusCategory = "In Progress" ORDER BY updated DESC"#)
         );
         assert_eq!(jql_quote(r#"a"b"#), r#""a\"b""#);
+    }
+
+    #[test]
+    fn jql_team_in_progress_needs_members() {
+        let mut c = cfg();
+        assert_eq!(jql_team_in_progress(&c, false), None, "members disabled: there is no label alternative");
+        c.team.members.clear();
+        assert_eq!(jql_team_in_progress(&c, true), None, "no members would be `assignee in ()`");
     }
 
     #[test]

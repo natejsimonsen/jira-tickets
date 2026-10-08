@@ -334,7 +334,9 @@ impl App {
         let cfg = self.cfg.clone();
         let fields: Vec<String> = jira::LIST_FIELDS.iter().map(|s| s.to_string()).collect();
         self.load_list(ListId::TeamOpen, store::jql_team_open(&cfg, !self.members_disabled), fields.clone());
-        self.load_list(ListId::TeamInProgress, store::jql_team_in_progress(&cfg), fields);
+        if let Some(jql) = store::jql_team_in_progress(&cfg, !self.members_disabled) {
+            self.load_list(ListId::TeamInProgress, jql, fields);
+        }
         let board = cfg.scope.board_id;
         self.spawn(move |c, tx| {
             let _ = tx.send(Msg::BoardSprints(c.board_sprints(board, "active,future")));
@@ -390,7 +392,11 @@ impl App {
         let fields: Vec<String> = jira::LIST_FIELDS.iter().map(|s| s.to_string()).collect();
         match id {
             ListId::TeamOpen => self.load_list(id, store::jql_team_open(&self.cfg, !self.members_disabled), fields),
-            ListId::TeamInProgress => self.load_list(id, store::jql_team_in_progress(&self.cfg), fields),
+            ListId::TeamInProgress => {
+                if let Some(jql) = store::jql_team_in_progress(&self.cfg, !self.members_disabled) {
+                    self.load_list(id, jql, fields);
+                }
+            }
             ListId::Epics => self.load_epics(),
             ListId::Search => {}
         }
@@ -409,13 +415,24 @@ impl App {
     }
 
     /// A failed `id` load is one of ours that carries the members' assignee
-    /// group: TeamOpen, or the team-scoped search (not a JQL the user typed).
+    /// group: TeamOpen, TeamInProgress, or the team-scoped search (not a JQL the user typed).
     fn has_member_clause(&self, id: ListId) -> bool {
         match id {
-            ListId::TeamOpen => true,
+            ListId::TeamOpen | ListId::TeamInProgress => true,
             ListId::Search => self.scoped_search_jql().is_some_and(|j| self.last_search_jql.as_deref() == Some(j.trim())),
-            ListId::Epics | ListId::TeamInProgress => false,
+            ListId::Epics => false,
         }
+    }
+
+    /// Runs `jql` (non-empty) as the Search list under the current `search_seq`,
+    /// replacing any search in flight.
+    fn search(&mut self, jql: &str) {
+        self.search_active = true;
+        self.last_search_jql = Some(jql.trim().to_string());
+        let full = format!("project = {} AND ({}) ORDER BY Rank ASC", store::jql_quote(&self.cfg.scope.project), jql.trim());
+        let fields: Vec<String> = jira::LIST_FIELDS.iter().map(|s| s.to_string()).collect();
+        self.lists.entry(ListId::Search).or_default().loading = false;
+        self.load_list_seq(ListId::Search, full, fields, Some(self.search_seq));
     }
 
     /// `force` refetches even a detail fetched within DETAIL_FRESH.
@@ -466,7 +483,9 @@ impl App {
                 if id == ListId::Search && !accept_search(self.search_seq, seq, self.search_active) {
                     return;
                 }
-                let member_retry = matches!(&result, Err(e) if jira::is_unresolved_assignee(e)) && !self.members_disabled && self.has_member_clause(id);
+                // Not gated on members_disabled: TeamOpen and TeamInProgress can both fail
+                // on the same member, and the second must still retry (or clear) its list.
+                let member_retry = matches!(&result, Err(e) if jira::is_unresolved_assignee(e)) && self.has_member_clause(id);
                 let entry = self.lists.entry(id).or_default();
                 entry.loading = false;
                 let reload = std::mem::take(&mut entry.reload_after);
@@ -489,14 +508,19 @@ impl App {
                     }
                     // A configured member Jira doesn't know fails the whole query; retry on labels alone.
                     Err(_) if member_retry => {
-                        self.members_disabled = true;
-                        self.toast("A team member in the config did not resolve; showing labelled tickets only", true);
+                        entry.error = None;
+                        if !self.members_disabled {
+                            self.members_disabled = true;
+                            self.toast("A team member in the config did not resolve; showing labelled tickets only", true);
+                        }
                         match id {
                             ListId::Search => {
                                 if let Some(jql) = self.scoped_search_jql() {
                                     self.actions.push(Action::RunSearch(jql));
                                 }
                             }
+                            // In progress is by assignee only: leave it as it is, not reloaded.
+                            ListId::TeamInProgress => {}
                             _ => self.reload(id),
                         }
                     }
@@ -607,7 +631,15 @@ impl App {
     fn apply(&mut self, a: Action, ctx: &egui::Context) {
         match a {
             Action::SetScreen(s) => self.screen = s,
-            Action::Refresh => self.refresh_all(),
+            Action::Refresh => {
+                self.refresh_all();
+                // A quick filter's or No team label's search is part of what's shown; rerun it
+                // too, keeping the cursor. The seq bump drops the older run's reply.
+                if let Some(jql) = self.scoped_search_jql() {
+                    self.search_seq += 1;
+                    self.search(&jql);
+                }
+            }
             Action::OpenUrl(u) => open_url(&u),
             Action::Copy(t) => {
                 ctx.copy_text(t);
@@ -696,13 +728,7 @@ impl App {
                     self.lists.remove(&ListId::Search);
                     return;
                 }
-                self.search_active = true;
-                self.last_search_jql = Some(jql.trim().to_string());
-                let full = format!("project = {} AND ({}) ORDER BY Rank ASC", store::jql_quote(&self.cfg.scope.project), jql.trim());
-                let fields: Vec<String> = jira::LIST_FIELDS.iter().map(|s| s.to_string()).collect();
-                // A new search replaces any in flight.
-                self.lists.entry(ListId::Search).or_default().loading = false;
-                self.load_list_seq(ListId::Search, full, fields, Some(self.search_seq));
+                self.search(&jql);
             }
             Action::ToggleGoTo => self.goto = if self.goto.is_some() { None } else { Some(String::new()) },
             Action::GoTo => {
