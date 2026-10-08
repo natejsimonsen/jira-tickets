@@ -1,6 +1,19 @@
 //! Pure list filtering, column formatting, and ⌘K parsing for the Issues view.
 
+use crate::config::TeamEntry;
 use crate::jira::{Issue, Sprint};
+use std::collections::BTreeMap;
+
+/// Which sub-team the Issues list is scoped to.
+#[derive(Clone, Debug, PartialEq, Default)]
+pub enum TeamScope {
+    #[default]
+    All,
+    /// Issues with this label, or assigned to one of the team's members.
+    Label(String),
+    /// Issues that match no configured team by label or membership.
+    None,
+}
 
 /// Which sprint the Issues list is scoped to, matched against each issue's latest non-closed sprint.
 #[derive(Clone, Debug, PartialEq, Default)]
@@ -18,6 +31,50 @@ pub struct IssueFilter {
     pub quick: Option<usize>,
     pub mine: bool,
     pub text: String,
+    pub team: TeamScope,
+    /// Every configured team label, from config at startup.
+    pub team_labels: Vec<String>,
+    /// Team label → member display names or account ids, from config at startup.
+    pub team_members: BTreeMap<String, Vec<String>>,
+}
+
+/// The issue's assignee is one of `members`, by display name or account id, case-insensitively.
+fn assigned_to_member(issue: &Issue, members: &[String]) -> bool {
+    let Some(a) = &issue.assignee else { return false };
+    let (name, id) = (a.display_name.to_lowercase(), a.account_id.to_lowercase());
+    members.iter().map(|m| m.to_lowercase()).any(|m| m == name || m == id)
+}
+
+/// The issue belongs to the team with `label`: it carries the label (exact) or a member has it.
+fn on_team(issue: &Issue, label: &str, members: &[String]) -> bool {
+    issue.labels.iter().any(|l| l == label) || assigned_to_member(issue, members)
+}
+
+/// The issue counts as this team's by membership but lacks its label.
+pub fn missing_team_label(issue: &Issue, label: &str, members: &[String]) -> bool {
+    !issue.labels.iter().any(|l| l == label) && assigned_to_member(issue, members)
+}
+
+fn in_team_scope(issue: &Issue, f: &IssueFilter) -> bool {
+    let members = |l: &str| f.team_members.get(l).map(Vec::as_slice).unwrap_or_default();
+    match &f.team {
+        TeamScope::All => true,
+        TeamScope::Label(l) => on_team(issue, l, members(l)),
+        TeamScope::None => !f.team_labels.iter().any(|l| on_team(issue, l, members(l))),
+    }
+}
+
+/// Only the team scope applied, ignoring every other filter (feeds the epic picker).
+pub fn in_team<'a>(issues: &[&'a Issue], f: &IssueFilter) -> Vec<&'a Issue> {
+    issues.iter().copied().filter(|i| in_team_scope(i, f)).collect()
+}
+
+/// Picker entries: "All teams", each configured team, then "No team label".
+pub fn team_options(teams: &[TeamEntry]) -> Vec<(TeamScope, String)> {
+    std::iter::once((TeamScope::All, "All teams".to_string()))
+        .chain(teams.iter().map(|t| (TeamScope::Label(t.label.clone()), format!("{} · {}", t.label, t.name))))
+        .chain(std::iter::once((TeamScope::None, "No team label".to_string())))
+        .collect()
 }
 
 pub fn visible<'a>(issues: &[&'a Issue], f: &IssueFilter, me: Option<&str>) -> Vec<&'a Issue> {
@@ -25,6 +82,7 @@ pub fn visible<'a>(issues: &[&'a Issue], f: &IssueFilter, me: Option<&str>) -> V
     issues
         .iter()
         .copied()
+        .filter(|i| in_team_scope(i, f))
         .filter(|i| f.epic.as_deref().is_none_or(|e| i.parent_key.as_deref() == Some(e)))
         .filter(|i| match &f.sprint {
             SprintScope::All => true,
@@ -154,6 +212,58 @@ mod tests {
         f.mine = false;
         f.text = "INFRA".into();
         assert_eq!(visible(&all, &f, None)[0].key, "CI-2");
+    }
+
+    fn team_filter() -> IssueFilter {
+        IssueFilter {
+            team_labels: vec!["PLAT".into(), "TOOLS".into()],
+            team_members: BTreeMap::from([("PLAT".into(), vec!["nate".into()]), ("TOOLS".into(), vec!["acct-9".into()])]),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn team_scope_filters_by_label_and_membership() {
+        let a = issue("CI-1", "a", None, None, &["PLAT"]);
+        let b = issue("CI-2", "b", None, None, &["TOOLS", "infra"]);
+        let c = issue("CI-3", "c", None, None, &["plat"]);
+        let d = issue("CI-4", "d", None, Some("Ada"), &[]);
+        let mut e = issue("CI-5", "e", None, Some("Zed"), &[]);
+        e.assignee.as_mut().unwrap().account_id = "ACCT-9".into();
+        let all = vec![&a, &b, &c, &d, &e];
+        let mut f = team_filter();
+        let keys = |f: &IssueFilter| visible(&all, f, None).iter().map(|i| i.key.clone()).collect::<Vec<_>>();
+        assert_eq!(f.team, TeamScope::All);
+        assert_eq!(keys(&f), ["CI-1", "CI-2", "CI-3", "CI-4", "CI-5"]);
+        f.team = TeamScope::Label("PLAT".into());
+        assert_eq!(keys(&f), ["CI-1", "CI-4"], "label is exact and case-sensitive; display name matches case-insensitively");
+        f.team = TeamScope::Label("TOOLS".into());
+        assert_eq!(keys(&f), ["CI-2", "CI-5"], "account id matches case-insensitively");
+        f.team = TeamScope::None;
+        assert_eq!(keys(&f), ["CI-3"]);
+    }
+
+    #[test]
+    fn missing_label_only_for_members_without_it() {
+        let members = vec!["Ada".to_string()];
+        assert!(missing_team_label(&issue("CI-1", "a", None, Some("nate"), &["infra"]), "PLAT", &members));
+        assert!(!missing_team_label(&issue("CI-2", "a", None, Some("Ada"), &["PLAT"]), "PLAT", &members));
+        assert!(!missing_team_label(&issue("CI-3", "a", None, Some("Zed"), &[]), "PLAT", &members));
+        assert!(!missing_team_label(&issue("CI-4", "a", None, None, &[]), "PLAT", &members));
+    }
+
+    #[test]
+    fn team_options_order_and_labels() {
+        let t = |l: &str, n: &str| TeamEntry { label: l.into(), name: n.into(), board_id: 1, members: vec![] };
+        assert_eq!(
+            team_options(&[t("PLAT", "Platform"), t("TOOLS", "Developer Tools")]),
+            vec![
+                (TeamScope::All, "All teams".to_string()),
+                (TeamScope::Label("PLAT".into()), "PLAT · Platform".to_string()),
+                (TeamScope::Label("TOOLS".into()), "TOOLS · Developer Tools".to_string()),
+                (TeamScope::None, "No team label".to_string()),
+            ]
+        );
     }
 
     #[test]

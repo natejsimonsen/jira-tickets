@@ -46,6 +46,11 @@ pub fn show(app: &mut App, ui: &mut Ui) {
         ui.horizontal(|ui| {
             let st = theme::status_tint(&issue.status.name, &issue.status.category, p, &app.cfg.issues.status_colors);
             pill(ui, &issue.status.name, st.bg, st.fg);
+            if let crate::filter::TeamScope::Label(l) = &app.filter.team
+                && super::issues::missing_label_pill(ui, &app.filter, &issue, l, p)
+            {
+                ui.label(RichText::new("l applies it").color(p.muted).size(11.0));
+            }
             pill(ui, &issue.issue_type, p.surface_2, p.muted);
             if !issue.priority.is_empty() {
                 pill(ui, &issue.priority, p.surface_2, p.muted);
@@ -106,7 +111,7 @@ pub fn show(app: &mut App, ui: &mut Ui) {
                 field(ui, p, "Created", &short_date(&issue.created));
                 field(ui, p, "Updated", &short_date(&issue.updated));
                 ui.add_space(8.0);
-                ui.label(RichText::new("t transition · a assign · s sprint · e edit · J/K rank").color(p.muted).size(11.0));
+                ui.label(RichText::new("t transition · a assign · s sprint · e edit · l team label · J/K rank").color(p.muted).size(11.0));
             });
         });
         ui.add_space(24.0);

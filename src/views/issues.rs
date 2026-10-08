@@ -14,6 +14,33 @@ pub fn current_rows(app: &App) -> Vec<&Issue> {
     filter::visible(&all, &app.filter, app.me.as_ref().map(|m| m.display_name.as_str()))
 }
 
+/// The row's leading pills: under All teams, its team labels in a neutral pill;
+/// under one team, an amber "no <label> label" when it is the team's by membership only.
+pub fn team_pills(ui: &mut Ui, f: &filter::IssueFilter, i: &Issue, p: &Palette) {
+    match &f.team {
+        filter::TeamScope::All => {
+            let teams: Vec<&str> = i.labels.iter().filter(|l| f.team_labels.contains(l)).map(String::as_str).collect();
+            if !teams.is_empty() {
+                pill(ui, &teams.join(" · "), p.surface_2, p.text);
+            }
+        }
+        filter::TeamScope::Label(l) => {
+            missing_label_pill(ui, f, i, l, p);
+        }
+        filter::TeamScope::None => {}
+    }
+}
+
+/// The amber "no <label> label" pill; true when it was shown.
+pub fn missing_label_pill(ui: &mut Ui, f: &filter::IssueFilter, i: &Issue, label: &str, p: &Palette) -> bool {
+    let members = f.team_members.get(label).map(Vec::as_slice).unwrap_or_default();
+    let missing = filter::missing_team_label(i, label, members);
+    if missing {
+        pill(ui, &format!("no {label} label"), p.at_risk.gamma_multiply(0.15), p.at_risk);
+    }
+    missing
+}
+
 pub fn show(app: &mut App, ui: &mut Ui) {
     let p = theme::palette(ui.ctx());
     let width = ui.available_width();
@@ -36,9 +63,28 @@ pub fn show(app: &mut App, ui: &mut Ui) {
 
 fn filters(app: &mut App, ui: &mut Ui, p: &Palette) {
     ui.horizontal_wrapped(|ui| {
-        // Epic picker: epics seen among TeamOpen parents, by summary.
-        let mut epics: Vec<(String, String)> =
-            app.store.list(ListId::TeamOpen).iter().filter_map(|i| Some((i.parent_key.clone()?, i.parent_summary.clone().unwrap_or_default()))).collect();
+        // Team scope: All, each configured sub-team, or tickets with no team label.
+        let options = filter::team_options(&app.cfg.scope.teams);
+        let label = options.iter().find(|(t, _)| *t == app.filter.team).map_or_else(
+            || match &app.filter.team {
+                filter::TeamScope::Label(l) => l.clone(),
+                _ => "All teams".to_string(),
+            },
+            |(_, l)| l.clone(),
+        );
+        egui::ComboBox::from_id_salt("team").selected_text(label).width(220.0).show_ui(ui, |ui| {
+            for (scope, l) in &options {
+                if ui.selectable_label(app.filter.team == *scope, l).clicked() {
+                    app.actions.push(Action::SetTeam(scope.clone()));
+                }
+            }
+        });
+        // Epic picker: parents of the scoped team's issues (other filters ignored), by summary.
+        let src = if app.search_active { ListId::Search } else { ListId::TeamOpen };
+        let mut epics: Vec<(String, String)> = filter::in_team(&app.store.list(src), &app.filter)
+            .iter()
+            .filter_map(|i| Some((i.parent_key.clone()?, i.parent_summary.clone().unwrap_or_default())))
+            .collect();
         epics.sort();
         epics.dedup();
         let label =
@@ -142,6 +188,7 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
                     ui.label(RichText::new(&i.summary).font(theme::bold(13.5)).color(p.text));
                 });
                 ui.horizontal_wrapped(|ui| {
+                    team_pills(ui, &app.filter, i, p);
                     for c in &columns {
                         let v = filter::column_value(i, c);
                         if v.is_empty() {

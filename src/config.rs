@@ -29,6 +29,21 @@ pub struct Scope {
     pub team_label: String,
     pub board_id: u64,
     pub filter_id: u64,
+    /// The parent (parent) board the sub-teams roll up to.
+    pub parent_board_id: u64,
+    /// Sub-teams whose tickets the Issues view loads; filtered by team in the UI.
+    pub teams: Vec<TeamEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TeamEntry {
+    pub label: String,
+    pub name: String,
+    pub board_id: u64,
+    /// Jira display names or account ids whose tickets count as this team's
+    /// even without the label. Empty on the own team means `[team].members`.
+    #[serde(default)]
+    pub members: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -89,7 +104,41 @@ fn s(v: &str) -> String {
 
 impl Default for Scope {
     fn default() -> Self {
-        Scope { projects: vec![s("CI"), s("OPS")], project: s("CI"), team_label: s("PLAT"), board_id: 101, filter_id: 201 }
+        Scope {
+            projects: vec![s("CI"), s("OPS")],
+            project: s("CI"),
+            team_label: s("PLAT"),
+            board_id: 101,
+            filter_id: 201,
+            parent_board_id: 100,
+            teams: vec![
+                TeamEntry { label: s("PLAT"), name: s("Platform"), board_id: 101, members: Vec::new() },
+                TeamEntry { label: s("TOOLS"), name: s("Developer Tools"), board_id: 102, members: Vec::new() },
+            ],
+        }
+    }
+}
+
+impl Scope {
+    /// Every configured team's label, or just `team_label` when no teams are listed.
+    pub fn team_labels(&self) -> Vec<String> {
+        if self.teams.is_empty() { vec![self.team_label.clone()] } else { self.teams.iter().map(|t| t.label.clone()).collect() }
+    }
+
+    /// The entry for the user's own team (`team_label`), if listed.
+    pub fn own_team(&self) -> Option<&TeamEntry> {
+        self.teams.iter().find(|t| t.label == self.team_label)
+    }
+
+    /// A team's members; the own team falls back to `own_members` (`[team].members`) when it lists none.
+    pub fn members_of(&self, label: &str, own_members: &[String]) -> Vec<String> {
+        let listed = self.teams.iter().find(|t| t.label == label).map(|t| t.members.clone()).unwrap_or_default();
+        if listed.is_empty() && label == self.team_label { own_members.to_vec() } else { listed }
+    }
+
+    /// Label → members for every team label, own-team fallback applied.
+    pub fn team_members(&self, own_members: &[String]) -> BTreeMap<String, Vec<String>> {
+        self.team_labels().into_iter().map(|l| (l.clone(), self.members_of(&l, own_members))).collect()
     }
 }
 
@@ -275,6 +324,19 @@ project = "CI"              # project the team label lives in
 team_label = "PLAT"
 board_id = 101
 filter_id = 201
+parent_board_id = 100          # parent board
+# Sub-teams whose tickets the Issues view loads; filter by team in the UI.
+# Tickets assigned to a team's members count as that team's even without the label.
+[[scope.teams]]
+label = "PLAT"
+name = "Platform"
+board_id = 101
+# members = ["Ada Lovelace", "..."]  # Jira display names or account ids; PLAT defaults to [team].members
+[[scope.teams]]
+label = "TOOLS"
+name = "Developer Tools"
+board_id = 102
+# members = ["5ed580000000000000000001", "5ed580000000000000000002", "5ed580000000000000000003", "5ed580000000000000000004", "5ed580000000000000000005"]
 
 [grooming]
 status_new = "New"
@@ -334,6 +396,10 @@ email = "me@example.com"
         assert_eq!(c.scope.project, "CI");
         assert_eq!(c.scope.team_label, "PLAT");
         assert_eq!(c.scope.board_id, 101);
+        assert_eq!(c.scope.parent_board_id, 100);
+        assert_eq!(c.scope.team_labels(), ["PLAT", "TOOLS"]);
+        assert_eq!(c.scope.teams[1], TeamEntry { label: "TOOLS".into(), name: "Developer Tools".into(), board_id: 102, members: vec![] });
+        assert_eq!(c.scope.own_team().map(|t| t.name.as_str()), Some("Platform"));
         assert_eq!(c.grooming.planning_transition_id, "11");
         assert_eq!(c.grooming.planning_cap, 10);
         assert_eq!(c.issues.columns, vec!["status", "labels", "parent.summary", "assignee"]);
@@ -360,6 +426,8 @@ email = "me@example.com"
         let text = std::fs::read_to_string(&p).unwrap();
         let parsed: Config = toml::from_str(&text).unwrap();
         assert_eq!(parsed.team.members.len(), 6);
+        assert_eq!(parsed.scope.parent_board_id, 100);
+        assert_eq!(parsed.scope.teams, Scope::default().teams);
         assert!(parsed.issues.status_colors.is_empty() && parsed.issues.epic_colors.is_empty());
         assert!(c.is_err());
     }
@@ -411,6 +479,32 @@ email = "me@example.com"
         assert_eq!(c.issues.status_colors.get("Ready for Work").map(String::as_str), Some("#0f9d9a"));
         assert_eq!(c.issues.epic_colors.get("CI-1860").map(String::as_str), Some("#8250df"));
         assert_eq!(c.issues.columns.len(), 4);
+    }
+
+    #[test]
+    fn team_labels_and_members() {
+        let mut sc = Scope::default();
+        let own = vec!["Ada".to_string()];
+        assert_eq!(sc.members_of("PLAT", &own), own, "own team falls back to [team].members");
+        assert!(sc.members_of("TOOLS", &own).is_empty());
+        assert!(sc.members_of("XYZ", &own).is_empty());
+        sc.teams[0].members = vec!["Ann".into()];
+        sc.teams[1].members = vec!["acct-1".into()];
+        assert_eq!(sc.members_of("PLAT", &own), ["Ann"]);
+        let m = sc.team_members(&own);
+        assert_eq!(m.get("TOOLS").unwrap(), &["acct-1"]);
+        sc.teams.clear();
+        assert_eq!(sc.team_labels(), ["PLAT"]);
+        assert!(sc.own_team().is_none());
+        assert_eq!(sc.members_of("PLAT", &own), own);
+    }
+
+    #[test]
+    fn team_members_parse_from_toml() {
+        let text = format!("{MINIMAL}\n[scope]\nteam_label = \"TOOLS\"\n[[scope.teams]]\nlabel = \"TOOLS\"\nname = \"D\"\nboard_id = 1\nmembers = [\"x\"]\n");
+        let c: Config = toml::from_str(&text).unwrap();
+        assert_eq!(c.scope.teams.len(), 1);
+        assert_eq!(c.scope.members_of("TOOLS", &c.team.members), ["x"]);
     }
 
     #[test]

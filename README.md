@@ -19,6 +19,8 @@ The bundle is ad-hoc signed and has no icon yet.
 
 The config lives at `~/.config/jira-tickets/config.toml` (override with `JIRA_TICKETS_CONFIG`). On first run the app writes an example there and exits; edit it, then launch again. Set `site` and `email`, and adjust the scope (projects, team label, board or filter), team members, issue columns, and quick filters.
 
+The Issues view loads every the parent team sub-team listed under `[[scope.teams]]` (each with a `label`, `name`, and `board_id`; the defaults are PLAT · Platform and TOOLS · Developer Tools), plus `parent_board_id` for the parent board. `team_label` stays your own team and `board_id` the sprint board. A ticket counts as a team's when it carries the team's label or is assigned to one of the team's `members` (Jira display names or account ids, matched case-insensitively). Your own team's `members` default to `[team].members`; other teams have none unless you list them.
+
 Status pills are coloured by status name (falling back to the status category) and each epic gets a stable colour derived from its key, shown on its pills and as the left edge of each list row. Override either with `[issues.status_colors]` (status name, case-insensitive) or `[issues.epic_colors]` (epic key), mapping to `"#rrggbb"`.
 
 Roadmap settings name custom fields by id, such as `customfield_12345`. To find them, open `<site>/rest/api/3/field` in a browser while signed in to Jira and look for the field names.
@@ -48,6 +50,7 @@ Only a token you paste is saved. Signing out deletes that file.
 | `a` | Assign |
 | `s` | Sprint |
 | `e` | Edit |
+| `l` | Add the picked team's label to the issue |
 | `J` / `K` | Move the issue down / up in rank |
 | `c` | Copy the issue link |
 | `⌘O` | Open in the browser |
@@ -55,7 +58,11 @@ Only a token you paste is saved. Signing out deletes that file.
 
 Only `⌘1`–`⌘4`, `⌘R`, and `⌘W` work on every screen. The rest are bound on the Issues screen only. Plain letter keys do nothing while a text field has focus. While a picker is open, only `Esc`, the arrow keys (and `j` / `k`, except in the Assign picker), and `Enter` apply. Selecting a row shows its detail.
 
-Above the Issues list are an epic picker, a sprint picker, the config's quick filters, a Mine toggle, and the search box. The sprint picker offers All sprints, the board's active and future sprints, and Backlog (issues in no open sprint). It starts on the active sprint, or All sprints if the board has none.
+Above the Issues list are a team picker, an epic picker, a sprint picker, the config's quick filters, a Mine toggle, and the search box. The sprint picker offers All sprints, the board's active and future sprints, and Backlog (issues in no open sprint). It starts on the active sprint, or All sprints if the board has none.
+
+The team picker offers All teams, each configured team, and No team label (tickets that match no team by label or membership). It starts on your own team. Under All teams each row shows its team label; the epic picker lists only the epics of the picked team's tickets. When a ticket is in the picked team only through its assignee, its row and detail show an amber "no PLAT label" pill (named for the picked team), and `l` adds that label, keeping the ticket's other labels. The label is never added automatically; `l` on a ticket that already has it just says "Already labelled".
+
+Known limitation: the TOOLS board also includes unlabelled tickets assigned to specific people. Those show under TOOLS only once the account ids are listed as TOOLS's `members` (the example config has them commented out); otherwise a label-based filter does not see them.
 
 ## Developer switches
 

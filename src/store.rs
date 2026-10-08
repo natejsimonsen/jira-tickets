@@ -100,8 +100,26 @@ pub fn jql_quote(s: &str) -> String {
     format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
 }
 
+/// Every configured team's open work: tickets carrying a team label, or
+/// assigned to any team's members (the own team falls back to `[team].members`).
 pub fn jql_team_open(cfg: &Config) -> String {
-    format!("project = {} AND labels = {} AND statusCategory != Done ORDER BY Rank ASC", jql_quote(&cfg.scope.project), jql_quote(&cfg.scope.team_label))
+    let labels: Vec<String> = cfg.scope.team_labels().iter().map(|l| jql_quote(l)).collect();
+    let mut members: Vec<String> = Vec::new();
+    for l in cfg.scope.team_labels() {
+        for m in cfg.scope.members_of(&l, &cfg.team.members) {
+            if !members.contains(&m) {
+                members.push(m);
+            }
+        }
+    }
+    let labels = format!("labels in ({})", labels.join(", "));
+    let team = if members.is_empty() {
+        labels
+    } else {
+        let members: Vec<String> = members.iter().map(|m| jql_quote(m)).collect();
+        format!("({labels} OR assignee in ({}))", members.join(", "))
+    };
+    format!("project = {} AND {team} AND statusCategory != Done ORDER BY Rank ASC", jql_quote(&cfg.scope.project))
 }
 
 pub fn jql_epics(cfg: &Config, parent_keys: &[String]) -> String {
@@ -144,7 +162,10 @@ mod tests {
     #[test]
     fn jql_builders() {
         let c = cfg();
-        assert_eq!(jql_team_open(&c), r#"project = "CI" AND labels = "PLAT" AND statusCategory != Done ORDER BY Rank ASC"#);
+        assert_eq!(
+            jql_team_open(&c),
+            r#"project = "CI" AND (labels in ("PLAT", "TOOLS") OR assignee in ("Ada Lovelace", "Shawn Sorichetti")) AND statusCategory != Done ORDER BY Rank ASC"#
+        );
         assert_eq!(
             jql_epics(&c, &["CI-1".into(), "CI-2".into()]),
             r#"project = "CI" AND issuetype = Epic AND (labels in ("PLAT") OR key in (CI-1, CI-2)) ORDER BY Rank ASC"#
@@ -155,6 +176,22 @@ mod tests {
             r#"project in ("CI", "OPS") AND assignee in ("Ada Lovelace", "Shawn Sorichetti") AND statusCategory = "In Progress" ORDER BY updated DESC"#
         );
         assert_eq!(jql_quote(r#"a"b"#), r#""a\"b""#);
+    }
+
+    #[test]
+    fn jql_team_open_members_union_and_single_team() {
+        let mut c = cfg();
+        c.scope.teams[1].members = vec!["acct-1".into(), "Ada Lovelace".into()];
+        assert_eq!(
+            jql_team_open(&c),
+            r#"project = "CI" AND (labels in ("PLAT", "TOOLS") OR assignee in ("Ada Lovelace", "Shawn Sorichetti", "acct-1")) AND statusCategory != Done ORDER BY Rank ASC"#
+        );
+        c.scope.teams.truncate(1);
+        c.team.members.clear();
+        assert_eq!(jql_team_open(&c), r#"project = "CI" AND labels in ("PLAT") AND statusCategory != Done ORDER BY Rank ASC"#);
+        c.scope.teams.clear();
+        c.team.members = vec!["Ann".into()];
+        assert_eq!(jql_team_open(&c), r#"project = "CI" AND (labels in ("PLAT") OR assignee in ("Ann")) AND statusCategory != Done ORDER BY Rank ASC"#);
     }
 
     #[test]

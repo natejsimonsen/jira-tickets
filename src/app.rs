@@ -79,6 +79,9 @@ pub enum Action {
     Toast(String, bool),
     SetEpic(Option<String>),
     SetSprint(crate::filter::SprintScope),
+    SetTeam(crate::filter::TeamScope),
+    /// Adds the scoped team's label to the selected issue (key `l`).
+    ApplyTeamLabel,
     SetQuick(Option<usize>),
     ToggleMine,
     RunSearch(String),
@@ -235,6 +238,12 @@ impl App {
             });
         }
         let cfg = Arc::new(cfg);
+        let filter = crate::filter::IssueFilter {
+            team: crate::filter::TeamScope::Label(cfg.scope.team_label.clone()),
+            team_labels: cfg.scope.team_labels(),
+            team_members: cfg.scope.team_members(&cfg.team.members),
+            ..Default::default()
+        };
         let app = App {
             cfg: cfg.clone(),
             store: Store::load_cached().unwrap_or_default(),
@@ -251,7 +260,7 @@ impl App {
             selected: None,
             detail_loading: Default::default(),
             detail_fetched: HashMap::new(),
-            filter: Default::default(),
+            filter,
             sprints: Vec::new(),
             sprint_default_applied: false,
             focus_search: false,
@@ -596,6 +605,25 @@ impl App {
                 self.filter.sprint = s;
                 self.cursor = 0;
             }
+            Action::SetTeam(t) => {
+                self.filter.team = t;
+                self.cursor = 0;
+            }
+            Action::ApplyTeamLabel => {
+                let crate::filter::TeamScope::Label(label) = &self.filter.team else {
+                    self.toast("Pick a team to label", false);
+                    return;
+                };
+                let Some(i) = self.selected.as_ref().and_then(|k| self.store.get(k)) else { return };
+                let Some(fields) = add_label_fields(&i.labels, label) else {
+                    self.toast("Already labelled", false);
+                    return;
+                };
+                let key = i.key.clone();
+                self.spawn_write(move |c, tx| {
+                    let _ = tx.send(Msg::Done { key: key.clone(), what: "Label", result: c.update_fields(&key, fields) });
+                });
+            }
             Action::SetQuick(q) => {
                 self.filter.quick = q;
                 match q.and_then(|i| self.cfg.issues.filters.get(i)) {
@@ -882,7 +910,13 @@ impl App {
         if shortcut(Modifiers::SHIFT, Key::K) {
             self.actions.push(Action::Rank(-1));
         }
-        for (k, a) in [(Key::T, Action::OpenTransition), (Key::A, Action::OpenAssign), (Key::S, Action::OpenSprint), (Key::E, Action::OpenEdit)] {
+        for (k, a) in [
+            (Key::T, Action::OpenTransition),
+            (Key::A, Action::OpenAssign),
+            (Key::S, Action::OpenSprint),
+            (Key::E, Action::OpenEdit),
+            (Key::L, Action::ApplyTeamLabel),
+        ] {
             if shortcut(Modifiers::NONE, k) {
                 self.actions.push(a);
             }
@@ -952,6 +986,16 @@ fn edit_fields(labels: &str, priority: &str, points: &str, orig_labels: &str, or
         fields.insert(jira::POINTS_FIELD.into(), serde_json::json!(n));
     }
     (!fields.is_empty()).then_some(serde_json::Value::Object(fields))
+}
+
+/// The `fields` body that adds `label` to `labels`; None when it is already there.
+fn add_label_fields(labels: &[String], label: &str) -> Option<serde_json::Value> {
+    if labels.iter().any(|l| l == label) {
+        return None;
+    }
+    let mut all = labels.to_vec();
+    all.push(label.to_string());
+    Some(serde_json::json!({ "labels": all }))
 }
 
 /// A load starts only with a client to run it and none already in flight;
@@ -1129,6 +1173,14 @@ mod tests {
         let f = edit_fields("a, b", "Low", "3", "a, b", "Low", "3");
         assert_eq!(f, None, "nothing changed");
         assert_eq!(edit_fields("a, b", "Low", "5", "a, b", "Low", "3"), Some(serde_json::json!({ "customfield_10016": 5.0 })));
+    }
+
+    #[test]
+    fn add_label_keeps_existing_labels() {
+        let labels = ["infra".to_string()];
+        assert_eq!(add_label_fields(&labels, "PLAT"), Some(serde_json::json!({ "labels": ["infra", "PLAT"] })));
+        assert_eq!(add_label_fields(&[], "PLAT"), Some(serde_json::json!({ "labels": ["PLAT"] })));
+        assert_eq!(add_label_fields(&["PLAT".to_string()], "PLAT"), None);
     }
 
     #[test]
