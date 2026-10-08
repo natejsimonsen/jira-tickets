@@ -72,8 +72,9 @@ pub fn show(app: &mut App, ui: &mut Ui) {
         .frame(Frame::new().fill(p.surface).inner_margin(Margin::symmetric(16, 0)).stroke(Stroke::new(1.0, p.border)))
         .show(ui, |ui| {
             ui.horizontal_centered(|ui| {
-                let hint = crate::keys::hints(app.picker.is_some(), app.selected.is_some(), app.goto.is_some() || ui.ctx().text_edit_focused());
-                ui.label(RichText::new(hint).font(theme::mono(12.0)).color(p.muted));
+                let edit = app.picker.as_ref().map(|pk| matches!(pk, crate::app::Picker::Edit { .. }));
+                let c = crate::keys::hint_context(app.help_open, app.goto.is_some(), edit, app.selected.is_some(), ui.ctx().text_edit_focused());
+                hint_bar(ui, crate::keys::hints(c), p);
             });
         });
     egui::Panel::left("issue-list")
@@ -382,6 +383,47 @@ fn row_pill(ui: &mut Ui, text: &str, bg: egui::Color32, fg: egui::Color32, outli
     } else {
         pill(ui, text, bg, fg);
     }
+}
+
+/// Keys in mono 12.5 `text`, words in 12 `muted`, " · " between hints; elided from the right with "…".
+fn hint_bar(ui: &mut Ui, hs: &[crate::keys::Hint], p: &Palette) {
+    use crate::keys::Tok;
+    use egui::text::LayoutJob;
+    let fmt = |t: &Tok| match t {
+        Tok::K(_) => egui::TextFormat { font_id: theme::mono(12.5), color: p.text, ..Default::default() },
+        Tok::W(_) => egui::TextFormat { font_id: theme::body(12.0), color: p.muted, ..Default::default() },
+    };
+    let muted = egui::TextFormat { font_id: theme::body(12.0), color: p.muted, ..Default::default() };
+    let hint_job = |h: &[Tok]| {
+        let mut job = LayoutJob::default();
+        for (i, t) in h.iter().enumerate() {
+            let (Tok::K(s) | Tok::W(s)) = t;
+            job.append(s, if i > 0 { 4.0 } else { 0.0 }, fmt(t));
+        }
+        job
+    };
+    let width = |job: LayoutJob| ui.fonts_mut(|f| f.layout_job(job)).size().x;
+    let one = |s: &str| {
+        let mut j = LayoutJob::default();
+        j.append(s, 0.0, muted.clone());
+        j
+    };
+    let widths: Vec<f32> = hs.iter().map(|h| width(hint_job(h))).collect();
+    let (n, elided) = crate::keys::fit_hints(&widths, width(one(" · ")), width(one("…")), ui.available_width());
+    let mut job = LayoutJob::default();
+    for (i, h) in hs.iter().take(n).enumerate() {
+        if i > 0 {
+            job.append(" · ", 0.0, muted.clone());
+        }
+        for (j, t) in h.iter().enumerate() {
+            let (Tok::K(s) | Tok::W(s)) = t;
+            job.append(s, if j > 0 { 4.0 } else { 0.0 }, fmt(t));
+        }
+    }
+    if elided {
+        job.append(if n > 0 { " · …" } else { "…" }, 0.0, muted);
+    }
+    ui.add(egui::Label::new(job).selectable(false).wrap_mode(egui::TextWrapMode::Extend));
 }
 
 fn goto_box(app: &mut App, ctx: &egui::Context, p: &Palette) {

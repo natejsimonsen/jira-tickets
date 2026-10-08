@@ -48,28 +48,27 @@ Only a token you paste is saved. Signing out deletes that file.
 | `?` | Show or hide this help |
 | **Issues** | |
 | `⌘K` | Go to an issue by key, number, or link |
-| `Esc` | Close the go-to box |
-| `⌘F` or `/` | Focus search |
-| `j` or `↓` | Next issue |
-| `k` or `↑` | Previous issue |
+| `Esc` | Close the go-to box or dialog |
+| `⌘F` or `/` | Focus search (Esc clears, then leaves it) |
+| `j/k` or `↓/↑` | Next or previous issue |
 | `t` | Transition |
 | `a` | Assign |
 | `s` | Sprint |
 | `e` | Edit labels, priority, points |
 | `l` | Add the picked team's label |
 | `m` | Toggle Roadmap filter |
-| `J` or `K` | Move down (J) or up (K) in rank |
+| `J/K` | Move down or up in rank |
 | `c` | Copy the issue link |
 | `⌘O` | Open in Jira |
 | `⌘Enter` | Post the comment (composer focused) |
 | **Pickers** | |
-| `↑` or `↓` | Move |
-| `j` or `k` | Move (not in Assign) |
+| `↑/↓` | Move |
+| `j/k` | Move (not in Assign) |
 | `Enter` | Confirm |
 | `Esc` | Cancel |
 <!-- keys:end -->
 
-Only `⌘1`–`⌘4`, `⌘R`, `⌘W`, and `?` work on every screen. The rest are bound on the Issues screen only. Plain keys (letters, `/`, `?`) do nothing while a text field has focus. While a picker is open, only `Esc`, the arrow keys (and `j` / `k`, except in the Assign picker), and `Enter` apply; `?` also works while a picker without a text field is open. Selecting a row shows its detail. `?` (or the "? help" pill in the header) opens this list in the app, and on the Issues screen a bar at the bottom shows the keys that apply right now. While the help is open only the global keys apply; `?` or `Esc` closes it.
+Only `⌘1`–`⌘4`, `⌘R`, `⌘W`, and `?` work on every screen. The rest are bound on the Issues screen only. Plain keys (letters, `/`, `?`) do nothing while a text field has focus. While a picker is open, only `Esc`, the arrow keys (and `j` / `k`, except in the Assign picker), and `Enter` apply; `?` also works while a picker without a text field is open. Selecting a row shows its detail. `?` (or the "?" button in the header) opens this list in the app, and on the Issues screen a bar at the bottom shows the keys that apply right now. While the help is open only the global keys apply; `?` or `Esc` closes it.
 
 Above the Issues list are a team picker, an epic picker, a sprint picker, the config's quick filters, a Mine toggle, a Roadmap toggle, and the search box. The Roadmap toggle (`m`) shows only tickets under epics labelled `roadmap`; epics themselves are containers and never appear in the list. The sprint picker offers All sprints, the board's active and future sprints, and Backlog (issues in no open sprint). It starts on the active sprint, or All sprints if the board has none.
 
