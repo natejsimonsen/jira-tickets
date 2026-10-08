@@ -89,10 +89,14 @@ pub fn header_syncing<'a>(lists: impl IntoIterator<Item = (&'a crate::store::Lis
     lists.into_iter().any(|(id, l)| *id != crate::store::ListId::Search && l.loading)
 }
 
-/// One spinner per operation: (header, count row). A header refresh (⌘R, and the sync after a write) spins
-/// the header only, including the quick-filter search it reruns; a search started from the filters or the
-/// search box spins the count row only.
-pub fn spinner_slots(lists_syncing: bool, search_pending: bool, search_from_refresh: bool) -> (bool, bool) {
+/// One spinner per operation: (header, count row). A first load (nothing on screen yet, whatever started it)
+/// is the count row's: "⟳ Loading issues…", and the header stays still. Otherwise a header refresh (⌘R, and
+/// the sync after a write) spins the header only, including the quick-filter search it reruns; a search
+/// started from the filters or the search box spins the count row only.
+pub fn spinner_slots(lists_syncing: bool, search_pending: bool, search_from_refresh: bool, first_load: bool) -> (bool, bool) {
+    if first_load {
+        return (false, true);
+    }
     (lists_syncing || (search_pending && search_from_refresh), search_pending && !search_from_refresh)
 }
 
@@ -151,7 +155,8 @@ fn header(app: &mut App, ui: &mut Ui, p: &Palette) {
                     }
                 }
                 // One fixed 32×32 slot: the spinner replaces the button at the same size.
-                if spinner_slots(header_syncing(&app.lists), app.search_pending.is_some(), app.search_from_refresh).0 {
+                let first_load = app.screen == Screen::Issues && issues::first_load(app);
+                if spinner_slots(header_syncing(&app.lists), app.search_pending.is_some(), app.search_from_refresh, first_load).0 {
                     icons::spinner_button(ui, p);
                 } else if icons::icon_button(ui, icons::Icon::Sync, "Refresh (⌘R)", p).clicked() {
                     app.actions.push(Action::Refresh);
@@ -727,10 +732,12 @@ mod widget_tests {
 
     #[test]
     fn one_spinner_per_operation() {
-        assert_eq!(spinner_slots(true, false, false), (true, false), "⌘R: header");
-        assert_eq!(spinner_slots(true, true, true), (true, false), "⌘R with a quick filter: header only");
-        assert_eq!(spinner_slots(false, true, false), (false, true), "filter or JQL: count row only");
-        assert_eq!(spinner_slots(false, false, false), (false, false));
+        assert_eq!(spinner_slots(true, false, false, false), (true, false), "⌘R: header");
+        assert_eq!(spinner_slots(true, true, true, false), (true, false), "⌘R with a quick filter: header only");
+        assert_eq!(spinner_slots(false, true, false, false), (false, true), "filter or JQL: count row only");
+        assert_eq!(spinner_slots(false, false, false, false), (false, false));
+        assert_eq!(spinner_slots(true, true, false, true), (false, true), "filtered first load: the count row only");
+        assert_eq!(spinner_slots(true, false, false, true), (false, true), "first load: the count row only");
     }
 
     #[test]

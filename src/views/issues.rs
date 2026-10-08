@@ -433,11 +433,18 @@ pub fn count_label(shown: usize, total: Option<usize>, loading_first: bool, jql:
     if jql { format!("{base} · JQL") } else { base }
 }
 
-/// Whether the count says "· JQL". While a search is in flight the count keeps the context of the rows on
-/// screen and also names the target: "· JQL" when either the rows came from typed JQL or the pending search
-/// is typed JQL. Once it lands, only when the rows came from a typed search.
-pub fn count_shows_jql(pending: bool, typed_search: bool, typed_shown: bool) -> bool {
-    if pending { typed_shown || typed_search } else { typed_search && typed_shown }
+/// Whether the count says "· JQL": only when the rows on screen are an accepted typed-JQL result. In flight
+/// the count keeps the label of the rows it counts, verbatim, so a pending JQL search over plain rows adds
+/// no suffix and a pending quick filter over JQL rows keeps it until its own result lands.
+pub fn count_shows_jql(typed_shown: bool, showing_search_result: bool) -> bool {
+    typed_shown && showing_search_result
+}
+
+/// Nothing on screen yet while the list (or a search) loads: the count row shows "⟳ Loading issues…".
+pub fn first_load(app: &App) -> bool {
+    let pending = app.search_pending.is_some();
+    let loading = app.lists.get(&app.rows_list()).is_some_and(|l| l.loading);
+    (pending || loading) && current_rows(app).is_empty()
 }
 
 /// The count's colour: `text` when it is current, `muted` while a request will replace it.
@@ -475,22 +482,32 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
     let pending = app.search_pending.is_some();
     let updating = pending || loaded.is_some_and(|l| l.loading);
     let loading_first = updating && rows.is_empty();
-    // The header spins for a refresh; the count row only for a search started here.
-    let row_spinner = crate::views::spinner_slots(false, pending, app.search_from_refresh).1;
+    // One spinner per operation (`spinner_slots`): the header for a refresh, the count row for a first load or
+    // a search started here.
+    let syncing = crate::views::header_syncing(&app.lists);
+    let row_spinner = crate::views::spinner_slots(syncing, pending, app.search_from_refresh, loading_first).1;
     let text_filter = !app.filter.text.trim().is_empty() && !filter::looks_like_jql(&app.filter.text);
     let total = text_filter.then(|| rows_without_text_filter(app));
-    let label = count_label(rows.len(), total, loading_first, count_shows_jql(pending, app.typed_search, app.typed_shown));
+    let showing_search = src == ListId::Search && app.store.lists.contains_key(&ListId::Search);
+    let label = count_label(rows.len(), total, loading_first, count_shows_jql(app.typed_shown, showing_search));
     let box_text = !app.filter.text.trim().is_empty() || (app.typed_search && app.search_active);
     let show_clear = clear_visible(app.filter.quick.is_some(), app.filter.mine, app.filter.roadmap, box_text);
     ui.allocate_ui_with_layout(vec2(ui.available_width(), crate::views::BUTTON_H), egui::Layout::left_to_right(egui::Align::Center), |ui| {
         ui.set_min_height(crate::views::BUTTON_H);
-        ui.spacing_mut().item_spacing.x = 8.0;
-        // "Loading issues…" and "Updating…" share one style: muted 12, the spinner 8 px after the count.
+        // 7 in code reads as 8 ink to ink: the 12 px text's side bearing adds about 1.
+        ui.spacing_mut().item_spacing.x = COUNT_GAP;
+        // One pattern, muted 12, the spinner before the verb: "[count] ⟳ Updating…", or "⟳ Loading issues…"
+        // when there is nothing to count yet.
         let color = if loading_first { p.muted } else { count_color(updating, p) };
-        ui.label(RichText::new(label).color(color).size(12.0));
-        if row_spinner {
-            crate::views::icons::spinner(ui, crate::views::icons::INLINE_SPINNER, p);
-            if !loading_first {
+        if loading_first {
+            if row_spinner {
+                crate::views::icons::spinner(ui, crate::views::icons::INLINE_SPINNER, p);
+            }
+            ui.label(RichText::new(label).color(color).size(12.0));
+        } else {
+            ui.label(RichText::new(label).color(color).size(12.0));
+            if row_spinner {
+                crate::views::icons::spinner(ui, crate::views::icons::INLINE_SPINNER, p);
                 ui.label(RichText::new("Updating…").color(p.muted).size(12.0));
             }
         }
@@ -662,6 +679,8 @@ pub fn fade_strip(rows: &[(f32, f32)], edge: f32, bottom: bool) -> Option<(f32, 
     if bottom { (bot - edge > CLIP_MIN).then(|| (top.max(edge - FADE_MAX), edge)) } else { (edge - top > CLIP_MIN).then(|| (edge, bot.min(edge + FADE_MAX))) }
 }
 
+/// Between the count row's parts.
+const COUNT_GAP: f32 = 7.0;
 /// Count row → first card.
 const COUNT_TO_ROWS: f32 = 4.0;
 /// Space between a row's pills.
@@ -833,11 +852,11 @@ mod tests {
 
     #[test]
     fn jql_suffix_waits_for_the_result() {
-        assert!(count_shows_jql(true, true, false), "typed search pending over plain rows: names the target");
-        assert!(count_shows_jql(true, false, true), "a pending search over typed rows keeps \"· JQL\"");
-        assert!(count_shows_jql(false, true, true), "landed");
-        assert!(!count_shows_jql(false, false, true), "cleared");
-        assert!(!count_shows_jql(false, true, false), "never landed");
+        assert!(!count_shows_jql(false, false), "a typed search pending over plain rows: the old label, verbatim");
+        assert!(count_shows_jql(true, true), "a pending quick filter over JQL rows: still JQL rows");
+        assert!(count_shows_jql(true, true), "landed");
+        assert!(!count_shows_jql(false, true), "a quick filter's result");
+        assert!(!count_shows_jql(true, false), "the search failed and its rows are gone");
     }
 
     #[test]
