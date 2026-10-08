@@ -193,6 +193,8 @@ fn visuals(p: &Palette) -> Visuals {
     v.faint_bg_color = p.surface_2;
     v.override_text_color = Some(p.text);
     v.hyperlink_color = p.accent;
+    // Hint (placeholder) text uses this; egui's default fades `text`, which drops below 4.5:1 in light.
+    v.weak_text_color = Some(p.muted);
     v.selection.bg_fill = p.selected_row;
     v.widgets.noninteractive.bg_stroke = Stroke::new(1.0, p.border);
     v.widgets.inactive.bg_fill = p.surface_2;

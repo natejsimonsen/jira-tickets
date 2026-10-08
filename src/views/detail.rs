@@ -80,6 +80,8 @@ pub fn show(app: &mut App, ui: &mut Ui) {
                 }
                 ui.add_space(SECTION_GAP);
                 section_heading(ui, p, &format!("Comments ({})", issue.comments.len()));
+                // The comment cards and the composer sit 16 below their label (8 already given).
+                ui.add_space(LABEL_TO_BOX - 8.0 - ui.spacing().item_spacing.y);
                 for c in &issue.comments {
                     Frame::new().fill(p.bg).stroke(Stroke::new(1.0, p.border)).corner_radius(6).inner_margin(Margin::same(12)).show(ui, |ui| {
                         ui.set_width(ui.available_width());
@@ -116,6 +118,8 @@ pub fn show(app: &mut App, ui: &mut Ui) {
 const TITLE_TO_PILLS: f32 = 12.0;
 /// Pills → Description, Description → Comments.
 const SECTION_GAP: f32 = 24.0;
+/// Section label → the comment cards or composer box.
+const LABEL_TO_BOX: f32 = 16.0;
 /// The composer's fixed height.
 const COMPOSER_H: f32 = 72.0;
 

@@ -95,8 +95,10 @@ flow issues-goto 'key:cmd+k;shot:01-box.png;type:CI-1860;shot:02-typed.png;key:e
 flow issues-detail 'key:j;key:j;wait:1500;shot:01-detail.png;key:j;wait:1500;shot:02-detail-next.png' \
     '01-detail.png|Second row selected, detail pane loaded' \
     '02-detail-next.png|Next row selected, detail pane follows'
-flow issues-composer 'key:j;wait:1500;click:Add a comment;type:This is a draft comment that will not be posted;shot:01-draft.png' \
-    '01-draft.png|Comment composer with an unposted draft'
+# The issues-detail-01 issue (second row): its description is short, so the composer is on screen.
+flow issues-composer 'key:j;key:j;wait:1500;shot:00-rest.png;click:Add a comment;type:This is a draft comment that will not be posted;wait:200;shot:01-draft.png' \
+    '00-rest.png|Composer at rest (hint text, disabled Comment)' \
+    '01-draft.png|Comment composer focused with an unposted draft (Comment enabled)'
 flow pickers-transition 'key:j;wait:800;key:t;wait:1500;shot:01-open.png;key:down;shot:02-moved.png;key:enter;wait:800;shot:03-readonly-toast.png' \
     '01-open.png|Transition picker open' \
     '02-moved.png|Transition picker cursor moved down' \
