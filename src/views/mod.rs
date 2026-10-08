@@ -31,8 +31,30 @@ pub fn placeholder_text(tab: &str) -> String {
 }
 
 fn placeholder(ui: &mut Ui, p: &Palette, tab: &str) {
-    ui.centered_and_justified(|ui| {
+    centred(ui, "placeholder", |ui| {
         ui.label(RichText::new(placeholder_text(tab)).color(p.muted).size(14.0));
+    });
+}
+
+/// The top space that centres `content_h` in `avail_h` (never negative).
+pub fn centre_top(avail_h: f32, content_h: f32) -> f32 {
+    ((avail_h - content_h) / 2.0).max(0.0).round()
+}
+
+/// The one centring rule (placeholders, sign-in): `content` centred horizontally and vertically in the
+/// space left, using its height from the previous frame.
+fn centred(ui: &mut Ui, id: &str, content: impl FnOnce(&mut Ui)) {
+    let id = egui::Id::new(("centred", id));
+    let last_h: f32 = ui.data(|d| d.get_temp(id)).unwrap_or(0.0);
+    ui.vertical_centered(|ui| {
+        ui.add_space(centre_top(ui.available_height(), last_h));
+        let top = ui.cursor().top();
+        content(ui);
+        let h = ui.min_rect().bottom() - top;
+        if (h - last_h).abs() > 0.5 {
+            ui.ctx().request_repaint();
+        }
+        ui.data_mut(|d| d.insert_temp(id, h));
     });
 }
 
@@ -166,19 +188,44 @@ pub fn sign_in_lead(token_error: Option<&str>) -> (&str, bool) {
     }
 }
 
+/// The sign-in aside: prose in muted 12 and the identifiers in mono 12.5, on one line.
+fn sign_in_aside(p: &Palette) -> egui::text::LayoutJob {
+    let mut job = egui::text::LayoutJob::default();
+    let prose = egui::TextFormat { font_id: theme::body(12.0), color: p.muted, ..Default::default() };
+    let code = egui::TextFormat { font_id: theme::mono(12.5), color: p.muted, ..Default::default() };
+    for (i, part) in SIGN_IN_ASIDE.iter().enumerate() {
+        job.append(part, 0.0, if i % 2 == 1 { code.clone() } else { prose.clone() });
+    }
+    job
+}
+
+/// Alternating prose and identifiers.
+pub const SIGN_IN_ASIDE: [&str; 7] = ["Or set ", "JIRA_API_TOKEN", " or ", "api_token", " in ", "config.toml", ", then Check again"];
+
+/// The sign-in panel's content width: 380, or the aside's one-line width when wider.
+pub fn sign_in_width(aside_w: f32) -> f32 {
+    aside_w.ceil().max(380.0)
+}
+
 pub fn sign_in(app: &mut App, ui: &mut Ui) {
     let p = theme::palette(ui.ctx());
-    ui.vertical_centered(|ui| {
-        ui.add_space((ui.available_height() / 2.0 - 160.0).max(40.0));
-        if app.finding_token {
+    if app.finding_token {
+        centred(ui, "finding-token", |ui| {
             icons::spinner(ui, 20.0, p);
             ui.add_space(8.0);
             ui.label(RichText::new("Looking for your Jira token…").color(p.muted));
-            return;
-        }
+        });
+        return;
+    }
+    let aside = sign_in_aside(p);
+    let aside_w = ui.fonts_mut(|f| f.layout_job(aside.clone())).size().x;
+    centred(ui, "sign-in", |ui| {
         Frame::new().fill(p.surface).stroke(Stroke::new(1.0, p.border)).corner_radius(6).inner_margin(Margin::same(16)).show(ui, |ui| {
-            ui.set_width(380.0);
+            let w = sign_in_width(aside_w);
+            ui.set_width(w);
             ui.vertical(|ui| {
+                // Every gap is explicit: 16 title → body, 8 body → aside, 16 aside → field, 12 → button, 8 → Check again.
+                ui.spacing_mut().item_spacing.y = 0.0;
                 ui.label(RichText::new("Sign in to Jira").font(theme::bold(22.0)).color(p.text));
                 ui.add_space(16.0);
                 let (lead, is_error) = sign_in_lead(app.token_error.as_deref());
@@ -202,17 +249,10 @@ pub fn sign_in(app: &mut App, ui: &mut Ui) {
                         app.actions.push(Action::SignOut);
                     }
                 }
-                ui.add_space(4.0);
-                ui.label(RichText::new("Or set JIRA_API_TOKEN, or api_token in config.toml, then choose Check again.").size(12.0).color(p.muted));
-                ui.add_space(12.0);
-                let r = ui.add(
-                    egui::TextEdit::singleline(&mut app.token_input)
-                        .id(egui::Id::new("token-input"))
-                        .password(true)
-                        .hint_text(RichText::new("API token").color(p.muted))
-                        .desired_width(f32::INFINITY)
-                        .margin(vec2(8.0, 6.0)),
-                );
+                ui.add_space(8.0);
+                ui.add(egui::Label::new(aside).extend());
+                ui.add_space(16.0);
+                let r = ui.add(input_field(&mut app.token_input, "API token", theme::body(14.0), p).id(egui::Id::new("token-input")).password(true));
                 if ui.memory(|m| m.focused().is_none()) {
                     r.request_focus();
                 }
@@ -220,7 +260,6 @@ pub fn sign_in(app: &mut App, ui: &mut Ui) {
                     app.actions.push(Action::SubmitToken);
                 }
                 ui.add_space(12.0);
-                let w = ui.available_width();
                 if ui.add_sized([w, BUTTON_H], primary_button("Sign in", p)).clicked() {
                     app.actions.push(Action::SubmitToken);
                 }
@@ -542,6 +581,20 @@ mod widget_tests {
         assert_eq!(truncate_text("abcdefgh", 5.0, w), "abcd…");
         assert_eq!(truncate_text("abc", 0.0, w), "…");
         assert_eq!(truncate_text("ééééé", 3.0, w), "éé…", "char boundaries");
+    }
+
+    #[test]
+    fn one_centring_rule() {
+        assert_eq!(centre_top(800.0, 300.0), 250.0);
+        assert_eq!(centre_top(100.0, 300.0), 0.0, "never negative");
+        assert_eq!(centre_top(801.0, 300.0), 251.0, "whole pixels");
+    }
+
+    #[test]
+    fn sign_in_aside_reads_as_one_sentence() {
+        assert_eq!(SIGN_IN_ASIDE.concat(), "Or set JIRA_API_TOKEN or api_token in config.toml, then Check again");
+        assert_eq!(sign_in_width(300.0), 380.0);
+        assert_eq!(sign_in_width(452.3), 453.0, "the aside fits on one line");
     }
 
     #[test]
