@@ -20,7 +20,9 @@ pub fn show(app: &mut App, ui: &mut Ui) {
     };
     let loading = app.detail_loading.contains(&key);
     egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-        ui.horizontal(|ui| {
+        // One row the buttons' height, everything centred on it, so the key line sits level with the buttons.
+        ui.allocate_ui_with_layout(vec2(ui.available_width(), crate::views::BUTTON_H), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+            ui.set_min_height(crate::views::BUTTON_H);
             ui.label(RichText::new(&issue.key).font(theme::mono(13.0)).color(p.muted));
             if let (Some(pk), Some(ps)) = (&issue.parent_key, &issue.parent_summary) {
                 ui.label(RichText::new("·").color(p.muted));
@@ -63,8 +65,9 @@ pub fn show(app: &mut App, ui: &mut Ui) {
             }
         });
         ui.add_space(SECTION_GAP);
+        let window_w = ui.ctx().content_rect().width();
         ui.horizontal_top(|ui| {
-            let main_w = (ui.available_width() - 260.0).max(360.0);
+            let (main_w, fields_w) = detail_columns(window_w, ui.available_width());
             ui.allocate_ui_with_layout(vec2(main_w, 0.0), egui::Layout::top_down(egui::Align::Min), |ui| {
                 ui.set_width(main_w);
                 section_heading(ui, p, "Description");
@@ -92,9 +95,10 @@ pub fn show(app: &mut App, ui: &mut Ui) {
                 ui.add_space(4.0);
                 composer(app, ui, p, &key);
             });
-            ui.add_space(16.0);
+            ui.add_space(FIELDS_GUTTER);
             ui.vertical(|ui| {
-                ui.set_width(220.0);
+                ui.set_width(fields_w);
+                ui.spacing_mut().item_spacing.y = 0.0;
                 field(ui, p, "Assignee", &issue.assignee.as_ref().map(|a| a.display_name.clone()).unwrap_or("Unassigned".into()));
                 field(ui, p, "Reporter", &issue.reporter.as_ref().map(|a| a.display_name.clone()).unwrap_or_default());
                 field(ui, p, "Sprint", issue.sprint.as_deref().unwrap_or("—"));
@@ -157,11 +161,22 @@ fn composer(app: &mut App, ui: &mut Ui, p: &Palette, key: &str) {
     });
 }
 
+/// Label, 4, value, then 16 to the next group.
 fn field(ui: &mut Ui, p: &Palette, name: &str, value: &str) {
     ui.label(RichText::new(name).font(theme::bold(12.0)).color(p.muted));
     ui.add_space(4.0);
     ui.label(RichText::new(if value.is_empty() { "—" } else { value }).size(14.0).color(p.text));
-    ui.add_space(12.0);
+    ui.add_space(16.0);
+}
+
+/// Gap between the description column and the fields column.
+const FIELDS_GUTTER: f32 = 16.0;
+
+/// (main column, fields column) widths: fields are 220 wide, or 140 below a 1200 px window so the
+/// description keeps its measure; the main column takes the rest (at least 300).
+pub fn detail_columns(window_w: f32, available: f32) -> (f32, f32) {
+    let fields = if window_w < 1200.0 { 140.0 } else { 220.0 };
+    ((available - fields - FIELDS_GUTTER).max(300.0), fields)
 }
 
 /// The Comment button and ⌘Enter work when the draft has text and no post is in flight.
@@ -180,6 +195,13 @@ pub fn short_date(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fields_column_narrows_below_1200() {
+        assert_eq!(detail_columns(1440.0, 800.0), (564.0, 220.0));
+        assert_eq!(detail_columns(1000.0, 580.0), (424.0, 140.0));
+        assert_eq!(detail_columns(1000.0, 300.0).0, 300.0, "floor");
+    }
 
     #[test]
     fn comment_enabled_needs_text_and_idle() {

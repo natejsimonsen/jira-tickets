@@ -16,6 +16,15 @@ pub fn show_value(ui: &mut Ui, v: &serde_json::Value, p: &Palette) {
 
 /// Space after a paragraph (or any block).
 const BLOCK_GAP: f32 = 12.0;
+/// The one gap between list items.
+const LIST_ITEM_GAP: f32 = 4.0;
+const BODY: f32 = 14.0;
+/// The bullet's slot: about a numeral's width, so bulleted and numbered text line up.
+const BULLET_W: f32 = 10.0;
+/// Inline code is this fraction of the surrounding size (headings included).
+const CODE_SCALE: f32 = 0.9;
+/// Horizontal room either side of inline code.
+const CODE_PAD_X: f32 = 2.0;
 
 /// Space above a heading: 24 except at the top, where the section heading already spaced it.
 pub fn heading_space_above(first: bool) -> f32 {
@@ -23,6 +32,12 @@ pub fn heading_space_above(first: bool) -> f32 {
 }
 
 pub fn show(ui: &mut Ui, doc: &adf::Doc, p: &Palette) {
+    ui.scope(|ui| show_blocks(ui, doc, p));
+}
+
+fn show_blocks(ui: &mut Ui, doc: &adf::Doc, p: &Palette) {
+    // Every gap below is explicit; no implicit item spacing on top of it.
+    ui.spacing_mut().item_spacing.y = 0.0;
     let n = doc.blocks.len();
     for (i, b) in doc.blocks.iter().enumerate() {
         if matches!(b, Block::Heading { .. }) {
@@ -49,12 +64,26 @@ fn block(ui: &mut Ui, b: &Block, p: &Palette, size: f32) {
         }
         Block::List { ordered, items } => {
             for (i, item) in items.iter().enumerate() {
+                if i > 0 {
+                    ui.add_space(LIST_ITEM_GAP);
+                }
                 ui.horizontal_top(|ui| {
+                    ui.spacing_mut().item_spacing.x = 6.0;
                     ui.add_space(8.0);
-                    let marker = if *ordered { format!("{}.", i + 1) } else { "•".to_string() };
-                    ui.label(RichText::new(marker).color(p.muted).size(size));
+                    // The marker is body size and muted whatever the item's own font (mono items included).
+                    let line_h = ui.fonts_mut(|f| f.row_height(&theme::body(BODY)));
+                    if *ordered {
+                        ui.label(RichText::new(format!("{}.", i + 1)).color(p.muted).font(theme::body(BODY)));
+                    } else {
+                        let (rect, _) = ui.allocate_exact_size(egui::vec2(BULLET_W, line_h), egui::Sense::hover());
+                        ui.painter().circle_filled(rect.center(), 2.5, p.muted);
+                    }
                     ui.vertical(|ui| {
-                        for ib in item {
+                        ui.spacing_mut().item_spacing.y = 0.0;
+                        for (j, ib) in item.iter().enumerate() {
+                            if j > 0 {
+                                ui.add_space(LIST_ITEM_GAP);
+                            }
                             block(ui, ib, p, size);
                         }
                     });
@@ -111,11 +140,14 @@ fn block(ui: &mut Ui, b: &Block, p: &Palette, size: f32) {
 }
 
 /// The text format one span is painted with. Links are accent, underlined only while `hovered`.
-/// Inline code is the mono face alone, no background.
+/// Inline code is mono at 0.9× the surrounding size on a `surface_2` wash.
 fn span_format(sp: &Span, p: &Palette, size: f32, heading: bool, hovered: bool) -> TextFormat {
     let mut fmt = TextFormat { font_id: if sp.bold || heading { theme::bold(size) } else { theme::body(size) }, color: p.text, ..Default::default() };
     if sp.code {
-        fmt.font_id = theme::mono(size - 1.5);
+        fmt.font_id = theme::mono((size * CODE_SCALE * 2.0).round() / 2.0);
+        fmt.background = p.surface_2;
+        // Centre the smaller mono run on the surrounding text's line.
+        fmt.valign = egui::Align::Center;
     }
     if sp.italic {
         fmt.italics = true;
@@ -138,8 +170,11 @@ fn spans(ui: &mut Ui, s: &[Span], p: &Palette, size: f32, heading: bool) {
     // The label's id is the next auto id; last frame's hover decides the underline.
     let hovered = has_link && ui.ctx().read_response(ui.next_auto_id()).is_some_and(|r| r.hovered());
     let mut job = LayoutJob::default();
-    for sp in &s {
-        job.append(&sp.text, 0.0, span_format(sp, p, size, heading, hovered));
+    for (i, sp) in s.iter().enumerate() {
+        // 2 px either side of inline code: before it, and before whatever follows it.
+        let after_code = i > 0 && s[i - 1].code;
+        let pad = if sp.code || after_code { CODE_PAD_X } else { 0.0 };
+        job.append(&sp.text, pad, span_format(sp, p, size, heading, hovered));
     }
     let sense = if has_link { egui::Sense::click() } else { egui::Sense::hover() };
     let r = ui.add(egui::Label::new(job).wrap().sense(sense));
@@ -202,8 +237,9 @@ mod tests {
         assert_eq!(span_format(&span("h"), &p, 18.0, true, false).font_id, theme::bold(18.0));
 
         let code = span_format(&Span { code: true, ..span("c") }, &p, 14.0, false, false);
-        assert_eq!(code.font_id, theme::mono(12.5));
-        assert_eq!(code.background, Color32::TRANSPARENT, "inline code is the mono face only");
+        assert_eq!(code.font_id, theme::mono(12.5), "0.9 × 14, to the half point");
+        assert_eq!(code.background, p.surface_2);
+        assert_eq!(span_format(&Span { code: true, ..span("c") }, &p, 18.0, true, false).font_id, theme::mono(16.0), "scales in headings");
 
         let styled = span_format(&Span { italic: true, strike: true, ..span("s") }, &p, 14.0, false, false);
         assert!(styled.italics);
