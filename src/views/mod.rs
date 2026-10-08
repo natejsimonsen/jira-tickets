@@ -65,6 +65,13 @@ pub fn header_syncing<'a>(lists: impl IntoIterator<Item = (&'a crate::store::Lis
     lists.into_iter().any(|(id, l)| *id != crate::store::ListId::Search && l.loading)
 }
 
+/// One spinner per operation: (header, count row). A header refresh (⌘R, and the sync after a write) spins
+/// the header only, including the quick-filter search it reruns; a search started from the filters or the
+/// search box spins the count row only.
+pub fn spinner_slots(lists_syncing: bool, search_pending: bool, search_from_refresh: bool) -> (bool, bool) {
+    (lists_syncing || (search_pending && search_from_refresh), search_pending && !search_from_refresh)
+}
+
 fn header(app: &mut App, ui: &mut Ui, p: &Palette) {
     let panel = egui::Panel::top("header").exact_size(48.0).frame(Frame::new().fill(p.surface).inner_margin(Margin::symmetric(16, 0))).show(ui, |ui| {
         ui.horizontal_centered(|ui| {
@@ -118,7 +125,7 @@ fn header(app: &mut App, ui: &mut Ui, p: &Palette) {
                     }
                 }
                 // One fixed 32×32 slot: the spinner replaces the button at the same size.
-                if header_syncing(&app.lists) {
+                if spinner_slots(header_syncing(&app.lists), app.search_pending.is_some(), app.search_from_refresh).0 {
                     icons::spinner_button(ui, p);
                 } else if icons::icon_button(ui, icons::Icon::Sync, "Refresh (⌘R)", p).clicked() {
                     app.actions.push(Action::Refresh);
@@ -242,9 +249,20 @@ pub fn toast_offset(hint_bar: Option<f32>) -> f32 {
     hint_bar.map_or(24.0, |h| h + 16.0)
 }
 
-/// The toast's dot. The toast is a dark fill in both themes, so the dot takes the dark palette's health tokens.
-pub fn toast_dot(error: bool) -> Color32 {
-    if error { theme::DARK.off_track } else { theme::DARK.on_track }
+/// The toast's dot: green for done, the accent for a notice (read-only refusals), red only for failures.
+/// The toast is a dark fill in both themes, so the dot takes the dark palette's tokens.
+pub fn toast_dot(kind: crate::app::ToastKind) -> Color32 {
+    match kind {
+        crate::app::ToastKind::Success => theme::DARK.on_track,
+        crate::app::ToastKind::Info => theme::DARK.accent,
+        crate::app::ToastKind::Error => theme::DARK.off_track,
+    }
+}
+
+/// The toast's x offset from the window's centre: centred over the detail pane when one shows (so it never
+/// covers the list's last row), else over the window.
+pub fn toast_x_offset(window_w: f32, detail: Option<(f32, f32)>) -> f32 {
+    detail.map_or(0.0, |(l, r)| ((l + r) / 2.0 - window_w / 2.0).round())
 }
 
 pub fn toast(app: &mut App, ctx: &egui::Context) {
@@ -256,11 +274,12 @@ pub fn toast(app: &mut App, ctx: &egui::Context) {
     ctx.request_repaint_after(std::time::Duration::from_millis(250));
     let p = theme::palette(ctx);
     let shadow = egui::Shadow { offset: [0, 4], blur: 12, spread: 0, color: Color32::from_black_alpha(if p.dark { 120 } else { 60 }) };
-    egui::Area::new(egui::Id::new("toast")).anchor(egui::Align2::CENTER_BOTTOM, vec2(0.0, -toast_offset(hint_bar_height(app)))).show(ctx, |ui| {
+    let dx = toast_x_offset(ctx.content_rect().width(), app.detail_x.filter(|_| app.screen == Screen::Issues));
+    egui::Area::new(egui::Id::new("toast")).anchor(egui::Align2::CENTER_BOTTOM, vec2(dx, -toast_offset(hint_bar_height(app)))).show(ctx, |ui| {
         Frame::new().fill(p.tooltip).stroke(Stroke::new(1.0, toast_stroke(p))).shadow(shadow).corner_radius(6).inner_margin(Margin::symmetric(16, 8)).show(
             ui,
             |ui| {
-                let color = toast_dot(t.error);
+                let color = toast_dot(t.kind);
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 8.0;
                     health_dot(ui, color);
@@ -565,9 +584,25 @@ mod widget_tests {
     }
 
     #[test]
-    fn toast_dot_comes_from_the_health_tokens() {
-        assert_eq!(toast_dot(true), theme::DARK.off_track);
-        assert_eq!(toast_dot(false), theme::DARK.on_track);
+    fn toast_dot_comes_from_the_tokens_and_is_red_only_for_failures() {
+        use crate::app::ToastKind;
+        assert_eq!(toast_dot(ToastKind::Error), theme::DARK.off_track);
+        assert_eq!(toast_dot(ToastKind::Success), theme::DARK.on_track);
+        assert_eq!(toast_dot(ToastKind::Info), theme::DARK.accent);
+    }
+
+    #[test]
+    fn toast_centres_over_the_detail_pane() {
+        assert_eq!(toast_x_offset(1440.0, None), 0.0);
+        assert_eq!(toast_x_offset(1440.0, Some((604.0, 1440.0))), 302.0);
+    }
+
+    #[test]
+    fn one_spinner_per_operation() {
+        assert_eq!(spinner_slots(true, false, false), (true, false), "⌘R: header");
+        assert_eq!(spinner_slots(true, true, true), (true, false), "⌘R with a quick filter: header only");
+        assert_eq!(spinner_slots(false, true, false), (false, true), "filter or JQL: count row only");
+        assert_eq!(spinner_slots(false, false, false), (false, false));
     }
 
     #[test]

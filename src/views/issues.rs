@@ -168,9 +168,11 @@ pub fn show(app: &mut App, ui: &mut Ui) {
             ui.add_space(V_GAP);
             list(app, ui, p);
         });
-    egui::CentralPanel::default()
+    let detail = egui::CentralPanel::default()
         .frame(Frame::new().fill(p.surface).inner_margin(Margin { left: 24, right: 24, top: 16, bottom: 0 }))
         .show(ui, |ui| super::detail::show(app, ui));
+    let r = detail.response.rect;
+    app.detail_x = Some((r.left(), r.right()));
     goto_box(app, ui.ctx(), p);
 }
 
@@ -404,14 +406,17 @@ pub fn count_label(shown: usize, total: Option<usize>, loading_first: bool, jql:
     if jql { format!("{base} · JQL") } else { base }
 }
 
-/// Whether the count says "· JQL": while a search is pending the rows (and so the label) are the
-/// previous ones; once it lands, whether it was typed.
+/// Whether the count says "· JQL". While a search is in flight the count keeps the context of the rows on
+/// screen and also names the target: "· JQL" when either the rows came from typed JQL or the pending search
+/// is typed JQL. Once it lands, only when the rows came from a typed search.
 pub fn count_shows_jql(pending: bool, typed_search: bool, typed_shown: bool) -> bool {
-    if pending { typed_shown } else { typed_search && typed_shown }
+    if pending { typed_shown || typed_search } else { typed_search && typed_shown }
 }
 
-/// The widest count the label slot is sized for, so Clear and the spinner never shift.
-const COUNT_SLOT_TEXT: &str = "000 issues · JQL";
+/// The count's colour: `text` when it is current, `muted` while a request will replace it.
+pub fn count_color(updating: bool, p: &Palette) -> egui::Color32 {
+    if updating { p.muted } else { p.text }
+}
 
 /// The clear control shows whenever a row filter is on: a quick filter, Mine, Roadmap, or typed JQL.
 pub fn clear_visible(quick: bool, mine: bool, roadmap: bool, typed_jql: bool) -> bool {
@@ -442,6 +447,8 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
     let pending = app.search_pending.is_some();
     let updating = pending || loaded.is_some_and(|l| l.loading);
     let loading_first = updating && rows.is_empty();
+    // The header spins for a refresh; the count row only for a search started here.
+    let row_spinner = crate::views::spinner_slots(false, pending, app.search_from_refresh).1;
     let text_filter = !app.filter.text.trim().is_empty() && !filter::looks_like_jql(&app.filter.text);
     let total = text_filter.then(|| rows_without_text_filter(app));
     let label = count_label(rows.len(), total, loading_first, count_shows_jql(pending, app.typed_search, app.typed_shown));
@@ -450,13 +457,14 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
     ui.allocate_ui_with_layout(vec2(ui.available_width(), crate::views::BUTTON_H), egui::Layout::left_to_right(egui::Align::Center), |ui| {
         ui.set_min_height(crate::views::BUTTON_H);
         ui.spacing_mut().item_spacing.x = 8.0;
-        let slot = ui.painter().layout_no_wrap(COUNT_SLOT_TEXT.into(), theme::body(12.0), p.muted).size().x;
-        let galley = ui.painter().layout_no_wrap(label, theme::body(12.0), p.muted);
-        let (rect, _) = ui.allocate_exact_size(vec2(slot.max(galley.size().x), galley.size().y), Sense::hover());
-        ui.painter().galley(rect.min, galley, p.muted);
-        if updating && !loading_first {
+        // "Loading issues…" and "Updating…" share one style: muted 12, the spinner 8 px after the count.
+        let color = if loading_first { p.muted } else { count_color(updating, p) };
+        ui.label(RichText::new(label).color(color).size(12.0));
+        if row_spinner {
             crate::views::icons::spinner(ui, crate::views::icons::INLINE_SPINNER, p);
-            ui.label(RichText::new("updating…").color(p.muted).size(12.0));
+            if !loading_first {
+                ui.label(RichText::new("Updating…").color(p.muted).size(12.0));
+            }
         }
         if show_clear {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -705,8 +713,14 @@ mod tests {
     }
 
     #[test]
+    fn count_is_muted_while_it_will_change() {
+        assert_eq!(count_color(true, &theme::LIGHT), theme::LIGHT.muted);
+        assert_eq!(count_color(false, &theme::DARK), theme::DARK.text);
+    }
+
+    #[test]
     fn jql_suffix_waits_for_the_result() {
-        assert!(!count_shows_jql(true, true, false), "typed search pending over plain rows: previous label");
+        assert!(count_shows_jql(true, true, false), "typed search pending over plain rows: names the target");
         assert!(count_shows_jql(true, false, true), "a pending search over typed rows keeps \"· JQL\"");
         assert!(count_shows_jql(false, true, true), "landed");
         assert!(!count_shows_jql(false, false, true), "cleared");

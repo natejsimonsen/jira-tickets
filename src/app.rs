@@ -157,9 +157,18 @@ pub struct Loaded {
     pub fetched: Option<Instant>,
 }
 
+/// What a toast reports: its dot is green, accent, or red.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ToastKind {
+    Success,
+    /// A notice, not a failure (read-only refusals, "No changes").
+    Info,
+    Error,
+}
+
 pub struct Toast {
     pub text: String,
-    pub error: bool,
+    pub kind: ToastKind,
     pub until: Instant,
 }
 
@@ -201,6 +210,8 @@ pub struct App {
     pub search_seq: u64,
     /// The seq of the search in flight; the list keeps its previous rows until it lands.
     pub search_pending: Option<u64>,
+    /// The search in flight was rerun by a header refresh (⌘R), so the header spinner, not the count row, shows it.
+    pub search_from_refresh: bool,
     /// The JQL of the running search, for Retry.
     pub last_search_jql: Option<String>,
     /// The active search was typed into the search box (not a quick filter or team scope).
@@ -215,6 +226,8 @@ pub struct App {
     /// The issue key of the comment post in flight.
     pub posting: Option<String>,
     pub picker: Option<Picker>,
+    /// The detail pane's x-range on the Issues screen last frame; the toast centres over it.
+    pub detail_x: Option<(f32, f32)>,
     /// The keyboard help overlay is showing; it owns the keyboard while open.
     pub help_open: bool,
     /// A picker's items are being fetched; a spinner shows meanwhile.
@@ -295,6 +308,8 @@ impl App {
             search_active: false,
             search_seq: 0,
             search_pending: None,
+            search_from_refresh: false,
+            detail_x: None,
             last_search_jql: None,
             typed_search: false,
             typed_shown: false,
@@ -339,7 +354,16 @@ impl App {
     }
 
     pub fn toast(&mut self, text: impl Into<String>, error: bool) {
-        self.toast = Some(Toast { text: text.into(), error, until: Instant::now() + Duration::from_secs(if error { 8 } else { 3 }) });
+        self.toast_kind(text, if error { ToastKind::Error } else { ToastKind::Success });
+    }
+
+    pub fn toast_kind(&mut self, text: impl Into<String>, kind: ToastKind) {
+        let secs = match kind {
+            ToastKind::Success => 3,
+            ToastKind::Info => 5,
+            ToastKind::Error => 8,
+        };
+        self.toast = Some(Toast { text: text.into(), kind, until: Instant::now() + Duration::from_secs(secs) });
     }
 
     fn connect(&mut self, login: Login) {
@@ -620,9 +644,10 @@ impl App {
                         self.drafts.remove(&key);
                     }
                 }
-                let (text, error) = done_toast(what, &result);
-                self.toast(text, error);
-                if self.client.is_some() {
+                let (text, kind) = done_toast(what, &result);
+                self.toast_kind(text, kind);
+                // A write read-only mode refused changed nothing, so there is nothing to reload.
+                if self.client.is_some() && reload_after_write(&result) {
                     self.load_detail(&key, true);
                     self.refresh_all();
                 }
@@ -700,6 +725,7 @@ impl App {
                 if let Some(jql) = self.scoped_search_jql() {
                     self.search_seq += 1;
                     self.search(&jql);
+                    self.search_from_refresh = true;
                 }
             }
             Action::OpenUrl(u) => open_url(&u),
@@ -757,12 +783,12 @@ impl App {
             }
             Action::ApplyTeamLabel => {
                 let crate::filter::TeamScope::Label(label) = &self.filter.team else {
-                    self.toast("Pick a team to label", false);
+                    self.toast_kind("Pick a team to label", ToastKind::Info);
                     return;
                 };
                 let Some(i) = self.selected.as_ref().and_then(|k| self.store.get(k)) else { return };
                 if i.labels.iter().any(|l| l == label) {
-                    self.toast("Already labelled", false);
+                    self.toast_kind("Already labelled", ToastKind::Info);
                     return;
                 }
                 let (key, label) = (i.key.clone(), label.clone());
@@ -805,6 +831,7 @@ impl App {
             }
             Action::RunSearch(jql) => {
                 self.cursor = 0;
+                self.search_from_refresh = false;
                 self.typed_search = false;
                 self.search_seq += 1;
                 if jql.trim().is_empty() {
@@ -939,8 +966,8 @@ impl App {
                 let Some((neighbour, before)) = rank_target(&rows, &key, delta) else { return };
                 // Read-only: say so and leave the row where it is.
                 if let Err(e) = jira::check_writable() {
-                    let (text, error) = done_toast("Rank", &Err(e));
-                    self.toast(text, error);
+                    let (text, kind) = done_toast("Rank", &Err(e));
+                    self.toast_kind(text, kind);
                     return;
                 }
                 // Move the row now; a failed rank swaps it back as soon as its Done lands.
@@ -1008,7 +1035,7 @@ impl App {
             }
             Picker::Edit { key, labels, priority, points, orig_labels, orig_priority, orig_points } => {
                 let Some(fields) = edit_fields(&labels, &priority, &points, &orig_labels, &orig_priority, &orig_points) else {
-                    self.toast("No changes", false);
+                    self.toast_kind("No changes", ToastKind::Info);
                     return;
                 };
                 self.spawn_write(move |c, tx| {
@@ -1129,13 +1156,18 @@ impl App {
     }
 }
 
-/// The toast for a finished write: done, blocked by read-only mode, or failed.
-pub fn done_toast(what: &str, result: &jira::Result<()>) -> (String, bool) {
+/// The toast for a finished write: done, blocked by read-only mode (a notice, not a failure), or failed.
+pub fn done_toast(what: &str, result: &jira::Result<()>) -> (String, ToastKind) {
     match result {
-        Ok(()) => (format!("{what} done"), false),
-        Err(e) if jira::is_read_only(e) => (format!("Read-only mode: {} not sent to Jira", what.to_lowercase()), true),
-        Err(e) => (format!("{what} failed: {e}"), true),
+        Ok(()) => (format!("{what} done"), ToastKind::Success),
+        Err(e) if jira::is_read_only(e) => (format!("Read-only mode: {} not sent to Jira", what.to_lowercase()), ToastKind::Info),
+        Err(e) => (format!("{what} failed: {e}"), ToastKind::Error),
     }
+}
+
+/// Whether a finished write reloads the issue and the lists: not when read-only mode refused it (nothing changed).
+pub fn reload_after_write(result: &jira::Result<()>) -> bool {
+    !matches!(result, Err(e) if jira::is_read_only(e))
 }
 
 /// The row a j/k move lands on: from the selected row when it is in the list, else from the top
@@ -1510,11 +1542,18 @@ mod tests {
 
     #[test]
     fn done_toast_names_read_only_blocks() {
-        assert_eq!(done_toast("Rank", &Ok(())), ("Rank done".to_string(), false));
+        assert_eq!(done_toast("Rank", &Ok(())), ("Rank done".to_string(), ToastKind::Success));
         let ro = jira::Error::Other("read-only mode, so nothing was sent to Jira".into());
-        assert_eq!(done_toast("Sprint move", &Err(ro)), ("Read-only mode: sprint move not sent to Jira".to_string(), true));
+        assert_eq!(done_toast("Sprint move", &Err(ro)), ("Read-only mode: sprint move not sent to Jira".to_string(), ToastKind::Info));
         let other = jira::Error::Other("Jira returned 400".into());
-        assert_eq!(done_toast("Assign", &Err(other)), ("Assign failed: Jira returned 400".to_string(), true));
+        assert_eq!(done_toast("Assign", &Err(other)), ("Assign failed: Jira returned 400".to_string(), ToastKind::Error));
+    }
+
+    #[test]
+    fn refused_writes_do_not_reload() {
+        assert!(reload_after_write(&Ok(())));
+        assert!(reload_after_write(&Err(jira::Error::Other("Jira returned 400".into()))), "a failure may have half-applied");
+        assert!(!reload_after_write(&Err(jira::Error::Other("read-only mode, so nothing was sent to Jira".into()))));
     }
 
     #[test]
