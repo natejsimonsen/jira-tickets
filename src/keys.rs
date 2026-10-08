@@ -154,8 +154,8 @@ pub fn hints(c: HintContext) -> &'static [Hint] {
         HintContext::Help => &[&[K("?"), W("or"), K("Esc"), W("close")]],
         HintContext::GoTo => &[&[K("Enter"), W("open")], &[K("Esc"), W("close")]],
         HintContext::Search => &[&[K("Enter"), W("search JQL")], &[K("Esc"), W("clear")]],
-        HintContext::SearchEmpty => &[&[K("Enter"), W("search JQL")], &[K("Esc"), W("leave")]],
-        HintContext::Composer => &[&[K("⌘Enter"), W("post")], &[K("Esc"), W("leave")]],
+        HintContext::SearchEmpty => &[&[K("Enter"), W("search JQL")], &[K("Esc"), W("done")]],
+        HintContext::Composer => &[&[K("⌘Enter"), W("post")], &[K("Esc"), W("done")]],
         HintContext::EditPicker => &[&[K("Tab"), W("next field")], &[K("Enter"), W("confirm")], &[K("Esc"), W("cancel")]],
         HintContext::AssignPicker => &[&[W("Type to filter")], &[K("↑/↓"), W("move")], &[K("Enter"), W("confirm")], &[K("Esc"), W("cancel")]],
         HintContext::Picker => &[&[K("↑/↓"), W("move")], &[K("Enter"), W("confirm")], &[K("Esc"), W("cancel")]],
@@ -244,12 +244,12 @@ mod tests {
         assert_eq!(hint_context(false, true, None, true, Focus::OtherText), GoTo);
         assert_eq!(hint_context(false, false, None, true, Focus::Search(true)), Search);
         assert_eq!(hint_context(false, false, None, true, Focus::Search(false)), SearchEmpty);
-        assert_eq!(hint_text(hints(SearchEmpty)), "Enter search JQL · Esc leave");
+        assert_eq!(hint_text(hints(SearchEmpty)), "Enter search JQL · Esc done");
         assert_eq!(hint_context(false, false, None, true, Focus::Composer), Composer, "the bar follows focus into the composer");
         assert_eq!(hint_context(false, false, None, true, Focus::None), Selected);
         assert_eq!(hint_context(false, false, None, true, Focus::OtherText), Browse, "letters type into the field, so no selection hints");
         assert_eq!(hint_context(false, false, None, false, Focus::None), Browse);
-        assert_eq!(hint_text(hints(Composer)), "⌘Enter post · Esc leave");
+        assert_eq!(hint_text(hints(Composer)), "⌘Enter post · Esc done");
         assert_eq!(hint_text(hints(Help)), "? or Esc close");
         assert_eq!(hint_text(hints(GoTo)), "Enter open · Esc close");
         assert_eq!(hint_text(hints(Search)), "Enter search JQL · Esc clear");

@@ -95,7 +95,10 @@ pub fn show(app: &mut App, ui: &mut Ui) {
                     });
                     ui.add_space(COMMENT_GAP - ui.spacing().item_spacing.y);
                 }
-                ui.add_space(4.0);
+                // After the cards, 16 to the composer (12 + 4); with no cards it sits 16 below the label like one.
+                if !issue.comments.is_empty() {
+                    ui.add_space(4.0);
+                }
                 composer(app, ui, p, &key);
             });
             ui.add_space(FIELDS_GUTTER);
@@ -125,6 +128,8 @@ const LABEL_TO_BOX: f32 = 16.0;
 const COMMENT_GAP: f32 = 12.0;
 /// The composer's fixed height.
 const COMPOSER_H: f32 = 72.0;
+/// The composer's inner margin, the same as a comment card's.
+const COMPOSER_PAD: f32 = 12.0;
 
 /// A section heading; the 24 px above it comes from SECTION_GAP, 8 below.
 fn section_heading(ui: &mut Ui, p: &Palette, text: &str) {
@@ -146,10 +151,11 @@ fn composer(app: &mut App, ui: &mut Ui, p: &Palette, key: &str) {
         .fill(p.surface)
         .stroke(Stroke::new(1.0, if focused { p.accent } else { p.border }))
         .corner_radius(6)
-        .inner_margin(Margin::symmetric(12, 8))
+        // The comment cards' 12 on every side.
+        .inner_margin(Margin::same(COMPOSER_PAD as i8))
         .show(ui, |ui| {
             ui.add_sized(
-                [ui.available_width(), COMPOSER_H - 16.0],
+                [ui.available_width(), COMPOSER_H - 2.0 * COMPOSER_PAD],
                 egui::TextEdit::multiline(draft)
                     .id(id)
                     .frame(Frame::new())
