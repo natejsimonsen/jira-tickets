@@ -58,21 +58,27 @@ pub fn icon_button(ui: &mut Ui, icon: Icon, tip: &str, p: &Palette) -> Response 
     resp.on_hover_text(tip)
 }
 
-/// The 32×32 frame with a short text glyph (e.g. "?") in place of an icon.
+/// The 32×32 frame with a short text glyph (e.g. "?") in place of an icon; bold, to match the icon's weight.
 pub fn text_button(ui: &mut Ui, text: &str, tip: &str, p: &Palette) -> Response {
     let (rect, resp) = ui.allocate_exact_size(Vec2::splat(BUTTON), Sense::click());
     button_frame(ui, rect, resp.hovered(), p);
-    ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, text, crate::theme::body(14.0), p.text);
+    ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, text, crate::theme::bold(14.0), p.text);
     resp.on_hover_text(tip)
 }
 
-/// The same 32×32 frame with a 16 px spinner, so the slot does not jump while loading.
+/// The same 32×32 frame with a spinner the size of the sync glyph it replaces, so nothing grows on ⌘R.
 pub fn spinner_button(ui: &mut Ui, p: &Palette) -> Response {
     let (rect, resp) = ui.allocate_exact_size(Vec2::splat(BUTTON), Sense::hover());
     let glyph = button_frame(ui, rect, false, p);
-    // `text`, like the idle sync glyph it replaces.
-    paint_spinner(ui, glyph, p.text);
+    // `text`, like the idle sync glyph it replaces, on the glyph's own 5.5/16 arc radius.
+    paint_spinner(ui, Rect::from_center_size(glyph.center(), Vec2::splat(spinner_box(GLYPH))), p.text);
     resp
+}
+
+/// The square a spinner is drawn in to match the sync glyph drawn at `glyph` px: the glyph's arc radius
+/// (5.5 of 16) plus the 1 px the spinner insets.
+pub fn spinner_box(glyph: f32) -> f32 {
+    2.0 * (glyph * 5.5 / 16.0 + 1.0)
 }
 
 /// Inline spinner size (count row, detail, composer).
@@ -115,5 +121,11 @@ mod tests {
         assert!((first.x - (8.0 + 5.5 * (PI * 1.1).cos())).abs() < 1e-4 && (first.y - (8.0 + 5.5 * (PI * 1.1).sin())).abs() < 1e-4);
         assert!((last.x - (8.0 + 5.5 * (PI * 1.9).cos())).abs() < 1e-4 && (last.y - (8.0 + 5.5 * (PI * 1.9).sin())).abs() < 1e-4);
         assert!(pts.iter().all(|q| q.y < 8.0), "the 1.1π→1.9π arc is the top half");
+    }
+
+    #[test]
+    fn header_spinner_matches_the_sync_glyph() {
+        // paint_spinner's radius is box / 2 − 1: the glyph's 5.5 px arc at 16 px.
+        assert_eq!(spinner_box(GLYPH) / 2.0 - 1.0, 5.5);
     }
 }

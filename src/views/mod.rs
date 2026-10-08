@@ -67,10 +67,12 @@ pub fn tab_width(label_w: f32) -> f32 {
     label_w.ceil()
 }
 
-/// Gap from the title to the first tab and between tabs.
+/// Gap between tabs.
 const TAB_GAP: f32 = 24.0;
-/// Gap between the signed-in name and "Read-only".
-const NAME_GAP: f32 = 16.0;
+/// Gap from the title to the first tab: wider than TAB_GAP, so the title reads apart from the nav.
+const TITLE_GAP: f32 = 32.0;
+/// Gap between the signed-in name and "Read-only" (the glyphs' side bearings add ~2, for ~16 ink to ink).
+const NAME_GAP: f32 = 14.0;
 
 /// The y of a galley's first baseline, from its top.
 fn baseline(g: &egui::Galley) -> f32 {
@@ -99,6 +101,7 @@ fn header(app: &mut App, ui: &mut Ui, p: &Palette) {
         ui.horizontal_centered(|ui| {
             ui.spacing_mut().item_spacing.x = TAB_GAP;
             ui.label(RichText::new("Jira Tickets").font(theme::bold(15.0)).color(p.text));
+            ui.add_space(TITLE_GAP - TAB_GAP);
             for (i, (s, name)) in TABS.into_iter().enumerate() {
                 let active = app.screen == s;
                 let galley = ui.painter().layout_no_wrap(name.to_string(), theme::body(14.0), if active { p.text } else { p.muted });
@@ -117,9 +120,10 @@ fn header(app: &mut App, ui: &mut Ui, p: &Palette) {
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.spacing_mut().item_spacing.x = 8.0;
-                // The name (14, text) and "Read-only" (12, muted) share one baseline, 16 apart.
+                // The name (14) and "Read-only" (12), both muted so they never compete with the active tab, share
+                // one baseline, NAME_GAP apart.
                 let read_only = crate::jira::READ_ONLY.load(std::sync::atomic::Ordering::Relaxed);
-                let name = app.me.as_ref().map(|me| ui.painter().layout_no_wrap(me.display_name.clone(), theme::body(14.0), p.text));
+                let name = app.me.as_ref().map(|me| ui.painter().layout_no_wrap(me.display_name.clone(), theme::body(14.0), p.muted));
                 let ro = read_only.then(|| ui.painter().layout_no_wrap("Read-only".into(), theme::body(12.0), p.muted));
                 if name.is_some() || ro.is_some() {
                     let name_w = name.as_ref().map_or(0.0, |g| g.size().x);
@@ -131,7 +135,7 @@ fn header(app: &mut App, ui: &mut Ui, p: &Palette) {
                     if let Some(g) = name {
                         let top = top_for_baseline(line, baseline(&g));
                         let r = egui::Rect::from_min_size(egui::pos2(rect.left(), top), g.size());
-                        ui.painter().galley(r.min, g, p.text);
+                        ui.painter().galley(r.min, g, p.muted);
                         let resp = ui.interact(r, egui::Id::new("header-name"), Sense::click());
                         resp.on_hover_text("Right-click to sign out").context_menu(|ui| {
                             if ui.button("Sign out").clicked() {
