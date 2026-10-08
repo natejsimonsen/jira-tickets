@@ -90,6 +90,11 @@ jql = "status not in (Closed)"
 [[issues.filters]]
 name = "To Do"
 jql = 'statusCategory = "To Do"'
+# Optional colour overrides ("#rrggbb"); status names match case-insensitively.
+# [issues.status_colors]
+# "Ready for Work" = "#0f9d9a"
+# [issues.epic_colors]
+# "CI-1860" = "#8250df"
 
 [roadmap]
 # epics = ["CI-1860", "CI-1569"]   # optional allowlist; default is every epic a team-label ticket points at
@@ -194,8 +199,14 @@ out of them. Writes run on one ordered worker thread.
 Layout from `github-rs`: collapsible list panel on the left (`⌘B`), the
 selected issue on the right.
 
-List rows: key, summary, configured columns. Status is coloured by status
-category. Filters above the list: epic picker, a sprint scope (All, the
+List rows: key, summary, configured columns. Status pills are coloured by
+status name (New grey, Planning blue, Ready for Work teal, In Progress
+accent, In Review purple, Blocked red, Done green; unmapped names fall
+back to the status category). Each epic has a stable colour from a
+12-hue palette chosen by hashing its key; it tints the epic pill, the
+detail view's parent line, and a 3 px left edge on each row. Labels stay
+neutral. Both maps can be overridden in config under
+`[issues.status_colors]` and `[issues.epic_colors]` (`"#rrggbb"`). Filters above the list: epic picker, a sprint scope (All, the
 board's active sprint, each future sprint, or Backlog; defaults to the
 active sprint, as jira-cli did), quick filters from config, a "Mine"
 toggle, and a search box (`/` or `⌘F`) that takes JQL. `⌘K` jumps to a key
