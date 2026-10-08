@@ -217,6 +217,7 @@ mod tests {
             hover_row: c(15),
             danger_subtle: c(16),
             tooltip: c(17),
+            tooltip_text: c(19),
         }
     }
 

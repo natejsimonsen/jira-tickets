@@ -2,7 +2,7 @@
 
 use crate::app::{Action, App};
 use crate::theme::{self, Palette};
-use crate::views::{adf_view, button, pill, primary_button_if};
+use crate::views::{adf_view, button, outline_pill, pill, primary_button_if};
 use egui::{Frame, Margin, RichText, Stroke, Ui, vec2};
 
 pub fn show(app: &mut App, ui: &mut Ui) {
@@ -23,10 +23,10 @@ pub fn show(app: &mut App, ui: &mut Ui) {
         // One row the buttons' height, everything centred on it, so the key line sits level with the buttons.
         ui.allocate_ui_with_layout(vec2(ui.available_width(), crate::views::BUTTON_H), egui::Layout::left_to_right(egui::Align::Center), |ui| {
             ui.set_min_height(crate::views::BUTTON_H);
-            ui.label(RichText::new(&issue.key).font(theme::mono(13.0)).color(p.muted));
+            ui.label(RichText::new(&issue.key).font(theme::mono(12.5)).color(p.muted));
             if let (Some(pk), Some(ps)) = (&issue.parent_key, &issue.parent_summary) {
                 ui.label(RichText::new("·").color(p.muted));
-                let epic = theme::epic_tint(pk, p, &app.cfg.issues.epic_colors);
+                let epic = theme::epic_tint_in(pk, &super::issues::visible_epic_slots(app), p, &app.cfg.issues.epic_colors);
                 if ui.link(RichText::new(format!("{pk} {ps}")).color(epic.fg).size(13.0)).clicked() {
                     app.actions.push(Action::SetEpic(Some(pk.clone())));
                 }
@@ -56,12 +56,12 @@ pub fn show(app: &mut App, ui: &mut Ui) {
             {
                 ui.label(RichText::new("l applies it").color(p.muted).size(12.0));
             }
-            pill(ui, &issue.issue_type, p.surface_2, p.muted);
+            outline_pill(ui, &issue.issue_type, p, crate::views::PILL_MARGIN);
             if !issue.priority.is_empty() {
-                pill(ui, &issue.priority, p.surface_2, p.muted);
+                outline_pill(ui, &issue.priority, p, crate::views::PILL_MARGIN);
             }
             for l in &issue.labels {
-                pill(ui, l, p.surface_2, p.muted);
+                outline_pill(ui, l, p, crate::views::PILL_MARGIN);
             }
         });
         ui.add_space(SECTION_GAP);

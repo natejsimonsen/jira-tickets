@@ -212,6 +212,11 @@ pub fn toast_offset(hint_bar: Option<f32>) -> f32 {
     hint_bar.map_or(24.0, |h| h + 16.0)
 }
 
+/// The toast's dot. The toast is a dark fill in both themes, so the dot takes the dark palette's health tokens.
+pub fn toast_dot(error: bool) -> Color32 {
+    if error { theme::DARK.off_track } else { theme::DARK.on_track }
+}
+
 pub fn toast(app: &mut App, ctx: &egui::Context) {
     let Some(t) = &app.toast else { return };
     if std::time::Instant::now() > t.until {
@@ -225,11 +230,11 @@ pub fn toast(app: &mut App, ctx: &egui::Context) {
         Frame::new().fill(p.tooltip).stroke(Stroke::new(1.0, toast_stroke(p))).shadow(shadow).corner_radius(6).inner_margin(Margin::symmetric(16, 8)).show(
             ui,
             |ui| {
-                let color = if t.error { Color32::from_rgb(0xff, 0x81, 0x82) } else { Color32::from_rgb(0x4a, 0xc2, 0x6b) };
+                let color = toast_dot(t.error);
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 8.0;
                     health_dot(ui, color);
-                    ui.add(egui::Label::new(RichText::new(&t.text).color(Color32::WHITE).size(14.0)).wrap_mode(egui::TextWrapMode::Extend));
+                    ui.add(egui::Label::new(RichText::new(&t.text).color(p.tooltip_text).size(14.0)).wrap_mode(egui::TextWrapMode::Extend));
                 });
             },
         );
@@ -243,7 +248,7 @@ pub const BUTTON_H: f32 = 28.0;
 
 /// The page dimming behind a modal: light needs less to read as "behind".
 pub fn backdrop_alpha(p: &Palette) -> u8 {
-    if p.dark { 170 } else { 70 }
+    if p.dark { 140 } else { 100 }
 }
 
 /// A modal dialog's 1 px edge: `border` in light, a lifted #4a4a46 in dark so the dialog separates from the dimmed page.
@@ -339,12 +344,12 @@ pub fn primary_colors(p: &Palette) -> (Color32, Color32) {
     (p.accent, p.on_accent)
 }
 
-/// A 12 px muted text link (no frame), underlined while hovered: "Clear filters", "Clear search".
+/// A 12 px accent text link (no frame), underlined while hovered: "Clear filters", "Clear search".
 pub fn small_link(ui: &mut Ui, text: &str, p: &Palette) -> egui::Response {
-    let galley = ui.painter().layout_no_wrap(text.to_string(), theme::body(12.0), p.muted);
+    let galley = ui.painter().layout_no_wrap(text.to_string(), theme::body(12.0), p.accent);
     let (rect, resp) = ui.allocate_exact_size(galley.size(), Sense::click());
     if ui.is_rect_visible(rect) {
-        let color = if resp.hovered() { p.text } else { p.muted };
+        let color = p.accent;
         if resp.hovered() {
             ui.painter().hline(rect.x_range(), rect.bottom() - 1.0, Stroke::new(1.0, color));
         }
@@ -370,6 +375,12 @@ pub const PILL_MARGIN: egui::Vec2 = vec2(8.0, 2.0);
 
 pub fn pill(ui: &mut Ui, text: &str, bg: Color32, fg: Color32) -> egui::Response {
     pill_sized(ui, text, bg, fg, Stroke::NONE, PILL_MARGIN)
+}
+
+/// A neutral pill (type, priority, labels, team, assignee): outline only, 1 px `border`, `muted` text, so
+/// only the status (and epic) pills carry a filled tint.
+pub fn outline_pill(ui: &mut Ui, text: &str, p: &Palette, margin: egui::Vec2) -> egui::Response {
+    pill_sized(ui, text, Color32::TRANSPARENT, p.muted, Stroke::new(1.0, p.border), margin)
 }
 
 /// The edge every list-row pill gets: its own text colour at 35%, so a wash stays visible on any row fill.
@@ -513,6 +524,12 @@ mod widget_tests {
         assert!(backdrop_alpha(&theme::DARK) > backdrop_alpha(&theme::LIGHT));
         assert_eq!(dialog_fill(&theme::DARK), theme::DARK.surface_2);
         assert_eq!(dialog_fill(&theme::LIGHT), theme::LIGHT.surface);
+    }
+
+    #[test]
+    fn toast_dot_comes_from_the_health_tokens() {
+        assert_eq!(toast_dot(true), theme::DARK.off_track);
+        assert_eq!(toast_dot(false), theme::DARK.on_track);
     }
 
     #[test]

@@ -5,9 +5,15 @@ use crate::filter;
 use crate::jira::Issue;
 use crate::store::ListId;
 use crate::theme::{self, Palette};
-use crate::views::{pill, pill_outlined, small_link, toggle_chip};
+use crate::views::{outline_pill, pill, pill_outlined, small_link, toggle_chip};
 use egui::{CornerRadius, Frame, Margin, Rect, RichText, Sense, Stroke, Ui, vec2};
 use std::collections::BTreeSet;
+
+/// Hue slots for the epics of the rows on screen (see `theme::epic_slots`), shared by the list and detail.
+pub fn visible_epic_slots(app: &App) -> std::collections::BTreeMap<String, usize> {
+    let keys: Vec<String> = current_rows(app).iter().filter_map(|i| i.parent_key.clone()).collect();
+    theme::epic_slots(keys.iter().map(String::as_str))
+}
 
 /// Keys of the loaded epics labelled as roadmap initiatives (cheap: a few dozen epics).
 pub fn roadmap_epics(app: &App) -> BTreeSet<String> {
@@ -37,19 +43,26 @@ pub fn current_rows(app: &App) -> Vec<&Issue> {
     }
 }
 
+/// How a row pill is drawn: a filled tint (status, epic, warnings) or outline only (neutral values).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum PillLook {
+    Tint(egui::Color32, egui::Color32),
+    Outline,
+}
+
 /// The row's leading pill: under All teams, its team labels in a neutral pill;
 /// under one team, an amber "no <label> label" when it is the team's by membership only.
-pub fn team_pill(f: &filter::IssueFilter, i: &Issue, p: &Palette) -> Option<(String, egui::Color32, egui::Color32)> {
+pub fn team_pill(f: &filter::IssueFilter, i: &Issue, p: &Palette) -> Option<(String, PillLook)> {
     match &f.team {
         filter::TeamScope::All => {
             let teams: Vec<&str> = i.labels.iter().filter(|l| f.team_labels.contains(l)).map(String::as_str).collect();
-            (!teams.is_empty()).then(|| (teams.join(" · "), p.surface_2, p.text))
+            (!teams.is_empty()).then(|| (teams.join(" · "), PillLook::Outline))
         }
         filter::TeamScope::Label(l) => {
             let members = f.team_members.get(l.as_str()).map(Vec::as_slice).unwrap_or_default();
             filter::missing_team_label(i, l, members).then(|| {
                 let t = theme::tint_from_hue(p.at_risk, p);
-                (format!("no {l} label"), t.bg, t.fg)
+                (format!("no {l} label"), PillLook::Tint(t.bg, t.fg))
             })
         }
         filter::TeamScope::None => None,
@@ -461,6 +474,7 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
     let cfg = app.cfg.clone();
     let (status_colors, epic_colors) = (&cfg.issues.status_colors, &cfg.issues.epic_colors);
     let selected = app.selected.clone();
+    let slots = theme::epic_slots(rows.iter().filter_map(|i| i.parent_key.as_deref()));
     let team_filter = match &app.filter.team {
         filter::TeamScope::Label(l) => Some(l.clone()),
         _ => None,
@@ -472,7 +486,7 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
         ui.spacing_mut().item_spacing.y = ROW_GAP;
         for (idx, i) in rows.iter().enumerate() {
             let is_sel = selected.as_deref() == Some(&i.key);
-            let epic = i.parent_key.as_deref().map(|k| theme::epic_tint(k, p, epic_colors));
+            let epic = i.parent_key.as_deref().map(|k| theme::epic_tint_in(k, &slots, p, epic_colors));
             // The fill goes under the content once we know whether the pointer is over the row.
             let bg = ui.painter().add(egui::Shape::Noop);
             let r = Frame::new()
@@ -494,9 +508,9 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
                         }
                     });
                     // One line of pills, never wrapped: see `fit_pills`.
-                    let mut pills: Vec<(PillKind, String, egui::Color32, egui::Color32)> = Vec::new();
-                    if let Some((t, bg, fg)) = team_pill(&app.filter, i, p) {
-                        pills.push((PillKind::Other, t, bg, fg));
+                    let mut pills: Vec<(PillKind, String, PillLook)> = Vec::new();
+                    if let Some((t, look)) = team_pill(&app.filter, i, p) {
+                        pills.push((PillKind::Other, t, look));
                     }
                     for c in &columns {
                         let v = match c.as_str() {
@@ -506,28 +520,31 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
                         if v.is_empty() {
                             continue;
                         }
-                        let (kind, bg, fg) = match (c.as_str(), epic) {
+                        let (kind, look) = match (c.as_str(), epic) {
                             ("status", _) => {
                                 let t = theme::status_tint(&i.status.name, &i.status.category, p, status_colors);
-                                (PillKind::Other, t.bg, t.fg)
+                                (PillKind::Other, PillLook::Tint(t.bg, t.fg))
                             }
-                            ("parent.summary" | "parent.key", Some(t)) => (PillKind::Epic, t.bg, t.fg),
-                            ("parent.summary" | "parent.key", None) => (PillKind::Epic, p.surface_2, p.muted),
-                            ("assignee", _) => (PillKind::Assignee, p.surface_2, p.muted),
-                            _ => (PillKind::Other, p.surface_2, p.muted),
+                            ("parent.summary" | "parent.key", Some(t)) => (PillKind::Epic, PillLook::Tint(t.bg, t.fg)),
+                            ("parent.summary" | "parent.key", None) => (PillKind::Epic, PillLook::Outline),
+                            ("assignee", _) => (PillKind::Assignee, PillLook::Outline),
+                            _ => (PillKind::Other, PillLook::Outline),
                         };
-                        pills.push((kind, v, bg, fg));
+                        pills.push((kind, v, look));
                     }
                     ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing = vec2(PILL_GAP, 4.0);
                         let painter = ui.painter().clone();
                         let measure = |t: &str| painter.layout_no_wrap(t.to_string(), theme::body(12.0), p.text).size().x;
-                        let widths: Vec<(PillKind, f32)> = pills.iter().map(|(k, t, _, _)| (*k, measure(t) + 2.0 * crate::views::ROW_PILL_MARGIN.x)).collect();
+                        let widths: Vec<(PillKind, f32)> = pills.iter().map(|(k, t, _)| (*k, measure(t) + 2.0 * crate::views::ROW_PILL_MARGIN.x)).collect();
                         let fit = fit_pills(&widths, ui.available_width(), PILL_GAP);
-                        for ((_, text, bg, fg), w) in pills.iter().zip(fit) {
+                        for ((_, text, look), w) in pills.iter().zip(fit) {
                             let Some(w) = w else { continue };
                             let text = crate::views::truncate_text(text, w - 2.0 * crate::views::ROW_PILL_MARGIN.x, measure);
-                            pill_outlined(ui, &text, *bg, *fg);
+                            match look {
+                                PillLook::Tint(bg, fg) => pill_outlined(ui, &text, *bg, *fg),
+                                PillLook::Outline => outline_pill(ui, &text, p, crate::views::ROW_PILL_MARGIN),
+                            };
                         }
                     });
                 });
