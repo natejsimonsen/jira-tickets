@@ -284,16 +284,19 @@ pub fn button(text: &str, p: &Palette) -> egui::Button<'static> {
         .min_size(vec2(0.0, BUTTON_H))
 }
 
-/// The check mark the active state shows; the inactive state reserves its width.
+/// The check mark the active state shows.
 pub const CHECK: &str = "\u{2713} ";
+/// A filter chip's inner padding on each side.
+pub const CHIP_PAD: f32 = 12.0;
 
-/// The toggle's text: the check is always laid out (transparent when off) so toggling never moves neighbours.
-pub fn toggle_job(text: &str, active: bool, fg: Color32) -> egui::text::LayoutJob {
-    let mut job = egui::text::LayoutJob::default();
-    let fmt = |color| egui::TextFormat { font_id: theme::body(14.0), color, ..Default::default() };
-    job.append(CHECK, 0.0, fmt(if active { fg } else { Color32::TRANSPARENT }));
-    job.append(text, 0.0, fmt(fg));
-    job
+/// A chip is always as wide as its active state (padding, check, label), so toggling never moves neighbours.
+pub fn chip_width(check_w: f32, label_w: f32) -> f32 {
+    (2.0 * CHIP_PAD + check_w + label_w).ceil()
+}
+
+/// Where the label starts in the chip: after the check when active, centred (equal padding) when not.
+pub fn chip_label_x(chip_w: f32, check_w: f32, label_w: f32, active: bool) -> f32 {
+    if active { CHIP_PAD + check_w } else { ((chip_w - label_w) / 2.0).round() }
 }
 
 /// An active toggle chip's fill: the accent in light; in dark one step below it, so a lit chip is not
@@ -302,9 +305,29 @@ pub fn active_chip_fill(p: &Palette) -> Color32 {
     if p.dark { Color32::from_rgb(0x66, 0x8f, 0xd6) } else { p.accent }
 }
 
-pub fn toggle_button(text: &str, active: bool, p: &Palette) -> egui::Button<'static> {
-    let (fill, fg, stroke) = if active { (active_chip_fill(p), p.on_accent, active_chip_fill(p)) } else { (p.surface_2, p.text, p.border) };
-    egui::Button::new(toggle_job(text, active, fg)).fill(fill).stroke(Stroke::new(1.0, stroke)).corner_radius(6).min_size(vec2(0.0, BUTTON_H))
+/// A filter toggle chip: 28 px tall, radius 10 like the pills, constant width, label centred when off.
+pub fn toggle_chip(ui: &mut Ui, text: &str, active: bool, p: &Palette) -> egui::Response {
+    let fg = if active { p.on_accent } else { p.text };
+    let check = ui.painter().layout_no_wrap(CHECK.to_string(), theme::body(14.0), fg);
+    let label = ui.painter().layout_no_wrap(text.to_string(), theme::body(14.0), fg);
+    let w = chip_width(check.size().x, label.size().x);
+    let (rect, resp) = ui.allocate_exact_size(vec2(w, BUTTON_H), Sense::click());
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, active, text));
+    if ui.is_rect_visible(rect) {
+        let (fill, stroke) = match (active, resp.hovered()) {
+            (true, _) => (active_chip_fill(p), active_chip_fill(p)),
+            (false, true) => (p.hover_row, p.border),
+            (false, false) => (p.surface_2, p.border),
+        };
+        ui.painter().rect(rect, 10.0, fill, Stroke::new(1.0, stroke), egui::StrokeKind::Inside);
+        let y = (rect.center().y - label.size().y / 2.0).round();
+        let x = rect.left() + chip_label_x(w, check.size().x, label.size().x, active);
+        if active {
+            ui.painter().galley(egui::pos2(rect.left() + CHIP_PAD, y), check, fg);
+        }
+        ui.painter().galley(egui::pos2(x, y), label, fg);
+    }
+    resp
 }
 
 pub fn primary_button(text: &str, p: &Palette) -> egui::Button<'static> {
@@ -371,6 +394,23 @@ pub fn pill_sized(ui: &mut Ui, text: &str, bg: Color32, fg: Color32, stroke: Str
     resp
 }
 
+/// `text` cut to fit `max_w` (as `measure` lays it out) with "…"; trailing whitespace is trimmed before the
+/// ellipsis. Unchanged when it already fits.
+pub fn truncate_text(text: &str, max_w: f32, measure: impl Fn(&str) -> f32) -> String {
+    if measure(text) <= max_w {
+        return text.to_string();
+    }
+    let ends: Vec<usize> = text.char_indices().map(|(i, _)| i).skip(1).chain(std::iter::once(text.len())).collect();
+    let cut = |n: usize| format!("{}…", text[..if n == 0 { 0 } else { ends[n - 1] }].trim_end());
+    // The longest prefix (in chars) whose cut form fits; widths grow with length.
+    let (mut lo, mut hi) = (0, ends.len());
+    while lo < hi {
+        let mid = (lo + hi).div_ceil(2);
+        if measure(&cut(mid)) <= max_w { lo = mid } else { hi = mid - 1 }
+    }
+    cut(lo)
+}
+
 pub fn health_dot(ui: &mut Ui, color: Color32) {
     let (rect, _) = ui.allocate_exact_size(vec2(9.0, 9.0), Sense::hover());
     ui.painter().circle_filled(rect.center(), 4.5, color);
@@ -392,12 +432,25 @@ mod widget_tests {
     use super::*;
 
     #[test]
-    fn toggle_reserves_the_check_width_when_off() {
-        let (on, off) = (toggle_job("Mine", true, Color32::WHITE), toggle_job("Mine", false, Color32::WHITE));
-        assert_eq!(on.text, off.text, "same glyphs laid out either way, so the width never changes");
-        assert_eq!(on.text, "\u{2713} Mine");
-        assert_eq!(off.sections[0].format.color, Color32::TRANSPARENT);
-        assert_eq!(on.sections[0].format.color, Color32::WHITE);
+    fn chips_keep_their_width_and_centre_the_label_when_off() {
+        let (check, label) = (10.0, 40.0);
+        let w = chip_width(check, label);
+        assert_eq!(w, 74.0);
+        let off = chip_label_x(w, check, label, false);
+        assert_eq!(off, 17.0);
+        assert_eq!(off, w - off - label, "equal padding either side when off");
+        assert_eq!(chip_label_x(w, check, label, true), CHIP_PAD + check, "after the check when on");
+        assert_eq!(chip_label_x(w, check, label, true) + label + CHIP_PAD, w);
+    }
+
+    #[test]
+    fn truncation_trims_before_the_ellipsis() {
+        let w = |t: &str| t.chars().count() as f32;
+        assert_eq!(truncate_text("short", 10.0, w), "short");
+        assert_eq!(truncate_text("hello world again", 7.0, w), "hello…", "no space before …");
+        assert_eq!(truncate_text("abcdefgh", 5.0, w), "abcd…");
+        assert_eq!(truncate_text("abc", 0.0, w), "…");
+        assert_eq!(truncate_text("ééééé", 3.0, w), "éé…", "char boundaries");
     }
 
     #[test]

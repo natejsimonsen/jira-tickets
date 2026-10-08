@@ -36,8 +36,6 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                     group(ui, p, Group::Pickers);
                 });
             });
-            ui.add_space(12.0);
-            ui.label(RichText::new("Press ? or Esc to close").color(p.muted).size(12.0));
         });
     });
 }

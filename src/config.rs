@@ -172,8 +172,8 @@ impl Default for Issues {
         Issues {
             columns: ["status", "labels", "parent.summary", "assignee"].map(s).to_vec(),
             filters: vec![
-                QuickFilter { name: s("Only Opened"), jql: s("status not in (Closed)") },
-                QuickFilter { name: s("To Do"), jql: s("statusCategory = \"To Do\"") },
+                QuickFilter { name: s("Only opened"), jql: s("status not in (Closed)") },
+                QuickFilter { name: s("To do"), jql: s("statusCategory = \"To Do\"") },
             ],
             status_colors: BTreeMap::new(),
             epic_colors: BTreeMap::new(),
@@ -361,10 +361,10 @@ members = ["barbara", "edsger.dijkstra", "ada.lovelace", "grace", "sam", "alan"]
 [issues]
 columns = ["status", "labels", "parent.summary", "assignee"]
 [[issues.filters]]
-name = "Only Opened"
+name = "Only opened"
 jql = "status not in (Closed)"
 [[issues.filters]]
-name = "To Do"
+name = "To do"
 jql = 'statusCategory = "To Do"'
 # Optional colour overrides, "#rrggbb". Status names are matched case-insensitively.
 # [issues.status_colors]

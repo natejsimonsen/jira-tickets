@@ -30,14 +30,14 @@ const fn b(group: Group, keys: &'static str, what: &'static str) -> KeyBinding {
 }
 
 pub const BINDINGS: &[KeyBinding] = &[
-    b(Group::Global, "⌘1–⌘4", "Issues, Grooming, Team, Roadmap"),
+    b(Group::Global, "⌘1–4", "Issues, Grooming, Team, Roadmap"),
     b(Group::Global, "⌘R", "Refresh"),
     b(Group::Global, "⌘W", "Close the window"),
     b(Group::Global, "?", "Show or hide this help"),
     b(Group::Issues, "⌘K", "Go to an issue by key, number, or link"),
     b(Group::Issues, "Esc", "Close the go-to box or dialog"),
     b(Group::Issues, "⌘F, /", "Focus search (Esc clears, then leaves it)"),
-    b(Group::Issues, "j/k, ↓/↑", "Next or previous issue"),
+    b(Group::Issues, "j/k, ↑/↓", "Next or previous issue"),
     b(Group::Issues, "t", "Transition"),
     b(Group::Issues, "a", "Assign"),
     b(Group::Issues, "s", "Sprint"),
@@ -50,6 +50,7 @@ pub const BINDINGS: &[KeyBinding] = &[
     b(Group::Issues, "⌘Enter", "Post the comment (composer focused)"),
     b(Group::Pickers, "↑/↓", "Move"),
     b(Group::Pickers, "j/k", "Move (not in Assign)"),
+    b(Group::Pickers, "Tab", "Next field (Edit)"),
     b(Group::Pickers, "Enter", "Confirm"),
     b(Group::Pickers, "Esc", "Cancel"),
 ];
@@ -90,19 +91,22 @@ pub type Hint = &'static [Tok];
 pub enum HintContext {
     Help,
     GoTo,
+    /// The search box has focus.
+    Search,
     EditPicker,
     Picker,
     Selected,
     Browse,
 }
 
-/// `text_focused`: a text field has focus, so plain letters would type into it.
-pub fn hint_context(help_open: bool, goto_open: bool, picker: Option<bool>, has_selection: bool, text_focused: bool) -> HintContext {
+/// `text_focused`: a text field has focus, so plain letters would type into it; `search_focused`: that field is the search box.
+pub fn hint_context(help_open: bool, goto_open: bool, picker: Option<bool>, has_selection: bool, text_focused: bool, search_focused: bool) -> HintContext {
     match (help_open, goto_open, picker) {
         (true, _, _) => HintContext::Help,
         (_, _, Some(true)) => HintContext::EditPicker,
         (_, _, Some(false)) => HintContext::Picker,
         (_, true, None) => HintContext::GoTo,
+        _ if search_focused => HintContext::Search,
         _ if has_selection && !text_focused => HintContext::Selected,
         _ => HintContext::Browse,
     }
@@ -111,12 +115,14 @@ pub fn hint_context(help_open: bool, goto_open: bool, picker: Option<bool>, has_
 /// The hints for what the keyboard does right now on the Issues screen.
 pub fn hints(c: HintContext) -> &'static [Hint] {
     match c {
-        HintContext::Help => &[&[K("?"), W("or"), K("Esc"), W("close")]],
+        // Alternatives are separate chips; a slash only joins an up/down pair.
+        HintContext::Help => &[&[K("?"), K("Esc"), W("close")]],
         HintContext::GoTo => &[&[K("Enter"), W("open")], &[K("Esc"), W("close")]],
-        // Enter in an Edit field does not save; the Confirm button does.
-        HintContext::EditPicker => &[&[K("Esc"), W("cancel")]],
+        HintContext::Search => &[&[K("Enter"), W("search JQL")], &[K("Esc"), W("clear")]],
+        HintContext::EditPicker => &[&[K("Tab"), W("next field")], &[K("Enter"), W("confirm")], &[K("Esc"), W("cancel")]],
         HintContext::Picker => &[&[K("↑/↓"), W("move")], &[K("Enter"), W("confirm")], &[K("Esc"), W("cancel")]],
         HintContext::Selected => &[
+            &[K("j/k"), W("move")],
             &[K("t"), W("transition")],
             &[K("a"), W("assign")],
             &[K("s"), W("sprint")],
@@ -181,28 +187,30 @@ mod tests {
     #[test]
     fn readme_table_groups_and_quotes_keys() {
         let t = readme_table();
-        assert!(t.starts_with("| Keys | Action |\n| --- | --- |\n| **Global** | |\n| `⌘1–⌘4` | Issues, Grooming, Team, Roadmap |\n"));
+        assert!(t.starts_with("| Keys | Action |\n| --- | --- |\n| **Global** | |\n| `⌘1–4` | Issues, Grooming, Team, Roadmap |\n"));
         assert!(t.contains("| `⌘F` or `/` | Focus search (Esc clears, then leaves it) |\n"));
-        assert!(t.contains("| `j/k` or `↓/↑` | Next or previous issue |\n"));
+        assert!(t.contains("| `j/k` or `↑/↓` | Next or previous issue |\n"));
         assert_eq!(t.matches("| **").count(), 3);
     }
 
     #[test]
     fn hints_follow_context() {
         use HintContext::*;
-        assert_eq!(hint_context(true, true, Some(false), true, true), Help, "help wins");
-        assert_eq!(hint_context(false, false, Some(true), true, true), EditPicker);
-        assert_eq!(hint_context(false, false, Some(false), false, true), Picker, "a picker's own text field still means picker keys");
-        assert_eq!(hint_context(false, true, None, true, true), GoTo);
-        assert_eq!(hint_context(false, false, None, true, false), Selected);
-        assert_eq!(hint_context(false, false, None, true, true), Browse, "letters type into the field, so no selection hints");
-        assert_eq!(hint_context(false, false, None, false, false), Browse);
-        assert_eq!(hint_text(hints(Help)), "? or Esc close");
+        assert_eq!(hint_context(true, true, Some(false), true, true, false), Help, "help wins");
+        assert_eq!(hint_context(false, false, Some(true), true, true, false), EditPicker);
+        assert_eq!(hint_context(false, false, Some(false), false, true, false), Picker, "a picker's own text field still means picker keys");
+        assert_eq!(hint_context(false, true, None, true, true, false), GoTo);
+        assert_eq!(hint_context(false, false, None, true, true, true), Search);
+        assert_eq!(hint_context(false, false, None, true, false, false), Selected);
+        assert_eq!(hint_context(false, false, None, true, true, false), Browse, "letters type into the field, so no selection hints");
+        assert_eq!(hint_context(false, false, None, false, false, false), Browse);
+        assert_eq!(hint_text(hints(Help)), "? Esc close");
         assert_eq!(hint_text(hints(GoTo)), "Enter open · Esc close");
-        assert_eq!(hint_text(hints(EditPicker)), "Esc cancel");
+        assert_eq!(hint_text(hints(Search)), "Enter search JQL · Esc clear");
+        assert_eq!(hint_text(hints(EditPicker)), "Tab next field · Enter confirm · Esc cancel");
         assert_eq!(hint_text(hints(Picker)), "↑/↓ move · Enter confirm · Esc cancel");
         assert_eq!(hint_text(hints(Browse)), "j/k move · ⌘K go to · ⌘F search · ? help");
-        assert_eq!(hint_text(hints(Selected)), "t transition · a assign · s sprint · e edit · l label · J/K rank · c copy · ⌘O open · ? help");
+        assert_eq!(hint_text(hints(Selected)), "j/k move · t transition · a assign · s sprint · e edit · l label · J/K rank · c copy · ⌘O open · ? help");
     }
 
     #[test]
@@ -215,6 +223,7 @@ mod tests {
 
     #[test]
     fn notation_is_slash_pairs() {
+        assert!(!BINDINGS.iter().any(|k| k.keys.contains("↓/↑")), "up before down everywhere");
         for k in BINDINGS {
             assert!(!k.keys.contains("j, k") && !k.keys.contains("J, K") && !k.keys.contains("↑, ↓"), "{}", k.keys);
         }

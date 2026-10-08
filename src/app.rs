@@ -88,6 +88,8 @@ pub enum Action {
     SetQuick(Option<usize>),
     ToggleMine,
     ToggleRoadmap,
+    /// Resets every row filter (quick filter, Mine, Roadmap, typed JQL); the team, epic and sprint scopes stay.
+    ClearFilters,
     RunSearch(String),
     /// A JQL search typed into the search box (it stays there while active).
     RunTypedSearch(String),
@@ -201,6 +203,9 @@ pub struct App {
     pub last_search_jql: Option<String>,
     /// The active search was typed into the search box (not a quick filter or team scope).
     pub typed_search: bool,
+    /// The search rows on screen came from a typed JQL search (set when its result is accepted),
+    /// so the count row says "· JQL" only once those rows are showing.
+    pub typed_shown: bool,
     /// Jira rejected a configured member, so team queries match labels only until restart.
     pub members_disabled: bool,
     /// Unposted comment text, keyed by issue key.
@@ -290,6 +295,7 @@ impl App {
             search_pending: None,
             last_search_jql: None,
             typed_search: false,
+            typed_shown: false,
             members_disabled: false,
             drafts: HashMap::new(),
             posting: None,
@@ -510,6 +516,7 @@ impl App {
                         return;
                     }
                     self.search_pending = None;
+                    self.typed_shown = self.typed_search;
                 }
                 // Gated on what this query carried, not on members_disabled: TeamOpen and
                 // TeamInProgress can both fail on the same member and the second must still
@@ -773,6 +780,21 @@ impl App {
                 self.filter.roadmap = !self.filter.roadmap;
                 self.cursor = 0;
             }
+            Action::ClearFilters => {
+                self.filter.mine = false;
+                self.filter.roadmap = false;
+                self.filter.quick = None;
+                if crate::filter::looks_like_jql(&self.filter.text) {
+                    self.filter.text.clear();
+                }
+                self.cursor = 0;
+                // No team label is itself a search; keep it, without the quick filter or typed JQL.
+                match self.scoped_search_jql() {
+                    Some(jql) => self.apply(Action::RunSearch(jql), ctx),
+                    None if self.search_active => self.apply(Action::RunSearch(String::new()), ctx),
+                    None => {}
+                }
+            }
             Action::RunTypedSearch(jql) => {
                 // A typed search replaces any quick filter.
                 self.filter.quick = None;
@@ -791,6 +813,7 @@ impl App {
                     }
                     self.last_search_jql = None;
                     self.search_pending = None;
+                    self.typed_shown = false;
                     self.store.lists.remove(&ListId::Search);
                     // Drops the error and any in-flight flag; late results are ignored by seq.
                     self.lists.remove(&ListId::Search);
@@ -1018,14 +1041,17 @@ impl App {
             return;
         }
         // An open picker owns the keyboard. Assign's filter box has focus, so
-        // j/k type there; Edit has text fields, so only Esc applies (Enter in a
-        // field does not save; use the Save button).
+        // j/k type there; Edit has text fields, so only Esc and Enter apply.
         if let Some((edit, assign)) = self.picker.as_ref().map(|p| (matches!(p, Picker::Edit { .. }), matches!(p, Picker::Assign { .. }))) {
             if shortcut(Modifiers::NONE, Key::Escape) {
                 self.actions.push(Action::PickerCancel);
                 return;
             }
+            // Edit's fields are single-line, so Enter confirms from any of them (Tab moves between them).
             if edit {
+                if shortcut(Modifiers::NONE, Key::Enter) {
+                    self.actions.push(Action::PickerConfirm);
+                }
                 return;
             }
             let letters = !assign;
