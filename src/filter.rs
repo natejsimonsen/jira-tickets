@@ -93,9 +93,16 @@ pub fn team_options(teams: &[TeamEntry]) -> Vec<(TeamScope, String)> {
         .collect()
 }
 
+/// Search-box text with a JQL operator runs as a Jira search on Enter; a bare word filters locally.
+pub fn looks_like_jql(text: &str) -> bool {
+    let t = text.trim();
+    t.contains('=') || t.contains(" in ") || t.contains('~') || t.contains('!')
+}
+
 /// `searched`: the rows are a search's (see `in_team_scope`).
+/// JQL left in the search box (it stays visible while its search runs) is not a local text filter.
 pub fn visible<'a>(issues: &[&'a Issue], f: &IssueFilter, searched: bool, me: Option<&str>) -> Vec<&'a Issue> {
-    let needle = f.text.trim().to_lowercase();
+    let needle = if looks_like_jql(&f.text) { String::new() } else { f.text.trim().to_lowercase() };
     issues
         .iter()
         .copied()
@@ -195,6 +202,16 @@ fn issue_key(t: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn jql_is_told_from_a_bare_word() {
+        for j in ["status = Blocked", "labels in (PLAT)", "summary ~ alpha", "status != Done"] {
+            assert!(super::looks_like_jql(j), "{j}");
+        }
+        for w in ["alpha", "  ", "in progress", "flox"] {
+            assert!(!super::looks_like_jql(w), "{w}");
+        }
+    }
+
     use super::*;
     use crate::jira::{Issue, Sprint, Status, User};
 

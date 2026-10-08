@@ -75,7 +75,7 @@ pub fn show(app: &mut App, ui: &mut Ui) {
         .resizable(true)
         .default_size(list_w)
         .size_range(320.0..=list_w.max(320.0))
-        .frame(Frame::new().fill(p.bg).inner_margin(Margin { left: 16, right: 12, top: 12, bottom: 0 }))
+        .frame(Frame::new().fill(p.bg).inner_margin(Margin { left: 16, right: 16, top: 12, bottom: 0 }))
         .show(ui, |ui| {
             filters(app, ui, p);
             ui.add_space(8.0);
@@ -87,8 +87,59 @@ pub fn show(app: &mut App, ui: &mut Ui) {
     goto_box(app, ui.ctx(), p);
 }
 
+/// Gap between filter controls.
+const GAP: f32 = 8.0;
+/// One inner horizontal padding for combo text, chip text, and the search box.
+const INNER_X: f32 = 8.0;
+/// The epic popup never grows past this.
+const EPIC_POPUP_MAX: f32 = 520.0;
+
+/// Each of the three combos gets a third of the row after the two gaps.
+pub fn combo_width(available: f32) -> f32 {
+    ((available - 2.0 * GAP) / 3.0).floor().max(80.0)
+}
+
+/// The epic popup: at least the combo, wide enough for the longest entry plus room, at most 520.
+pub fn epic_popup_width(combo_w: f32, longest_entry: f32) -> f32 {
+    (longest_entry + 24.0).clamp(combo_w, EPIC_POPUP_MAX.max(combo_w))
+}
+
+/// A small muted chevron for the combos.
+fn chevron(color: egui::Color32) -> impl FnOnce(&Ui, Rect, &egui::style::WidgetVisuals, bool) + 'static {
+    move |ui, rect, _, _| {
+        let c = rect.center();
+        let pts = vec![c + vec2(-4.0, -2.0), c + vec2(0.0, 2.0), c + vec2(4.0, -2.0)];
+        ui.painter().add(egui::Shape::line(pts, Stroke::new(1.5, color)));
+    }
+}
+
+/// A ComboBox confined to `w`, its selected text truncated with "…".
+fn combo(ui: &mut Ui, salt: &str, text: String, w: f32, p: &Palette, contents: impl FnOnce(&mut Ui)) {
+    ui.allocate_ui(vec2(w, crate::views::BUTTON_H), |ui| {
+        egui::ComboBox::from_id_salt(salt).selected_text(text).width(w).truncate().icon(chevron(p.muted)).show_ui(ui, |ui| {
+            ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
+            contents(ui);
+        });
+    });
+}
+
+/// What Esc does in the search box: first it clears the text and any search, then it blurs.
+#[derive(Debug, PartialEq, Eq)]
+pub enum SearchEsc {
+    Clear,
+    Blur,
+}
+
+pub fn search_esc(has_text: bool, search_active: bool) -> SearchEsc {
+    if has_text || search_active { SearchEsc::Clear } else { SearchEsc::Blur }
+}
+
 fn filters(app: &mut App, ui: &mut Ui, p: &Palette) {
-    ui.horizontal_wrapped(|ui| {
+    ui.spacing_mut().button_padding = vec2(INNER_X, 4.0);
+    ui.spacing_mut().interact_size.y = crate::views::BUTTON_H;
+    let w = combo_width(ui.available_width());
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = GAP;
         // Team scope: All, each configured sub-team, or tickets with no team label.
         let options = filter::team_options(&app.cfg.scope.teams);
         let label = options.iter().find(|(t, _)| *t == app.filter.team).map_or_else(
@@ -98,7 +149,7 @@ fn filters(app: &mut App, ui: &mut Ui, p: &Palette) {
             },
             |(_, l)| l.clone(),
         );
-        egui::ComboBox::from_id_salt("team").selected_text(label).width(220.0).show_ui(ui, |ui| {
+        combo(ui, "team", label, w, p, |ui| {
             for (scope, l) in &options {
                 if ui.selectable_label(app.filter.team == *scope, l).clicked() {
                     app.actions.push(Action::SetTeam(scope.clone()));
@@ -116,12 +167,16 @@ fn filters(app: &mut App, ui: &mut Ui, p: &Palette) {
         let on_roadmap = roadmap_epics(app);
         let entry = |k: &str, s: &str| if on_roadmap.contains(k) { format!("{k} · {s} · roadmap") } else { format!("{k} · {s}") };
         let label = app.filter.epic.as_ref().and_then(|k| epics.iter().find(|(key, _)| key == k)).map(|(k, s)| entry(k, s)).unwrap_or("All epics".into());
-        egui::ComboBox::from_id_salt("epic").selected_text(label).width(220.0).show_ui(ui, |ui| {
+        let longest = epics.iter().map(|(k, s)| ui.painter().layout_no_wrap(entry(k, s), theme::body(14.0), p.text).size().x).fold(0.0, f32::max);
+        let popup_w = epic_popup_width(w, longest);
+        combo(ui, "epic", label, w, p, |ui| {
+            ui.set_min_width(popup_w);
+            ui.set_max_width(popup_w);
             if ui.selectable_label(app.filter.epic.is_none(), "All epics").clicked() {
                 app.actions.push(Action::SetEpic(None));
             }
             for (k, s) in &epics {
-                if ui.selectable_label(app.filter.epic.as_deref() == Some(k), entry(k, s)).clicked() {
+                if ui.selectable_label(app.filter.epic.as_deref() == Some(k), entry(k, s)).on_hover_text(entry(k, s)).clicked() {
                     app.actions.push(Action::SetEpic(Some(k.clone())));
                 }
             }
@@ -129,13 +184,17 @@ fn filters(app: &mut App, ui: &mut Ui, p: &Palette) {
         // Sprint scope: All, the board's active and future sprints, or Backlog.
         let options = crate::filter::sprint_options(&app.sprints);
         let label = options.iter().find(|(s, _)| *s == app.filter.sprint).map_or("All sprints".to_string(), |(_, l)| l.clone());
-        egui::ComboBox::from_id_salt("sprint").selected_text(label).width(200.0).show_ui(ui, |ui| {
+        combo(ui, "sprint", label, w, p, |ui| {
             for (scope, l) in &options {
                 if ui.selectable_label(app.filter.sprint == *scope, l).clicked() {
                     app.actions.push(Action::SetSprint(scope.clone()));
                 }
             }
         });
+    });
+    ui.add_space(GAP);
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing = vec2(GAP, GAP);
         let quick = app.cfg.issues.filters.clone();
         for (i, f) in quick.iter().enumerate() {
             let active = app.filter.quick == Some(i);
@@ -146,16 +205,27 @@ fn filters(app: &mut App, ui: &mut Ui, p: &Palette) {
         if ui.add(toggle_button("Mine", app.filter.mine, p)).clicked() {
             app.actions.push(Action::ToggleMine);
         }
-        if ui.add(toggle_button("Roadmap", app.filter.roadmap, p)).clicked() {
+        if ui.add(toggle_button("Roadmap", app.filter.roadmap, p)).on_hover_text("m").clicked() {
             app.actions.push(Action::ToggleRoadmap);
         }
     });
-    ui.add_space(6.0);
+    ui.add_space(GAP);
+    let id = egui::Id::new("issue-search");
+    if ui.memory(|m| m.has_focus(id))
+        && search_esc(!app.filter.text.is_empty(), app.search_active) == SearchEsc::Clear
+        && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+    {
+        app.filter.text.clear();
+        if app.search_active {
+            app.actions.push(Action::RunSearch(String::new()));
+        }
+    }
     let r = ui.add(
         egui::TextEdit::singleline(&mut app.filter.text)
+            .id(id)
             .hint_text("Filter, or type JQL and press Enter (⌘F)")
             .desired_width(f32::INFINITY)
-            .margin(vec2(8.0, 6.0)),
+            .margin(vec2(INNER_X, 6.0)),
     );
     if app.focus_search {
         r.request_focus();
@@ -163,14 +233,27 @@ fn filters(app: &mut App, ui: &mut Ui, p: &Palette) {
     }
     if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
         let t = app.filter.text.trim().to_string();
-        // JQL has an operator; a bare word is a local text filter.
-        if t.contains('=') || t.contains(" in ") || t.contains('~') || t.contains('!') {
-            app.filter.text.clear();
-            // A typed search replaces any quick filter.
-            app.filter.quick = None;
-            app.actions.push(Action::RunSearch(t));
+        // JQL has an operator; a bare word is a local text filter. The JQL stays in the box.
+        if filter::looks_like_jql(&t) {
+            app.actions.push(Action::RunTypedSearch(t));
         }
     }
+}
+
+/// The count row's text: a plain count, a JQL count, or (nothing to show yet) a loading line.
+pub fn count_label(rows: usize, loading_first: bool, typed_jql: bool) -> String {
+    match (rows, loading_first, typed_jql) {
+        (0, true, _) => "Loading issues…".to_string(),
+        (1, _, false) => "1 issue".to_string(),
+        (1, _, true) => "1 issue · JQL".to_string(),
+        (n, _, false) => format!("{n} issues"),
+        (n, _, true) => format!("{n} issues · JQL"),
+    }
+}
+
+/// "Clear search" for a typed JQL search; "Clear filters" when only a quick filter (or team scope) drives it.
+pub fn clear_label(typed_jql: bool) -> &'static str {
+    if typed_jql { "Clear search" } else { "Clear filters" }
 }
 
 fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
@@ -182,19 +265,25 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
         && super::error_banner(ui, p, "Couldn't load issues.", &e)
     {
         let retry = match (&app.last_search_jql, app.search_active) {
+            (Some(jql), true) if app.typed_search => Action::RunTypedSearch(jql.clone()),
             (Some(jql), true) => Action::RunSearch(jql.clone()),
             _ => Action::Refresh,
         };
         app.actions.push(retry);
     }
-    ui.horizontal(|ui| {
-        ui.label(RichText::new(format!("{} issues", rows.len())).color(p.muted).size(12.0));
-        if app.search_pending.is_some() {
+    // One fixed height in every state, so the list below never moves.
+    let updating = app.search_pending.is_some() || loaded.is_some_and(|l| l.loading);
+    let loading_first = updating && rows.is_empty();
+    ui.allocate_ui_with_layout(vec2(ui.available_width(), crate::views::BUTTON_H), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+        ui.set_min_height(crate::views::BUTTON_H);
+        ui.spacing_mut().item_spacing.x = 8.0;
+        ui.label(RichText::new(count_label(rows.len(), loading_first, app.typed_search)).color(p.muted).size(12.0));
+        if app.search_active && ui.add(button(clear_label(app.typed_search), p)).clicked() {
+            app.actions.push(Action::RunSearch(String::new()));
+        }
+        if updating && !loading_first {
             crate::views::icons::spinner(ui, crate::views::icons::INLINE_SPINNER, p);
             ui.label(RichText::new("updating…").color(p.muted).size(12.0));
-        }
-        if app.search_active && ui.add(button("Clear search", p)).clicked() {
-            app.actions.push(Action::RunSearch(String::new()));
         }
     });
     let columns = app.cfg.issues.columns.clone();
@@ -277,5 +366,47 @@ fn goto_box(app: &mut App, ctx: &egui::Context, p: &Palette) {
     });
     if go {
         app.actions.push(Action::GoTo);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn count_row_label_follows_state() {
+        assert_eq!(count_label(0, true, false), "Loading issues…", "nothing yet: no count");
+        assert_eq!(count_label(0, true, true), "Loading issues…");
+        assert_eq!(count_label(0, false, false), "0 issues");
+        assert_eq!(count_label(1, false, false), "1 issue");
+        assert_eq!(count_label(20, true, false), "20 issues", "previous rows stay with their count while updating");
+        assert_eq!(count_label(2, false, true), "2 issues · JQL");
+    }
+
+    #[test]
+    fn clear_button_names_what_it_clears() {
+        assert_eq!(clear_label(true), "Clear search");
+        assert_eq!(clear_label(false), "Clear filters");
+    }
+
+    #[test]
+    fn esc_clears_then_blurs() {
+        assert_eq!(search_esc(true, false), SearchEsc::Clear);
+        assert_eq!(search_esc(false, true), SearchEsc::Clear);
+        assert_eq!(search_esc(false, false), SearchEsc::Blur);
+    }
+
+    #[test]
+    fn combos_share_the_row() {
+        assert_eq!(combo_width(600.0), 194.0);
+        assert!(3.0 * combo_width(568.0) + 2.0 * GAP <= 568.0);
+        assert_eq!(combo_width(100.0), 80.0, "floor");
+    }
+
+    #[test]
+    fn epic_popup_is_capped() {
+        assert_eq!(epic_popup_width(190.0, 100.0), 190.0, "never narrower than the combo");
+        assert_eq!(epic_popup_width(190.0, 300.0), 324.0);
+        assert_eq!(epic_popup_width(190.0, 900.0), 520.0);
     }
 }

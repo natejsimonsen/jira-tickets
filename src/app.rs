@@ -89,6 +89,8 @@ pub enum Action {
     ToggleMine,
     ToggleRoadmap,
     RunSearch(String),
+    /// A JQL search typed into the search box (it stays there while active).
+    RunTypedSearch(String),
     ToggleGoTo,
     GoTo,
     Move(i32),
@@ -197,6 +199,8 @@ pub struct App {
     pub search_pending: Option<u64>,
     /// The JQL of the running search, for Retry.
     pub last_search_jql: Option<String>,
+    /// The active search was typed into the search box (not a quick filter or team scope).
+    pub typed_search: bool,
     /// Jira rejected a configured member, so team queries match labels only until restart.
     pub members_disabled: bool,
     /// Unposted comment text, keyed by issue key.
@@ -283,6 +287,7 @@ impl App {
             search_seq: 0,
             search_pending: None,
             last_search_jql: None,
+            typed_search: false,
             members_disabled: false,
             drafts: HashMap::new(),
             posting: None,
@@ -743,12 +748,22 @@ impl App {
                 self.filter.roadmap = !self.filter.roadmap;
                 self.cursor = 0;
             }
+            Action::RunTypedSearch(jql) => {
+                // A typed search replaces any quick filter.
+                self.filter.quick = None;
+                self.apply(Action::RunSearch(jql.clone()), ctx);
+                self.typed_search = !jql.trim().is_empty();
+            }
             Action::RunSearch(jql) => {
                 self.cursor = 0;
+                self.typed_search = false;
                 self.search_seq += 1;
                 if jql.trim().is_empty() {
                     self.search_active = false;
                     self.filter.quick = None;
+                    if crate::filter::looks_like_jql(&self.filter.text) {
+                        self.filter.text.clear();
+                    }
                     self.last_search_jql = None;
                     self.search_pending = None;
                     self.store.lists.remove(&ListId::Search);

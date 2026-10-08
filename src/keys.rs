@@ -84,7 +84,7 @@ pub fn hints(picker_open: bool, has_selection: bool, text_focused: bool) -> &'st
     } else if has_selection && !text_focused {
         "t transition · a assign · s sprint · e edit · l label · J/K rank · c copy · ⌘O open · ? help"
     } else {
-        "j/k move · ⌘K go to · / search · ? help"
+        "j/k move · ⌘K go to · ⌘F search · ? help"
     }
 }
 
@@ -112,7 +112,7 @@ mod tests {
     fn hints_follow_context() {
         let picker = "↑/↓ move · Enter confirm · Esc cancel";
         let selected = "t transition · a assign · s sprint · e edit · l label · J/K rank · c copy · ⌘O open · ? help";
-        let browse = "j/k move · ⌘K go to · / search · ? help";
+        let browse = "j/k move · ⌘K go to · ⌘F search · ? help";
         assert_eq!(hints(true, true, false), picker);
         assert_eq!(hints(true, false, true), picker, "a picker's own text field still means picker keys");
         assert_eq!(hints(false, true, false), selected);
