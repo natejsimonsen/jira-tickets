@@ -109,6 +109,10 @@ pub enum HintContext {
     Picker,
     Selected,
     Browse,
+    /// Selected, with a server search (text or JQL) on screen: Esc clears it.
+    SelectedSearch,
+    /// Browse, with a server search on screen.
+    BrowseSearch,
 }
 
 /// Which text field has keyboard focus, if any.
@@ -130,7 +134,26 @@ pub enum PickerHint {
     Other,
 }
 
-pub fn hint_context(help_open: bool, goto_open: bool, picker: Option<PickerHint>, has_selection: bool, focus: Focus) -> HintContext {
+/// What the hint bar needs to know about the screen.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct HintState {
+    pub help_open: bool,
+    pub goto_open: bool,
+    pub picker: Option<PickerHint>,
+    pub has_selection: bool,
+    pub focus: Focus,
+    /// A server search (text or JQL) is on screen, so Esc clears it even with the box unfocused.
+    pub search_shown: bool,
+}
+
+impl HintState {
+    pub fn new(focus: Focus) -> Self {
+        HintState { help_open: false, goto_open: false, picker: None, has_selection: false, focus, search_shown: false }
+    }
+}
+
+pub fn hint_context(s: HintState) -> HintContext {
+    let HintState { help_open, goto_open, picker, has_selection, focus, search_shown } = s;
     match (help_open, goto_open, picker) {
         (true, _, _) => HintContext::Help,
         (_, _, Some(PickerHint::Edit)) => HintContext::EditPicker,
@@ -141,7 +164,9 @@ pub fn hint_context(help_open: bool, goto_open: bool, picker: Option<PickerHint>
             Focus::Search(true) => HintContext::Search,
             Focus::Search(false) => HintContext::SearchEmpty,
             Focus::Composer => HintContext::Composer,
+            Focus::None if has_selection && search_shown => HintContext::SelectedSearch,
             Focus::None if has_selection => HintContext::Selected,
+            Focus::None if search_shown => HintContext::BrowseSearch,
             _ => HintContext::Browse,
         },
     }
@@ -171,7 +196,21 @@ pub fn hints(c: HintContext) -> &'static [Hint] {
             &[K("⌘O"), W("open")],
             &[K("?"), W("help")],
         ],
+        HintContext::SelectedSearch => &[
+            &[K("j/k"), W("move")],
+            &[K("Esc"), W("clear")],
+            &[K("t"), W("transition")],
+            &[K("a"), W("assign")],
+            &[K("s"), W("sprint")],
+            &[K("e"), W("edit")],
+            &[K("l"), W("label")],
+            &[K("J/K"), W("rank")],
+            &[K("c"), W("copy")],
+            &[K("⌘O"), W("open")],
+            &[K("?"), W("help")],
+        ],
         HintContext::Browse => &[&[K("j/k"), W("move")], &[K("⌘K"), W("go to")], &[K("⌘F"), W("search")], &[K("?"), W("help")]],
+        HintContext::BrowseSearch => &[&[K("j/k"), W("move")], &[K("Esc"), W("clear")], &[K("⌘K"), W("go to")], &[K("⌘F"), W("search")], &[K("?"), W("help")]],
     }
 }
 
@@ -235,22 +274,35 @@ mod tests {
         assert_eq!(t.matches("| **").count(), 3);
     }
 
+    fn st(help_open: bool, goto_open: bool, picker: Option<PickerHint>, has_selection: bool, focus: Focus) -> HintState {
+        HintState { help_open, goto_open, picker, has_selection, ..HintState::new(focus) }
+    }
+
     #[test]
     fn hints_follow_context() {
         use HintContext::*;
-        assert_eq!(hint_context(true, true, Some(PickerHint::Other), true, Focus::OtherText), Help, "help wins");
-        assert_eq!(hint_context(false, false, Some(PickerHint::Edit), true, Focus::OtherText), EditPicker);
-        assert_eq!(hint_context(false, false, Some(PickerHint::Other), false, Focus::OtherText), Picker, "a picker's own text field still means picker keys");
-        assert_eq!(hint_context(false, false, Some(PickerHint::Assign), true, Focus::OtherText), AssignPicker);
+        let search = |sel| HintState { has_selection: sel, search_shown: true, ..HintState::new(Focus::None) };
+        assert_eq!(hint_context(search(true)), SelectedSearch, "a search on screen keeps Esc clear after the box blurs");
+        assert_eq!(hint_context(search(false)), BrowseSearch);
+        assert_eq!(hint_text(hints(BrowseSearch)), "j/k move · Esc clear · ⌘K go to · ⌘F search · ? help");
+        assert!(hint_text(hints(SelectedSearch)).starts_with("j/k move · Esc clear · t transition"));
+        assert_eq!(hint_context(st(true, true, Some(PickerHint::Other), true, Focus::OtherText)), Help, "help wins");
+        assert_eq!(hint_context(st(false, false, Some(PickerHint::Edit), true, Focus::OtherText)), EditPicker);
+        assert_eq!(
+            hint_context(st(false, false, Some(PickerHint::Other), false, Focus::OtherText)),
+            Picker,
+            "a picker's own text field still means picker keys"
+        );
+        assert_eq!(hint_context(st(false, false, Some(PickerHint::Assign), true, Focus::OtherText)), AssignPicker);
         assert_eq!(hint_text(hints(AssignPicker)), "Type to filter · ↑/↓ move · Enter confirm · Esc cancel");
-        assert_eq!(hint_context(false, true, None, true, Focus::OtherText), GoTo);
-        assert_eq!(hint_context(false, false, None, true, Focus::Search(true)), Search);
-        assert_eq!(hint_context(false, false, None, true, Focus::Search(false)), SearchEmpty);
+        assert_eq!(hint_context(st(false, true, None, true, Focus::OtherText)), GoTo);
+        assert_eq!(hint_context(st(false, false, None, true, Focus::Search(true))), Search);
+        assert_eq!(hint_context(st(false, false, None, true, Focus::Search(false))), SearchEmpty);
         assert_eq!(hint_text(hints(SearchEmpty)), "Enter search JQL · Esc done");
-        assert_eq!(hint_context(false, false, None, true, Focus::Composer), Composer, "the bar follows focus into the composer");
-        assert_eq!(hint_context(false, false, None, true, Focus::None), Selected);
-        assert_eq!(hint_context(false, false, None, true, Focus::OtherText), Browse, "letters type into the field, so no selection hints");
-        assert_eq!(hint_context(false, false, None, false, Focus::None), Browse);
+        assert_eq!(hint_context(st(false, false, None, true, Focus::Composer)), Composer, "the bar follows focus into the composer");
+        assert_eq!(hint_context(st(false, false, None, true, Focus::None)), Selected);
+        assert_eq!(hint_context(st(false, false, None, true, Focus::OtherText)), Browse, "letters type into the field, so no selection hints");
+        assert_eq!(hint_context(st(false, false, None, false, Focus::None)), Browse);
         assert_eq!(hint_text(hints(Composer)), "⌘Enter post · Esc done");
         assert_eq!(hint_text(hints(Help)), "? or Esc close");
         assert_eq!(hint_text(hints(GoTo)), "Enter open · Esc close");

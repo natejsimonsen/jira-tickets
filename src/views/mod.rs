@@ -229,7 +229,7 @@ pub fn sign_in(app: &mut App, ui: &mut Ui) {
     let p = theme::palette(ui.ctx());
     if app.finding_token {
         centred(ui, "finding-token", |ui| {
-            icons::spinner(ui, 20.0, p);
+            icons::spinner(ui, icons::INLINE_SPINNER, p);
             ui.add_space(8.0);
             ui.label(RichText::new("Looking for your Jira token…").color(p.muted));
         });

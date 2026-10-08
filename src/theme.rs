@@ -96,6 +96,9 @@ pub const DARK: Palette = Palette {
     tooltip_text: hex(0xffffff),
 };
 
+// Spinners: one size (`icons::INLINE_SPINNER`, 13). The header spinner is `text` because it replaces the
+// `text` sync glyph; every inline spinner (count row, detail, composer, pickers, sign-in) is `muted`.
+
 pub fn palette(ctx: &egui::Context) -> &'static Palette {
     match ctx.theme() {
         egui::Theme::Dark => &DARK,

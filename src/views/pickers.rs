@@ -12,7 +12,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
     let p = theme::palette(ctx);
     if app.picker_loading {
         egui::Area::new(egui::Id::new("picker-loading")).order(egui::Order::Foreground).anchor(egui::Align2::CENTER_CENTER, vec2(0.0, 0.0)).show(ctx, |ui| {
-            crate::views::icons::spinner(ui, 24.0, p);
+            crate::views::icons::spinner(ui, crate::views::icons::INLINE_SPINNER, p);
         });
     }
     let help_open = app.help_open;

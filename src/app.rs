@@ -1200,6 +1200,12 @@ impl App {
         if ctx.text_edit_focused() {
             return;
         }
+        // A search the box ran stays clearable with the box unfocused (the hint bar keeps "Esc clear").
+        if crate::views::issues::esc_clears_search(self.search_active, self.typed_search, self.text_search.is_some()) && shortcut(Modifiers::NONE, Key::Escape)
+        {
+            self.filter.text.clear();
+            self.actions.push(Action::RunSearch(String::new()));
+        }
         if shortcut(Modifiers::NONE, Key::Slash) {
             self.focus_search = true;
         }

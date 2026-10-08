@@ -203,7 +203,14 @@ pub fn show(app: &mut App, ui: &mut Ui) {
                     _ => crate::keys::PickerHint::Other,
                 });
                 let focus = text_focus(ui, app);
-                let c = crate::keys::hint_context(app.help_open, app.goto.is_some(), edit, app.selected.is_some(), focus);
+                let c = crate::keys::hint_context(crate::keys::HintState {
+                    help_open: app.help_open,
+                    goto_open: app.goto.is_some(),
+                    picker: edit,
+                    has_selection: app.selected.is_some(),
+                    focus,
+                    search_shown: esc_clears_search(app.search_active, app.typed_search, app.text_search.is_some()),
+                });
                 hint_bar(ui, crate::keys::hints(c), p);
             });
         });
@@ -382,6 +389,17 @@ pub enum SearchEsc {
 
 pub fn search_esc(has_text: bool, search_active: bool) -> SearchEsc {
     if has_text || search_active { SearchEsc::Clear } else { SearchEsc::Blur }
+}
+
+/// With the search box unfocused, Esc still clears a server search (typed JQL or a text search) on screen;
+/// a quick filter's search is not the box's and stays.
+pub fn esc_clears_search(search_active: bool, typed: bool, text: bool) -> bool {
+    search_active && (typed || text)
+}
+
+/// The text search is waiting out its debounce: the box holds a term the active text search is not for yet.
+pub fn text_debouncing(term: Option<&str>, text_search: Option<&str>) -> bool {
+    term.is_some_and(|t| text_search != Some(t))
 }
 
 fn filters(app: &mut App, ui: &mut Ui, p: &Palette) {
@@ -599,7 +617,9 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
     // One spinner per operation (`spinner_slots`): the header for a refresh, the count row for a first load or
     // a search started here.
     let syncing = crate::views::header_syncing(&app.lists);
-    let row_spinner = crate::views::spinner_slots(syncing, pending, app.search_from_refresh, loading_first).1;
+    // From the first keystroke of a term, not only once its debounced search is sent.
+    let debouncing = text_debouncing(filter::text_search_term(&app.filter.text), app.text_search.as_deref());
+    let row_spinner = crate::views::spinner_slots(syncing, pending, app.search_from_refresh, loading_first).1 || debouncing;
     let text_filter = !app.filter.text.trim().is_empty() && !filter::looks_like_jql(&app.filter.text) && !text_rows_shown(app);
     let total = text_filter.then(|| rows_without_text_filter(app));
     let showing_search = src == ListId::Search && app.store.lists.contains_key(&ListId::Search);
@@ -612,7 +632,8 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
         ui.spacing_mut().item_spacing.x = COUNT_GAP;
         // One pattern, muted 12, the spinner before the verb: "[count] ⟳ Updating…", or "⟳ Loading issues…"
         // when there is nothing to count yet.
-        let color = if loading_first { p.muted } else { count_color(updating, p) };
+        // Muted only beside the inline "Updating…": a header sync (⌘R) leaves the count at full `text`.
+        let color = if loading_first { p.muted } else { count_color(row_spinner, p) };
         if loading_first {
             if row_spinner {
                 crate::views::icons::spinner(ui, crate::views::icons::INLINE_SPINNER, p);
@@ -1023,6 +1044,22 @@ mod tests {
     fn goto_box_sits_just_under_the_header() {
         let gap = goto_top() - 48.0;
         assert!((8.0..=16.0).contains(&gap), "{gap}");
+    }
+
+    #[test]
+    fn unfocused_esc_clears_only_the_boxs_searches() {
+        assert!(esc_clears_search(true, true, false), "typed JQL");
+        assert!(esc_clears_search(true, false, true), "text search");
+        assert!(!esc_clears_search(true, false, false), "a quick filter's search");
+        assert!(!esc_clears_search(false, true, false));
+    }
+
+    #[test]
+    fn updating_shows_from_the_first_keystroke() {
+        assert!(text_debouncing(Some("alpha"), None), "typed, debounce running");
+        assert!(text_debouncing(Some("alpha"), Some("alp")), "a newer term");
+        assert!(!text_debouncing(Some("alpha"), Some("alpha")), "sent: the search spinner takes over");
+        assert!(!text_debouncing(None, None), "JQL or one letter: no text search");
     }
 
     #[test]

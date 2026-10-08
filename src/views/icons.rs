@@ -81,8 +81,10 @@ pub fn spinner_box(glyph: f32) -> f32 {
     2.0 * (glyph * 5.5 / 16.0 + 1.0)
 }
 
-/// Inline spinner size (count row, detail, composer).
-pub const INLINE_SPINNER: f32 = 14.0;
+/// The one spinner size: 13, the header spinner's (`spinner_box(16)`), everywhere (count row, detail,
+/// composer, picker loading, sign-in). Colour rule (see theme.rs): the header spinner is `text`, as it
+/// replaces the `text` sync glyph; every other spinner is `muted`, like the text beside it.
+pub const INLINE_SPINNER: f32 = 13.0;
 
 /// A `size`×`size` spinner in an exact slot, so text after it never shifts.
 pub fn spinner(ui: &mut Ui, size: f32, p: &Palette) -> Response {
@@ -127,5 +129,6 @@ mod tests {
     fn header_spinner_matches_the_sync_glyph() {
         // paint_spinner's radius is box / 2 − 1: the glyph's 5.5 px arc at 16 px.
         assert_eq!(spinner_box(GLYPH) / 2.0 - 1.0, 5.5);
+        assert_eq!(spinner_box(GLYPH), INLINE_SPINNER, "one spinner size");
     }
 }
