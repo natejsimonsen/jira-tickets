@@ -96,6 +96,8 @@ pub enum HintContext {
     /// The comment composer has focus.
     Composer,
     EditPicker,
+    /// The Assign picker: its filter box has focus.
+    AssignPicker,
     Picker,
     Selected,
     Browse,
@@ -111,12 +113,20 @@ pub enum Focus {
     OtherText,
 }
 
-/// `picker`: Some(true) for the Edit picker, Some(false) for any other.
-pub fn hint_context(help_open: bool, goto_open: bool, picker: Option<bool>, has_selection: bool, focus: Focus) -> HintContext {
+/// Which kind of picker is open.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum PickerHint {
+    Edit,
+    Assign,
+    Other,
+}
+
+pub fn hint_context(help_open: bool, goto_open: bool, picker: Option<PickerHint>, has_selection: bool, focus: Focus) -> HintContext {
     match (help_open, goto_open, picker) {
         (true, _, _) => HintContext::Help,
-        (_, _, Some(true)) => HintContext::EditPicker,
-        (_, _, Some(false)) => HintContext::Picker,
+        (_, _, Some(PickerHint::Edit)) => HintContext::EditPicker,
+        (_, _, Some(PickerHint::Assign)) => HintContext::AssignPicker,
+        (_, _, Some(PickerHint::Other)) => HintContext::Picker,
         (_, true, None) => HintContext::GoTo,
         _ => match focus {
             Focus::Search => HintContext::Search,
@@ -136,6 +146,7 @@ pub fn hints(c: HintContext) -> &'static [Hint] {
         HintContext::Search => &[&[K("Enter"), W("search JQL")], &[K("Esc"), W("clear")]],
         HintContext::Composer => &[&[K("⌘Enter"), W("post")], &[K("Esc"), W("leave")]],
         HintContext::EditPicker => &[&[K("Tab"), W("next field")], &[K("Enter"), W("confirm")], &[K("Esc"), W("cancel")]],
+        HintContext::AssignPicker => &[&[W("Type to filter")], &[K("↑/↓"), W("move")], &[K("Enter"), W("confirm")], &[K("Esc"), W("cancel")]],
         HintContext::Picker => &[&[K("↑/↓"), W("move")], &[K("Enter"), W("confirm")], &[K("Esc"), W("cancel")]],
         HintContext::Selected => &[
             &[K("j/k"), W("move")],
@@ -212,9 +223,11 @@ mod tests {
     #[test]
     fn hints_follow_context() {
         use HintContext::*;
-        assert_eq!(hint_context(true, true, Some(false), true, Focus::OtherText), Help, "help wins");
-        assert_eq!(hint_context(false, false, Some(true), true, Focus::OtherText), EditPicker);
-        assert_eq!(hint_context(false, false, Some(false), false, Focus::OtherText), Picker, "a picker's own text field still means picker keys");
+        assert_eq!(hint_context(true, true, Some(PickerHint::Other), true, Focus::OtherText), Help, "help wins");
+        assert_eq!(hint_context(false, false, Some(PickerHint::Edit), true, Focus::OtherText), EditPicker);
+        assert_eq!(hint_context(false, false, Some(PickerHint::Other), false, Focus::OtherText), Picker, "a picker's own text field still means picker keys");
+        assert_eq!(hint_context(false, false, Some(PickerHint::Assign), true, Focus::OtherText), AssignPicker);
+        assert_eq!(hint_text(hints(AssignPicker)), "Type to filter · ↑/↓ move · Enter confirm · Esc cancel");
         assert_eq!(hint_context(false, true, None, true, Focus::OtherText), GoTo);
         assert_eq!(hint_context(false, false, None, true, Focus::Search), Search);
         assert_eq!(hint_context(false, false, None, true, Focus::Composer), Composer, "the bar follows focus into the composer");

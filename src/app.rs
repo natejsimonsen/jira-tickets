@@ -1205,11 +1205,13 @@ pub fn transition_cursor(items: &[Transition], status: &str) -> usize {
 pub const ASSIGN_USERS: usize = 9;
 
 /// The Assign picker's user rows (row 0, "Unassigned", is not included): the current assignee pinned
-/// first whatever the filter and whether or not the fetched list holds them, then the filter's other
-/// matches, capped at ASSIGN_USERS. The bool says matches were cut (the dialog says "Type to see more").
+/// first (whether or not the fetched list holds them) while they match the filter, then the filter's other
+/// matches, capped at ASSIGN_USERS. A current assignee the filter does not match is not shown. The bool
+/// says matches were cut (the dialog says "Type to see more").
 pub fn assign_rows(items: &[User], filter: &str, current: Option<&User>) -> (Vec<User>, bool) {
     let others: Vec<User> = filtered_users(items, filter).into_iter().filter(|u| current.is_none_or(|c| c.account_id != u.account_id)).collect();
-    let mut rows: Vec<User> = current.cloned().into_iter().collect();
+    let pinned = current.filter(|c| !filtered_users(std::slice::from_ref(*c), filter).is_empty());
+    let mut rows: Vec<User> = pinned.cloned().into_iter().collect();
     let room = ASSIGN_USERS - rows.len();
     let cut = others.len() > room;
     rows.extend(others.into_iter().take(room));
@@ -1233,15 +1235,54 @@ pub fn filtered_users(items: &[User], filter: &str) -> Vec<User> {
 }
 
 /// The Assign cursor for `rows` (from `assign_rows`; screen row = index + 1): with no filter, the pinned
-/// current assignee (else "Unassigned"); with one, the first row that matches it, so type-then-Enter
-/// assigns rather than unassigns (or re-picks the pinned assignee who does not match); none: "Unassigned".
+/// current assignee (else "Unassigned"); with one, the first match (every row matches it), so
+/// type-then-Enter assigns rather than unassigns; no match: "Unassigned".
 pub fn assign_cursor_after_filter(rows: &[User], filter: &str, pinned: bool) -> usize {
-    let f = filter.trim().to_lowercase();
-    if f.is_empty() {
+    if filter.trim().is_empty() {
         return usize::from(pinned && !rows.is_empty());
     }
-    rows.iter().position(|u| u.display_name.to_lowercase().contains(&f)).map_or(0, |i| i + 1)
+    usize::from(!rows.is_empty())
 }
+
+/// The screen row (0 is "Unassigned") holding the issue's current assignee, if it is shown.
+pub fn assign_current_row(rows: &[User], current: Option<&User>) -> Option<usize> {
+    match current {
+        None => Some(0),
+        Some(c) => rows.iter().position(|u| u.account_id == c.account_id).map(|i| i + 1),
+    }
+}
+
+/// The line under a filtered Assign list: "Type to see more" when matches were cut, else "N matches"
+/// while a filter is typed (so a short list does not end in blank space), else nothing.
+pub fn assign_note(filter: &str, matches: usize, cut: bool) -> Option<String> {
+    if cut {
+        Some("Type to see more".into())
+    } else if !filter.trim().is_empty() {
+        Some(format!("{matches} {}", if matches == 1 { "match" } else { "matches" }))
+    } else {
+        None
+    }
+}
+
+/// The Sprint picker's row (0 is "Backlog") for the issue's current sprint; None for a sprint not listed.
+pub fn sprint_current_row(items: &[Sprint], current: Option<&str>) -> Option<usize> {
+    match current {
+        None => Some(0),
+        Some(n) => items.iter().position(|s| s.name == n).map(|i| i + 1),
+    }
+}
+
+/// The placeholder of an Edit field: the value it opened with (or "—"), then the accepted values if any.
+pub fn edit_hint(orig: &str, accepted: Option<&str>) -> String {
+    let cur = if orig.trim().is_empty() { "—" } else { orig.trim() };
+    match accepted {
+        Some(a) => format!("{cur} · {a}"),
+        None => cur.to_string(),
+    }
+}
+
+/// Jira's default priority names, for the Edit placeholder.
+pub const PRIORITIES: &str = "Highest, High, Medium, Low, Lowest";
 
 /// Moves a picker cursor by `d`, wrapping at both ends.
 fn wrap_cursor(cur: usize, d: i32, len: usize) -> usize {
@@ -1498,9 +1539,13 @@ mod tests {
         let shawn = u("Shawn");
         let items: Vec<User> = ["Ann", "Grace", "Robin"].map(u).to_vec();
         let (rows, _) = assign_rows(&items, "grace", Some(&shawn));
-        assert_eq!(assign_cursor_after_filter(&rows, "grace", true), 2, "past the pinned non-match to Grace");
+        assert_eq!(rows.iter().map(|r| r.display_name.as_str()).collect::<Vec<_>>(), ["Grace", "Robin"], "the non-matching assignee is not pinned");
+        assert_eq!(assign_cursor_after_filter(&rows, "grace", false), 1, "the first match");
+        assert_eq!(assign_current_row(&rows, Some(&shawn)), None);
         let (rows, _) = assign_rows(&items, "sha", Some(&shawn));
         assert_eq!(assign_cursor_after_filter(&rows, "sha", true), 1, "the pinned assignee matches");
+        assert_eq!(assign_current_row(&rows, Some(&shawn)), Some(1));
+        assert_eq!(assign_current_row(&rows, None), Some(0), "unassigned: the Unassigned row is current");
         let (rows, _) = assign_rows(&items, "zed", None);
         assert_eq!(assign_cursor_after_filter(&rows, "zed", false), 0, "typed, no match");
         let (rows, _) = assign_rows(&items, "", Some(&shawn));
@@ -1520,10 +1565,14 @@ mod tests {
         assert_eq!(rows[0].display_name, "Shawn");
         assert!(cut);
         assert_eq!(rows.iter().filter(|r| r.display_name == "Shawn").count(), 1, "not listed twice");
-        // Filtered to others: still pinned.
+        // Filtered to others: the assignee drops out.
         let (rows, cut) = assign_rows(&items, "user 0", Some(&shawn));
-        assert_eq!(rows.iter().map(|r| r.display_name.as_str()).collect::<Vec<_>>()[..2], ["Shawn", "User 00"]);
-        assert!(cut, "User 00..09: 10 matches, room for 8");
+        assert_eq!(rows[0].display_name, "User 00");
+        assert!(cut, "User 00..09: 10 matches, room for 9");
+        assert_eq!(assign_note("user 0", rows.len(), cut).as_deref(), Some("Type to see more"));
+        assert_eq!(assign_note("grace", 2, false).as_deref(), Some("2 matches"));
+        assert_eq!(assign_note("grace", 1, false).as_deref(), Some("1 match"));
+        assert_eq!(assign_note("", 9, false), None);
         // Short list: nothing cut.
         let (rows, cut) = assign_rows(&items[..3], "", None);
         assert_eq!(rows.len(), 3);
@@ -1584,6 +1633,11 @@ mod tests {
         let sprints = [sp("Sprint 91"), sp("Sprint 92")];
         assert_eq!(sprint_cursor(&sprints, Some("Sprint 92")), 2);
         assert_eq!(sprint_cursor(&sprints, None), 0, "backlog");
+        assert_eq!(sprint_current_row(&sprints, Some("Sprint 92")), Some(2));
+        assert_eq!(sprint_current_row(&sprints, Some("Sprint 80")), None, "a closed sprint is not listed");
+        assert_eq!(sprint_current_row(&sprints, None), Some(0));
+        assert_eq!(edit_hint("", Some(PRIORITIES)), "— · Highest, High, Medium, Low, Lowest");
+        assert_eq!(edit_hint(" 3 ", None), "3");
     }
 
     #[test]

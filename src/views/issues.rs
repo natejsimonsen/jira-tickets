@@ -149,7 +149,11 @@ pub fn show(app: &mut App, ui: &mut Ui) {
         .frame(Frame::new().fill(p.surface).inner_margin(Margin::symmetric(16, 0)).stroke(Stroke::new(1.0, p.border)))
         .show(ui, |ui| {
             ui.horizontal_centered(|ui| {
-                let edit = app.picker.as_ref().map(|pk| matches!(pk, crate::app::Picker::Edit { .. }));
+                let edit = app.picker.as_ref().map(|pk| match pk {
+                    crate::app::Picker::Edit { .. } => crate::keys::PickerHint::Edit,
+                    crate::app::Picker::Assign { .. } => crate::keys::PickerHint::Assign,
+                    _ => crate::keys::PickerHint::Other,
+                });
                 let focus = text_focus(ui, app);
                 let c = crate::keys::hint_context(app.help_open, app.goto.is_some(), edit, app.selected.is_some(), focus);
                 hint_bar(ui, crate::keys::hints(c), p);

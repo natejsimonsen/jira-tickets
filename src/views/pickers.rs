@@ -1,7 +1,9 @@
 //! Modal pickers for transitions, resolutions, assignees, sprints, and field edits.
 //! Keys (↑/↓/j/k, Enter, Esc) are handled in `App::shortcuts`; this only draws.
 
-use crate::app::{Action, App, Picker, assign_cursor_after_filter, assign_rows, transition_row};
+use crate::app::{
+    Action, App, Picker, assign_current_row, assign_cursor_after_filter, assign_note, assign_rows, edit_hint, sprint_current_row, transition_row,
+};
 use crate::theme::{self, Palette};
 use crate::views::{button, primary_button};
 use egui::{Frame, Margin, RichText, vec2};
@@ -15,6 +17,10 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
     }
     let help_open = app.help_open;
     let hint_bar = crate::views::hint_bar_height(app);
+    // The issue's current status and sprint, for the "current" marker.
+    let issue = app.picker.as_ref().map(picker_key).and_then(|k| app.store.get(k));
+    let status = issue.map(|i| i.status.name.clone()).unwrap_or_default();
+    let sprint = issue.and_then(|i| i.sprint.clone());
     let Some(picker) = app.picker.as_mut() else { return };
     // Dim the page behind the dialog and swallow its clicks.
     crate::views::backdrop(ctx, "picker-backdrop", egui::Order::Middle, hint_bar, p);
@@ -28,7 +34,8 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
             match picker {
                 Picker::Transition { key, items, cursor } => {
                     title(ui, p, &format!("Transition {key}"));
-                    rows(ui, p, items.iter().map(|t| Row::plain(transition_row(t))).collect(), &mut confirm, cursor, None);
+                    let names = items.iter().map(|t| Row::plain(transition_row(t)).current_if(t.to.eq_ignore_ascii_case(&status))).collect();
+                    rows(ui, p, names, &mut confirm, cursor, None);
                 }
                 Picker::Resolution { key, items, cursor, .. } => {
                     title(ui, p, &format!("Resolution for {key}"));
@@ -36,7 +43,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                 }
                 Picker::Assign { key, items, current, cursor, filter } => {
                     title(ui, p, &format!("Assign {key}"));
-                    let r = ui.add(field(filter).hint_text("Type a name"));
+                    let r = ui.add(field(filter).hint_text(crate::views::field_hint("Type a name", theme::body(14.0), p)));
                     ui.add_space(8.0);
                     // Not under the help overlay, or typing would land in the filter behind it.
                     if !help_open {
@@ -46,21 +53,29 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                     if r.changed() {
                         *cursor = assign_cursor_after_filter(&shown, filter, current.is_some());
                     }
+                    let now = assign_current_row(&shown, current.as_ref());
                     let mut names = vec![Row::muted("Unassigned")];
                     names.extend(shown.iter().map(|u| Row::plain(u.display_name.clone())));
+                    for (i, n) in names.iter_mut().enumerate() {
+                        n.current = now == Some(i);
+                    }
                     if *cursor >= names.len() {
                         *cursor = 0;
                     }
-                    let note = cut.then_some("Type to see more");
-                    rows(ui, p, names, &mut confirm, cursor, Some(note));
+                    let note = assign_note(filter, shown.len(), cut);
+                    rows(ui, p, names, &mut confirm, cursor, Some(note.as_deref()));
                 }
                 Picker::Sprint { key, items, cursor } => {
-                    title(ui, p, &format!("Move {key}"));
+                    title(ui, p, &format!("Move {key} to sprint"));
+                    let now = sprint_current_row(items, sprint.as_deref());
                     let mut names = vec![Row::plain("Backlog".to_string())];
                     names.extend(items.iter().map(|s| Row::plain(format!("{} ({})", s.name, s.state))));
+                    for (i, n) in names.iter_mut().enumerate() {
+                        n.current = now == Some(i);
+                    }
                     rows(ui, p, names, &mut confirm, cursor, None);
                 }
-                Picker::Edit { key, labels, priority, points, .. } => {
+                Picker::Edit { key, labels, priority, points, orig_priority, orig_points, .. } => {
                     title(ui, p, &format!("Edit {key}"));
                     let labels_id = egui::Id::new("edit-labels");
                     let r = edit_group(ui, p, "Labels, comma separated", field(labels).id(labels_id));
@@ -69,9 +84,10 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                         r.request_focus();
                     }
                     ui.add_space(12.0);
-                    edit_group(ui, p, "Priority", field(priority));
+                    let hint = |t: String| crate::views::field_hint(&t, theme::body(14.0), p);
+                    edit_group(ui, p, "Priority", field(priority).hint_text(hint(edit_hint(orig_priority, Some(crate::app::PRIORITIES)))));
                     ui.add_space(12.0);
-                    edit_group(ui, p, "Story points", field(points));
+                    edit_group(ui, p, "Story points", field(points).hint_text(hint(edit_hint(orig_points, None))));
                 }
             }
             ui.add_space(16.0);
@@ -92,6 +108,17 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
     }
     if cancel {
         app.actions.push(Action::PickerCancel);
+    }
+}
+
+/// The issue a picker acts on.
+fn picker_key(p: &Picker) -> &str {
+    match p {
+        Picker::Transition { key, .. }
+        | Picker::Resolution { key, .. }
+        | Picker::Assign { key, .. }
+        | Picker::Sprint { key, .. }
+        | Picker::Edit { key, .. } => key,
     }
 }
 
@@ -122,18 +149,24 @@ fn edit_group(ui: &mut egui::Ui, p: &Palette, label: &str, field: egui::TextEdit
     ui.add(field)
 }
 
-/// One picker row's text; `muted` for the synthetic "no value" row (Unassigned).
+/// One picker row's text; `muted` for the synthetic "no value" row (Unassigned); `current` marks the
+/// issue's present value with a muted "current" after it, wherever the cursor is.
 struct Row {
     text: String,
     muted: bool,
+    current: bool,
 }
 
 impl Row {
     fn plain(text: String) -> Self {
-        Row { text, muted: false }
+        Row { text, muted: false, current: false }
     }
     fn muted(text: &str) -> Self {
-        Row { text: text.to_string(), muted: true }
+        Row { text: text.to_string(), muted: true, current: false }
+    }
+    fn current_if(mut self, current: bool) -> Self {
+        self.current = current;
+        self
     }
 }
 
@@ -176,7 +209,12 @@ fn row_list(ui: &mut egui::Ui, p: &Palette, names: &[Row], confirm: &mut bool, c
                     ui.set_width(ui.available_width());
                     ui.set_min_height(ROW_H - 12.0);
                     let color = if n.muted { p.muted } else { p.text };
-                    ui.add(egui::Label::new(RichText::new(&n.text).size(14.0).color(color)).truncate().selectable(false));
+                    let mut job = egui::text::LayoutJob::default();
+                    job.append(&n.text, 0.0, egui::TextFormat { font_id: theme::body(14.0), color, ..Default::default() });
+                    if n.current {
+                        job.append("current", 8.0, egui::TextFormat { font_id: theme::body(12.0), color: p.muted, ..Default::default() });
+                    }
+                    ui.add(egui::Label::new(job).truncate().selectable(false));
                 })
                 .response
                 .interact(egui::Sense::click());

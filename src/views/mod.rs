@@ -300,10 +300,22 @@ pub fn backdrop_alpha(p: &Palette) -> u8 {
     if p.dark { 140 } else { 100 }
 }
 
-/// A modal dialog's 1 px edge: `border` in light, a lifted #4a4a46 in dark so the dialog separates from the dimmed page.
+/// A modal dialog's 1 px edge, visible against both the dialog and the dimmed page in each theme: a step
+/// darker than `border` in light (`border` sits between white and the dimmed page and vanishes), a lifted
+/// #4a4a46 in dark.
 pub fn dialog_stroke(p: &Palette) -> Stroke {
-    Stroke::new(1.0, if p.dark { Color32::from_rgb(0x4a, 0x4a, 0x46) } else { p.border })
+    Stroke::new(1.0, if p.dark { Color32::from_rgb(0x4a, 0x4a, 0x46) } else { Color32::from_rgb(0xb4, 0xb3, 0xac) })
 }
+
+/// Placeholder text for a field, inset 3 px past the caret so the caret never sits on its first glyph.
+pub fn field_hint(text: &str, font: egui::FontId, p: &Palette) -> egui::text::LayoutJob {
+    let mut job = egui::text::LayoutJob::default();
+    job.append(text, HINT_INSET, egui::TextFormat { font_id: font, color: p.muted, ..Default::default() });
+    job
+}
+
+/// How far a placeholder starts past the text start (the caret).
+pub const HINT_INSET: f32 = 3.0;
 
 /// A modal dialog's fill: a step above the dimmed page in dark, plain surface in light.
 pub fn dialog_fill(p: &Palette) -> Color32 {
@@ -574,6 +586,16 @@ mod widget_tests {
         let s = row_pill_stroke(Color32::from_rgb(200, 100, 0));
         assert_eq!(s.width, 1.0);
         assert!(s.color.a() > 80 && s.color.a() < 100, "{}", s.color.a());
+    }
+
+    #[test]
+    fn dialog_edge_shows_against_dialog_and_dimmed_page() {
+        for p in [&theme::LIGHT, &theme::DARK] {
+            let edge = dialog_stroke(p).color;
+            let dimmed = theme::over(Color32::from_black_alpha(backdrop_alpha(p)), p.bg);
+            assert!(theme::contrast(edge, dialog_fill(p)) >= 1.5, "dark={}", p.dark);
+            assert!(theme::contrast(edge, dimmed) >= 1.3, "dark={}: {:.2}", p.dark, theme::contrast(edge, dimmed));
+        }
     }
 
     #[test]
