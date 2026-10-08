@@ -224,7 +224,14 @@ active sprint, as jira-cli did), quick filters from config, a "Mine"
 toggle, and a search box (`/` or `⌘F`) that takes JQL. `⌘K` jumps to a key
 or pasted browse link. A ticket assigned to a team member counts as that
 team's work even without the team label; such rows carry an amber "no
-PLAT label" pill and `l` applies the label (a write, never automatic). The sprint list comes from board 101's active and
+PLAT label" pill and `l` applies the label (a write, never automatic,
+sent as an atomic Jira `labels add` so concurrent edits are kept). "No
+team label" runs a server query (`labels is EMPTY OR labels not in (...)`
+and the same for assignees) because the base list never holds such
+tickets. If a configured member fails to resolve, the open-issues query
+is retried without the assignee clause and a toast says so. The header's
+refresh control is a painted sync icon that becomes a spinner while
+loading. The sprint list comes from board 101's active and
 future sprints, refreshed with the lists; filtering is local on each
 issue's latest non-closed sprint.
 
