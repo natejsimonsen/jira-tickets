@@ -235,6 +235,10 @@ pub struct App {
     pub text_shown: Option<String>,
     /// Jira rejected a configured member, so team queries match labels only until restart.
     pub members_disabled: bool,
+    /// Each epic's hue slot, given in order of first appearance and kept for the session (`theme::extend_epic_slots`).
+    pub epic_slots: std::collections::BTreeMap<String, usize>,
+    /// The epic combo's natural width, fixed at first paint from the cached epic list so it never grows.
+    pub epic_combo_nat: Option<f32>,
     /// Unposted comment text, keyed by issue key.
     pub drafts: HashMap<String, String>,
     /// The issue key of the comment post in flight.
@@ -332,6 +336,8 @@ impl App {
             text_search_jql: None,
             text_shown: None,
             members_disabled: false,
+            epic_slots: Default::default(),
+            epic_combo_nat: None,
             drafts: HashMap::new(),
             posting: None,
             picker: None,

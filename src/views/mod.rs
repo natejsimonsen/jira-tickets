@@ -312,10 +312,23 @@ pub fn toast_dot(kind: crate::app::ToastKind) -> Option<Color32> {
     }
 }
 
-/// The toast's x offset from the window's centre: centred over the detail pane when one shows (so it never
-/// covers the list's last row), else over the window.
-pub fn toast_x_offset(window_w: f32, detail: Option<(f32, f32)>) -> f32 {
-    detail.map_or(0.0, |(l, r)| ((l + r) / 2.0 - window_w / 2.0).round())
+/// The toast's centre x: the detail pane's centre when one shows (so it never covers the list's last row),
+/// else the window's. The toast is pinned by its own bottom centre, so it is exact.
+pub fn toast_centre_x(window_w: f32, detail: Option<(f32, f32)>) -> f32 {
+    detail.map_or(window_w / 2.0, |(l, r)| (l + r) / 2.0)
+}
+
+/// The toast's padding: 16 either side; 7 above and 9 below, because the 14 px line box carries its leading
+/// under the glyphs, so 8/8 set the text ~2 pt low.
+const TOAST_MARGIN: Margin = Margin { left: 16, right: 16, top: 7, bottom: 9 };
+
+/// The toast's shadow: heavier in dark, where a light shadow vanishes on the near-black page.
+pub fn toast_shadow(p: &Palette) -> egui::Shadow {
+    if p.dark {
+        egui::Shadow { offset: [0, 6], blur: 18, spread: 0, color: Color32::from_black_alpha(200) }
+    } else {
+        egui::Shadow { offset: [0, 4], blur: 12, spread: 0, color: Color32::from_black_alpha(60) }
+    }
 }
 
 pub fn toast(app: &mut App, ctx: &egui::Context) {
@@ -326,21 +339,20 @@ pub fn toast(app: &mut App, ctx: &egui::Context) {
     }
     ctx.request_repaint_after(std::time::Duration::from_millis(250));
     let p = theme::palette(ctx);
-    let shadow = egui::Shadow { offset: [0, 4], blur: 12, spread: 0, color: Color32::from_black_alpha(if p.dark { 120 } else { 60 }) };
-    let dx = toast_x_offset(ctx.content_rect().width(), app.detail_x.filter(|_| app.screen == Screen::Issues));
-    egui::Area::new(egui::Id::new("toast")).anchor(egui::Align2::CENTER_BOTTOM, vec2(dx, -toast_offset(hint_bar_height(app)))).show(ctx, |ui| {
-        Frame::new().fill(p.tooltip).stroke(Stroke::new(1.0, toast_stroke(p))).shadow(shadow).corner_radius(6).inner_margin(Margin::symmetric(16, 8)).show(
-            ui,
-            |ui| {
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 8.0;
-                    if let Some(color) = toast_dot(t.kind) {
-                        health_dot(ui, color);
-                    }
-                    ui.add(egui::Label::new(RichText::new(&t.text).color(p.tooltip_text).size(14.0)).wrap_mode(egui::TextWrapMode::Extend));
-                });
-            },
-        );
+    let shadow = toast_shadow(p);
+    let window = ctx.content_rect();
+    let x = toast_centre_x(window.width(), app.detail_x.filter(|_| app.screen == Screen::Issues));
+    let at = egui::pos2(x, window.bottom() - toast_offset(hint_bar_height(app)));
+    egui::Area::new(egui::Id::new("toast")).pivot(egui::Align2::CENTER_BOTTOM).fixed_pos(at).show(ctx, |ui| {
+        Frame::new().fill(p.tooltip).stroke(Stroke::new(1.0, toast_stroke(p))).shadow(shadow).corner_radius(6).inner_margin(TOAST_MARGIN).show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 8.0;
+                if let Some(color) = toast_dot(t.kind) {
+                    health_dot(ui, color);
+                }
+                ui.add(egui::Label::new(RichText::new(&t.text).color(p.tooltip_text).size(14.0)).wrap_mode(egui::TextWrapMode::Extend));
+            });
+        });
     });
 }
 
@@ -354,20 +366,38 @@ pub fn backdrop_alpha(p: &Palette) -> u8 {
     if p.dark { 110 } else { 100 }
 }
 
-/// A modal dialog's 1 px edge, visible against both the dialog and the dimmed page in each theme: a step
-/// darker than `border` in light (`border` sits between white and the dimmed page and vanishes), a lifted
-/// #4a4a46 in dark.
+/// A modal dialog's one edge colour, used for its 1 px stroke and for the fields and buttons inside it, in both
+/// themes: a step darker than `border` in light (`border` sits between white and the dimmed page and
+/// vanishes), the lifted #4a4a46 in dark.
 pub fn dialog_stroke(p: &Palette) -> Stroke {
     Stroke::new(1.0, if p.dark { DARK_EDGE } else { Color32::from_rgb(0xb4, 0xb3, 0xac) })
 }
 
-/// The lifted dark edge (dialogs, fields in dialogs, outlines on a selected row): one step past `border`.
-pub const DARK_EDGE: Color32 = Color32::from_rgb(0x4a, 0x4a, 0x46);
+pub use crate::theme::DARK_EDGE;
 
-/// Outlines and dividers on a selected row: the dark edge in dark (`border` equals the selected fill there),
-/// `muted` at 40% in light, so the outline never vanishes into the fill.
+/// Outline pills on a selected row: #5c5b56 in dark (`border` equals the selected fill there, and the dialog
+/// edge only reaches 1.22:1), `muted` at 40% in light, so the outline never vanishes into the fill.
 pub fn selected_edge(p: &Palette) -> Color32 {
-    if p.dark { DARK_EDGE } else { p.muted.gamma_multiply(0.4) }
+    if p.dark { Color32::from_rgb(0x5c, 0x5b, 0x56) } else { p.muted.gamma_multiply(0.4) }
+}
+
+/// Inside a dialog, one rule in both themes: fields sit on `bg` with the dialog's edge (focus stays the accent).
+pub fn dialog_fields(ui: &mut Ui, p: &Palette) {
+    let edge = dialog_stroke(p).color;
+    let v = ui.visuals_mut();
+    v.text_edit_bg_color = Some(p.bg);
+    v.widgets.inactive.bg_stroke.color = edge;
+    v.widgets.hovered.bg_stroke.color = edge;
+}
+
+/// A secondary button inside a dialog: a step above the dialog's fill, with the dialog's edge.
+pub fn dialog_button(text: &str, p: &Palette) -> egui::Button<'static> {
+    button(text, p).fill(dialog_button_fill(p)).stroke(dialog_stroke(p))
+}
+
+/// The dialog button's fill: `surface_2` on the white light dialog; in dark the next step up (#3d3d3a).
+pub fn dialog_button_fill(p: &Palette) -> Color32 {
+    if p.dark { p.selected_row } else { p.surface_2 }
 }
 
 /// Placeholder text for a field, inset 3 px past the caret so the caret never sits on its first glyph.
@@ -525,9 +555,10 @@ pub fn outline_pill(ui: &mut Ui, text: &str, p: &Palette, margin: egui::Vec2) ->
     pill_sized(ui, text, Color32::TRANSPARENT, p.muted, Stroke::new(1.0, p.border), margin)
 }
 
-/// An outline pill on a selected row: `selected_edge` outline and `text`, so neither sinks into the fill.
+/// An outline pill on a selected row: the `selected_edge` outline so it never sinks into the fill; the text
+/// stays `muted`, which holds 4.5:1 on the selection.
 pub fn outline_pill_selected(ui: &mut Ui, text: &str, p: &Palette, margin: egui::Vec2) -> egui::Response {
-    pill_sized(ui, text, Color32::TRANSPARENT, p.text, Stroke::new(1.0, selected_edge(p)), margin)
+    pill_sized(ui, text, Color32::TRANSPARENT, p.muted, Stroke::new(1.0, selected_edge(p)), margin)
 }
 
 /// The edge every list-row pill gets: its own text colour at 35%, so a wash stays visible on any row fill.
@@ -727,14 +758,27 @@ mod widget_tests {
     fn selected_row_edges_show_on_the_selected_fill() {
         for p in [&theme::LIGHT, &theme::DARK] {
             let edge = theme::over(selected_edge(p), p.selected_row);
-            assert!(theme::contrast(edge, p.selected_row) >= 1.2, "dark={}: {:.2}", p.dark, theme::contrast(edge, p.selected_row));
+            assert!(theme::contrast(edge, p.selected_row) >= if p.dark { 1.5 } else { 1.2 }, "dark={}: {:.2}", p.dark, theme::contrast(edge, p.selected_row));
         }
     }
 
     #[test]
     fn toast_centres_over_the_detail_pane() {
-        assert_eq!(toast_x_offset(1440.0, None), 0.0);
-        assert_eq!(toast_x_offset(1440.0, Some((604.0, 1440.0))), 302.0);
+        assert_eq!(toast_centre_x(1440.0, None), 720.0);
+        assert_eq!(toast_centre_x(1440.0, Some((604.0, 1440.0))), 1022.0);
+        assert!(toast_shadow(&theme::DARK).color.a() > toast_shadow(&theme::LIGHT).color.a());
+        assert_eq!(TOAST_MARGIN.left, TOAST_MARGIN.right);
+    }
+
+    #[test]
+    fn dialog_parts_share_one_edge() {
+        for p in [&theme::LIGHT, &theme::DARK] {
+            let edge = dialog_stroke(p).color;
+            assert!(theme::contrast(edge, p.bg) >= 1.3, "field edge on its bg fill, dark={}", p.dark);
+            assert!(theme::contrast(dialog_button_fill(p), dialog_fill(p)) >= 1.05, "Cancel steps off the dialog, dark={}", p.dark);
+            assert!(theme::contrast(edge, dialog_button_fill(p)) >= 1.2, "Cancel's edge shows, dark={}", p.dark);
+            assert!(theme::contrast(p.text, dialog_button_fill(p)) >= 7.0);
+        }
     }
 
     #[test]

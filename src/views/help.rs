@@ -140,13 +140,14 @@ fn group(ui: &mut egui::Ui, p: &Palette, g: Group, key_w: f32) {
 }
 
 /// A key chip: mono 12.5 in a 6/2 frame, at least 20 wide, text centred. Its fill steps off the dialog's
-/// (`chip_fill_on`); in dark the fill is `border`, so the edge is the dialog's lifted edge.
+/// (`chip_fill_on`).
 fn chip(ui: &mut egui::Ui, text: &str, p: &Palette) {
     let galley = ui.painter().layout_no_wrap(text.to_string(), theme::mono(12.5), p.text);
     let size = chip_size(ui, text, p);
     let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
     let fill = theme::chip_fill_on(crate::views::dialog_fill(p), p);
-    let edge = if p.dark { crate::views::DARK_EDGE } else { p.border };
+    // In dark the chip fill is the dialog edge itself, so its outline is the next step up.
+    let edge = if p.dark { crate::views::selected_edge(p) } else { p.border };
     ui.painter().rect(rect, 4.0, fill, Stroke::new(1.0, edge), egui::StrokeKind::Inside);
     ui.painter().galley(rect.center() - galley.size() / 2.0, galley, p.text);
 }

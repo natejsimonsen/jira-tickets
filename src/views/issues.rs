@@ -9,10 +9,19 @@ use crate::views::{outline_pill, outline_pill_selected, pill, pill_outlined, sma
 use egui::{CornerRadius, Frame, Margin, Rect, RichText, Sense, Stroke, Ui, vec2};
 use std::collections::BTreeSet;
 
-/// Hue slots for the epics of the rows on screen (see `theme::epic_slots`), shared by the list and detail.
-pub fn visible_epic_slots(app: &App) -> std::collections::BTreeMap<String, usize> {
-    let keys: Vec<String> = current_rows(app).iter().filter_map(|i| i.parent_key.clone()).collect();
-    theme::epic_slots(keys.iter().map(String::as_str))
+/// Gives hue slots to epics not seen yet this session: the loaded epic list in rank order, then the parents of
+/// the rows on screen and of the selected issue (see `theme::extend_epic_slots`).
+pub fn track_epics(app: &mut App) {
+    let selected = app.selected.as_ref().and_then(|k| app.store.get(k)).and_then(|i| i.parent_key.clone());
+    let keys: Vec<String> = app
+        .store
+        .list(ListId::Epics)
+        .iter()
+        .map(|e| e.key.clone())
+        .chain(current_rows(app).iter().filter_map(|i| i.parent_key.clone()))
+        .chain(selected)
+        .collect();
+    theme::extend_epic_slots(&mut app.epic_slots, keys.iter().map(String::as_str));
 }
 
 /// Keys of the loaded epics labelled as roadmap initiatives (cheap: a few dozen epics).
@@ -53,10 +62,12 @@ pub fn current_rows(app: &App) -> Vec<&Issue> {
     filter::visible(&all, &f, searched, me)
 }
 
-/// How a row pill is drawn: a filled tint (status, epic, warnings) or outline only (neutral values).
+/// How a row pill is drawn: the filled status tint, an epic's outline in its hue, or a neutral outline.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum PillLook {
     Tint(egui::Color32, egui::Color32),
+    /// Outline only: (text, edge), the hue's text and stripe colours; no fill, so only status is filled.
+    Epic(egui::Color32, egui::Color32),
     Outline,
 }
 
@@ -136,6 +147,11 @@ pub fn fit_pills(pills: &[(PillKind, f32)], available: f32, spacing: f32) -> Vec
     out
 }
 
+/// An epic pill's tooltip: its key and name, so two epics with one name stay apart.
+pub fn epic_tip(key: &str, name: &str) -> String {
+    if name.is_empty() { key.to_string() } else { format!("{key} · {name}") }
+}
+
 /// The amber "no <label> label" pill; true when it was shown.
 pub fn missing_label_pill(ui: &mut Ui, f: &filter::IssueFilter, i: &Issue, label: &str, p: &Palette) -> bool {
     let members = f.team_members.get(label).map(Vec::as_slice).unwrap_or_default();
@@ -152,14 +168,15 @@ pub const HINT_BAR_H: f32 = 24.0;
 /// The hint bar's inner margin: 15, so the first glyph's ink (its side bearing adds ~1) sits 16 in.
 const HINT_INSET: f32 = 15.0;
 
-/// The hint bar's fill: `surface` in dark; in light a step off white, so the undimmed bar under a modal does
-/// not glow next to the grey backdrop.
+/// The hint bar's fill: `surface_2` in both themes (a step off the white light surface, so the undimmed bar
+/// under a modal does not glow next to the grey backdrop).
 pub fn hint_bar_fill(p: &Palette) -> egui::Color32 {
-    if p.dark { p.surface } else { p.surface_2 }
+    p.surface_2
 }
 
 pub fn show(app: &mut App, ui: &mut Ui) {
     let p = theme::palette(ui.ctx());
+    track_epics(app);
     let (list_w, list_range) = list_pane_width(ui.available_width());
     // First, so the strip spans the full width under both panels.
     let bar = egui::Panel::bottom("hints")
@@ -388,8 +405,7 @@ fn filters(app: &mut App, ui: &mut Ui, p: &Palette) {
                 // The roadmap suffix is muted: it qualifies the epic, it is not part of its name.
                 let mut job = egui::text::LayoutJob::default();
                 job.append(&entry(k, s), 0.0, egui::TextFormat { font_id: theme::body(14.0), color: p.text, ..Default::default() });
-                let on = if app.filter.epic.as_deref() == Some(k) { p.selected_row } else { p.surface };
-                job.append(suffix(k), 0.0, egui::TextFormat { font_id: theme::body(14.0), color: theme::muted_on(on, p), ..Default::default() });
+                job.append(suffix(k), 0.0, egui::TextFormat { font_id: theme::body(14.0), color: p.muted, ..Default::default() });
                 job.wrap = egui::text::TextWrapping::truncate_at_width(row_text_w);
                 let full = format!("{}{}", entry(k, s), suffix(k));
                 if ui.selectable_label(app.filter.epic.as_deref() == Some(k), job).on_hover_text(full).clicked() {
@@ -568,7 +584,7 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
     let cfg = app.cfg.clone();
     let (status_colors, epic_colors) = (&cfg.issues.status_colors, &cfg.issues.epic_colors);
     let selected = app.selected.clone();
-    let slots = theme::epic_slots(rows.iter().filter_map(|i| i.parent_key.as_deref()));
+    let slots = app.epic_slots.clone();
     let team_filter = match &app.filter.team {
         filter::TeamScope::Label(l) => Some(l.clone()),
         _ => None,
@@ -583,14 +599,14 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
     let mut row_spans: Vec<(f32, f32)> = Vec::with_capacity(rows.len());
     let out = egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
         ui.spacing_mut().item_spacing.y = ROW_GAP;
-        // The selected row's dividers, drawn over its neighbours once every row is down.
-        let mut sel_dividers: Option<(Rect, bool, bool, bool)> = None;
         for (idx, i) in rows.iter().enumerate() {
             let is_sel = selected.as_deref() == Some(&i.key);
             let epic = i.parent_key.as_deref().map(|k| theme::epic_tint_in(k, &slots, p, epic_colors));
             // The fill goes under the content once we know whether the pointer is over the row.
             let bg = ui.painter().add(egui::Shape::Noop);
             let corners = row_corners(idx, rows.len());
+            // Tooltips for parts of the row, shown through the row's own response (it sits on top of them).
+            let mut tips: Vec<(Rect, String)> = Vec::new();
             let r = Frame::new()
                 .stroke(Stroke::new(1.0, p.border))
                 .corner_radius(corners)
@@ -599,16 +615,14 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
                     ui.set_width(ui.available_width());
                     ui.spacing_mut().item_spacing.y = ROW_LINE_GAP;
                     ui.horizontal(|ui| {
-                        // On the selected row the key is `text`: muted falls under 4.5:1 on the dark selection.
-                        let key_color = if is_sel { p.text } else { p.muted };
-                        ui.add(egui::Label::new(RichText::new(&i.key).font(theme::mono(12.5)).color(key_color)).selectable(false));
+                        ui.add(egui::Label::new(RichText::new(&i.key).font(theme::mono(12.5)).color(p.muted)).selectable(false));
                         let painter = ui.painter().clone();
                         let title = crate::views::truncate_text(&i.summary, ui.available_width(), |t| {
                             painter.layout_no_wrap(t.to_string(), theme::bold(13.5), p.text).size().x
                         });
                         let r = ui.add(egui::Label::new(RichText::new(&title).font(theme::bold(13.5)).color(p.text)).extend().selectable(false));
                         if title != i.summary {
-                            r.on_hover_text(&i.summary);
+                            tips.push((r.rect, i.summary.clone()));
                         }
                     });
                     // One line of pills, never wrapped: see `fit_pills`.
@@ -629,7 +643,7 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
                                 let t = theme::status_tint(&i.status.name, &i.status.category, p, status_colors);
                                 (PillKind::Other, PillLook::Tint(t.bg, t.fg))
                             }
-                            ("parent.summary" | "parent.key", Some(t)) => (PillKind::Epic, PillLook::Tint(t.bg, t.fg)),
+                            ("parent.summary" | "parent.key", Some(t)) => (PillKind::Epic, PillLook::Epic(t.fg, t.stripe)),
                             ("parent.summary" | "parent.key", None) => (PillKind::Epic, PillLook::Outline),
                             ("assignee", _) => (PillKind::Assignee, PillLook::Outline),
                             _ => (PillKind::Other, PillLook::Outline),
@@ -645,25 +659,33 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
                         let measure = |t: &str| painter.layout_no_wrap(t.to_string(), theme::body(12.0), p.text).size().x;
                         let widths: Vec<(PillKind, f32)> = pills.iter().map(|(k, t, _)| (*k, measure(t) + 2.0 * crate::views::ROW_PILL_MARGIN.x)).collect();
                         let fit = fit_pills(&widths, ui.available_width(), PILL_GAP);
-                        for ((_, text, look), w) in pills.iter().zip(fit) {
+                        for ((kind, full, look), w) in pills.iter().zip(fit) {
                             let Some(w) = w else { continue };
-                            let text = crate::views::truncate_text(text, w - 2.0 * crate::views::ROW_PILL_MARGIN.x, measure);
-                            match look {
+                            let text = crate::views::truncate_text(full, w - 2.0 * crate::views::ROW_PILL_MARGIN.x, measure);
+                            let r = match look {
                                 PillLook::Tint(bg, fg) => pill_outlined(ui, &text, *bg, *fg),
+                                PillLook::Epic(fg, edge) => {
+                                    crate::views::pill_sized(ui, &text, egui::Color32::TRANSPARENT, *fg, Stroke::new(1.0, *edge), crate::views::ROW_PILL_MARGIN)
+                                }
                                 PillLook::Outline if is_sel => outline_pill_selected(ui, &text, p, crate::views::ROW_PILL_MARGIN),
                                 PillLook::Outline => outline_pill(ui, &text, p, crate::views::ROW_PILL_MARGIN),
                             };
+                            if let (PillKind::Epic, Some(k)) = (kind, &i.parent_key) {
+                                tips.push((r.rect, epic_tip(k, i.parent_summary.as_deref().unwrap_or_default())));
+                            } else if text != *full {
+                                tips.push((r.rect, full.clone()));
+                            }
                         }
                     });
                 });
             let rect = r.response.rect;
             row_spans.push((rect.top(), rect.bottom()));
-            let r = ui.interact(rect, row_id(&i.key), Sense::click());
+            let mut r = ui.interact(rect, row_id(&i.key), Sense::click());
+            if let Some(tip) = r.hover_pos().and_then(|at| tips.iter().find(|(t, _)| t.contains(at))).map(|(_, t)| t.clone()) {
+                r = r.on_hover_text(tip);
+            }
             let fill = row_fill(is_sel, r.hovered(), p);
             ui.painter().set(bg, egui::epaint::RectShape::filled(rect, corners, fill));
-            if is_sel {
-                sel_dividers = Some((rect, idx > 0, idx + 1 < rows.len(), epic.is_some()));
-            }
             if let Some(t) = epic {
                 let stripe = CornerRadius { nw: corners.nw, sw: corners.sw, ne: 0, se: 0 };
                 ui.painter().rect_filled(Rect::from_min_size(rect.min, vec2(3.0, rect.height())), stripe, t.stripe);
@@ -678,18 +700,6 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
             }
             if scroll_cursor && is_sel {
                 r.scroll_to_me(None);
-            }
-        }
-        // `border` equals the dark selected fill, so the dividers it shares take `selected_edge` (the list's
-        // outer edges keep `border`, which shows against the page).
-        if let Some((rect, top, bottom, striped)) = sel_dividers {
-            let x = (rect.left() + if striped { 3.0 } else { 1.0 })..=(rect.right() - 1.0);
-            let stroke = Stroke::new(1.0, crate::views::selected_edge(p));
-            if top {
-                ui.painter().hline(x.clone(), rect.top() + 0.5, stroke);
-            }
-            if bottom {
-                ui.painter().hline(x, rect.bottom() - 0.5, stroke);
             }
         }
         // Room under the last row, so a toast (anchored above the hint bar) never covers it.
@@ -835,6 +845,7 @@ fn goto_box(app: &mut App, ctx: &egui::Context, p: &Palette) {
             .corner_radius(6)
             .inner_margin(Margin::same(GOTO_PAD as i8))
             .show(ui, |ui| {
+                crate::views::dialog_fields(ui, p);
                 ui.set_width(GOTO_W - 2.0 * GOTO_PAD);
                 ui.label(RichText::new("Go to issue").font(theme::bold(13.5)).color(p.text));
                 ui.add_space(4.0);
@@ -928,7 +939,15 @@ mod tests {
     #[test]
     fn light_hint_bar_is_not_pure_white() {
         assert_ne!(hint_bar_fill(&theme::LIGHT), egui::Color32::WHITE);
-        assert_eq!(hint_bar_fill(&theme::DARK), theme::DARK.surface);
+        for p in [&theme::LIGHT, &theme::DARK] {
+            assert_eq!(hint_bar_fill(p), p.surface_2, "one step in both themes");
+        }
+    }
+
+    #[test]
+    fn epic_tooltip_names_key_and_epic() {
+        assert_eq!(epic_tip("CI-1860", "Cluster Operations (ongoing)"), "CI-1860 · Cluster Operations (ongoing)");
+        assert_eq!(epic_tip("CI-1860", ""), "CI-1860");
     }
 
     #[test]

@@ -214,10 +214,16 @@ selected issue on the right.
 List rows: key, summary, configured columns. Status pills are coloured by
 status name (New grey, Planning blue, Ready for Work teal, In Progress
 accent, In Review purple, Blocked red, Done green; unmapped names fall
-back to the status category). Each epic has a stable colour from a
-12-hue palette chosen by hashing its key; it tints the epic pill, the
-detail view's parent line, and a 3 px left edge on each row. Labels stay
-neutral. Both maps can be overridden in config under
+back to the status category). Status is the only filled pill. Each epic
+gets a hue from a 10-hue palette (36° apart) in order of first appearance:
+the loaded epic list in Jira rank order, then any other parent seen on
+screen, keyed by epic key and kept for the session, so one epic has one hue
+in every list and two epics with the same name never share one by name. The
+epic pill is outline-only in its hue (1 px stroke in the hue's stripe
+colour, text in the hue's text colour, no fill), so status and epic differ in
+shape, not just hue; the detail view's parent line uses the hue's text
+colour, and each row has a 3 px left edge in the stripe colour. Hovering an
+epic pill shows "KEY · name". Labels stay neutral. Both maps can be overridden in config under
 `[issues.status_colors]` and `[issues.epic_colors]` (`"#rrggbb"`). Filters above the list: a team picker (All teams, each
 configured the parent team sub-team label such as PLAT or TOOLS, or "No team
 label"; defaults to the user's own team), an epic picker, a sprint scope (All, the

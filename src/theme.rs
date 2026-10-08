@@ -76,7 +76,7 @@ pub const DARK: Palette = Palette {
     surface_2: hex(0x2a2a28),
     border: hex(0x3a3a37),
     text: hex(0xecebe8),
-    muted: hex(0xa3a29d),
+    muted: hex(0xabaaa5),
     accent: hex(0x7aa5f0),
     on_accent: hex(0x171716),
     on_track: hex(0x5cc28a),
@@ -118,12 +118,10 @@ const GREEN: u32 = 0x2e8b57;
 /// Waiting statuses ("Waiting for External Party"): amber, apart from the In Progress blue.
 const AMBER: u32 = 0xb07a0c;
 
-/// Distinct hues for epics, kept out of the danger band (340°–20°, Blocked and errors) and the status-blue
-/// band (210°–230°, In Progress) with room to spare, and 14°+ from at-risk amber (~40°) and Done green
-/// (~145°). What is left is two arcs (54°–131°, 159°–330°); the seven hues sit at least 35° apart on them
-/// (54°, 89°, 124°, 165°, 250°, 286°, 321°). Lightness is lower for the bright yellow-to-teal band so all
-/// seven read alike. `epic_slots` spreads visible epics over them.
-pub const EPIC_HUES: [u32; 7] = [0x9e942b, 0x5b9425, 0x299934, 0x22997b, 0x7763db, 0xaf52cc, 0xc7469a];
+/// Ten epic hues, evenly spaced 36° apart from 18°, at one luminance so all ten read alike. Epic pills are
+/// outline-only (status is the one filled pill), so the palette needs no room around the status hues.
+/// Hues go to epics in order of first appearance (`extend_epic_slots`).
+pub const EPIC_HUES: [u32; 10] = [0xb6572e, 0x7d741f, 0x507f20, 0x21842b, 0x208264, 0x287b9e, 0x4053ff, 0x9a3ef6, 0xc231b4, 0xd23464];
 
 /// `#rrggbb` or `rrggbb`.
 pub fn parse_hex(s: &str) -> Option<Color32> {
@@ -133,12 +131,6 @@ pub fn parse_hex(s: &str) -> Option<Color32> {
         return None;
     }
     u32::from_str_radix(h, 16).ok().map(hex)
-}
-
-/// FNV-1a 64 of the key, modulo the epic palette; stable across Rust versions.
-pub fn stable_index(key: &str) -> usize {
-    let h = key.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |h, b| (h ^ u64::from(b)).wrapping_mul(0x0000_0100_0000_01b3));
-    (h % EPIC_HUES.len() as u64) as usize
 }
 
 fn mix(c: Color32, toward: u8, t: f32) -> Color32 {
@@ -186,34 +178,22 @@ pub fn status_tint(status_name: &str, category: &str, p: &Palette, overrides: &B
     tint_from_hue(base, p)
 }
 
-/// Override by exact epic key, else a stable hue from the key.
-pub fn epic_tint(epic_key: &str, p: &Palette, overrides: &BTreeMap<String, String>) -> Tint {
-    epic_tint_in(epic_key, &BTreeMap::new(), p, overrides)
-}
-
-/// Hue slots for a set of visible epics: each starts at its `stable_index`; when that slot is taken by an
-/// epic earlier in key order it steps to the next free slot. Once every slot is taken, hues repeat
-/// (the stable index again). Keys are taken in sorted order, so the result does not depend on row order.
-pub fn epic_slots<'a>(keys: impl IntoIterator<Item = &'a str>) -> BTreeMap<String, usize> {
-    let mut keys: Vec<&str> = keys.into_iter().collect();
-    keys.sort_unstable();
-    keys.dedup();
-    let n = EPIC_HUES.len();
-    let mut taken = [false; EPIC_HUES.len()];
-    let mut out = BTreeMap::new();
+/// Gives each epic key not yet in `slots` the next hue slot, in the order `keys` arrive: the loaded epic list
+/// in Jira rank order first, then any other parent seen on screen. Slots never change once given, so an epic
+/// keeps its hue in every list for the session; after ten epics the hues repeat in the same order.
+pub fn extend_epic_slots<'a>(slots: &mut BTreeMap<String, usize>, keys: impl IntoIterator<Item = &'a str>) {
     for k in keys {
-        let start = stable_index(k);
-        let slot = (0..n).map(|d| (start + d) % n).find(|&i| !taken[i]).unwrap_or(start);
-        taken[slot] = true;
-        out.insert(k.to_string(), slot);
+        if !slots.contains_key(k) {
+            let next = slots.len() % EPIC_HUES.len();
+            slots.insert(k.to_string(), next);
+        }
     }
-    out
 }
 
-/// `epic_tint`, with the hue from `slots` (see `epic_slots`) when the epic is in it.
+/// An epic's tint: the config override for its exact key wins, else its slot's hue (see `extend_epic_slots`).
 pub fn epic_tint_in(epic_key: &str, slots: &BTreeMap<String, usize>, p: &Palette, overrides: &BTreeMap<String, String>) -> Tint {
-    let slot = slots.get(epic_key).copied().unwrap_or_else(|| stable_index(epic_key));
-    let base = overrides.get(epic_key).and_then(|v| parse_hex(v)).unwrap_or_else(|| hex(EPIC_HUES[slot]));
+    let slot = slots.get(epic_key).copied().unwrap_or(0);
+    let base = overrides.get(epic_key).and_then(|v| parse_hex(v)).unwrap_or_else(|| hex(EPIC_HUES[slot % EPIC_HUES.len()]));
     tint_from_hue(base, p)
 }
 
@@ -253,17 +233,24 @@ fn visuals(p: &Palette) -> Visuals {
     v
 }
 
-/// `muted` where it holds 4.5:1 on `fill`, else `text` (the dark selected row is too light for muted).
-pub fn muted_on(fill: Color32, p: &Palette) -> Color32 {
-    if contrast(p.muted, fill) >= 4.5 { p.muted } else { p.text }
-}
+/// The light-theme neutral step between `surface_2` and `hover_row`, for code chips on white.
+const LIGHT_CHIP: Color32 = hex(0xe8e8e4);
+/// The dark modal dialog's fill: one step above `surface_2`, so a dialog lifts off the dimmed page.
+pub const DARK_DIALOG: Color32 = hex(0x333331);
+/// The lifted dark edge: modal dialogs, fields and buttons inside them.
+pub const DARK_EDGE: Color32 = hex(0x4a4a46);
+/// A chip's fill must stand at least this far off its container (1.14:1 read as flat).
+const CHIP_STEP: f32 = 1.17;
 
-/// The fill for a chip (inline code, a code block, a help key) inside a `container`: the first neutral step
-/// at least 1.1:1 away from it, lighter first in dark (a key reads raised) and darker first in light.
-/// So a code chip in a surface_2 comment card never takes the card's own fill.
+/// The fill for a chip (inline code, a code block, a help key) inside a `container`: the first step of the
+/// theme's neutral ramp at least CHIP_STEP off it, darker in light and lighter in dark (a key reads raised).
+/// On the page (surface) that is #e8e8e4 light, #333331 dark; in a comment card #dfdfda / #3a3a37.
 pub fn chip_fill_on(container: Color32, p: &Palette) -> Color32 {
-    let steps: &[Color32] = if p.dark { &[p.surface_2, p.border, p.hover_row] } else { &[p.surface_2, p.surface, p.selected_row] };
-    steps.iter().copied().find(|&c| contrast(c, container) >= 1.1).unwrap_or(p.border)
+    let ramp: &[Color32] =
+        if p.dark { &[p.surface_2, DARK_DIALOG, p.border, p.selected_row, DARK_EDGE] } else { &[p.surface_2, LIGHT_CHIP, p.selected_row, p.border] };
+    let lum = |c: Color32| contrast(c, Color32::BLACK);
+    let ahead = |c: Color32| if p.dark { lum(c) > lum(container) } else { lum(c) < lum(container) };
+    ramp.iter().copied().find(|&c| ahead(c) && contrast(c, container) >= CHIP_STEP).unwrap_or(p.border)
 }
 
 /// WCAG 2 contrast ratio of two opaque colours (1.0 to 21.0).
@@ -370,14 +357,6 @@ mod tests {
     }
 
     #[test]
-    fn stable_index_is_deterministic_and_in_range() {
-        assert_eq!(stable_index("CI-1860"), stable_index("CI-1860"));
-        assert!(stable_index("CI-1860") < EPIC_HUES.len());
-        assert!(stable_index("") < EPIC_HUES.len());
-        assert_ne!(stable_index("CI-1860"), stable_index("CI-1569"));
-    }
-
-    #[test]
     fn status_tint_prefers_override_then_name_then_category() {
         for p in [&LIGHT, &DARK] {
             assert_ne!(status_tint("Blocked", "new", p, &none()).fg, status_tint("New", "new", p, &none()).fg);
@@ -415,11 +394,10 @@ mod tests {
     }
 
     #[test]
-    fn every_tint_reads_on_its_wash_on_every_row_fill() {
-        let statuses = ["New", "Planning", "Ready for Work", "In Progress", "In Review", "Blocked", "Done"];
+    fn every_status_tint_reads_on_its_wash_on_every_row_fill() {
+        let statuses = ["New", "Planning", "Ready for Work", "In Progress", "In Review", "Blocked", "Done", "Waiting for support"];
         for p in [&LIGHT, &DARK] {
-            let tints = EPIC_HUES.iter().map(|&h| tint_from_hue(hex(h), p)).chain(statuses.iter().map(|s| status_tint(s, "", p, &none())));
-            for t in tints {
+            for t in statuses.iter().map(|s| status_tint(s, "", p, &none())) {
                 for row in [p.surface, p.selected_row, p.hover_row, p.bg] {
                     let c = contrast(t.fg, over(t.bg, row));
                     assert!(c >= 4.5, "dark={} fg={:?} on {:?}: {c:.2}", p.dark, t.fg, row);
@@ -429,18 +407,28 @@ mod tests {
     }
 
     #[test]
-    fn muted_text_reads_on_every_row_fill() {
+    fn epic_outline_pills_read_on_every_row_fill() {
+        // No fill: the text sits on the row itself, and the outline and stripe are the stripe colour.
         for p in [&LIGHT, &DARK] {
-            for row in [p.surface, p.hover_row, p.bg] {
-                assert!(contrast(p.muted, row) >= 4.5, "dark={} {:?}: {:.2}", p.dark, row, contrast(p.muted, row));
-            }
-            // The selected row takes `text` where muted would drop below the floor.
-            for row in [p.surface, p.selected_row, p.hover_row, p.bg] {
-                assert!(contrast(muted_on(row, p), row) >= 4.5, "dark={} {:?}", p.dark, row);
+            for &h in &EPIC_HUES {
+                let t = tint_from_hue(hex(h), p);
+                for row in [p.surface, p.selected_row, p.hover_row, p.bg] {
+                    assert!(contrast(t.fg, row) >= 4.5, "dark={} {h:06x} text on {row:?}: {:.2}", p.dark, contrast(t.fg, row));
+                    assert!(contrast(t.stripe, row) >= 3.0, "dark={} {h:06x} edge on {row:?}: {:.2}", p.dark, contrast(t.stripe, row));
+                }
             }
         }
-        assert_eq!(muted_on(DARK.selected_row, &DARK), DARK.text);
-        assert_eq!(muted_on(LIGHT.surface, &LIGHT), LIGHT.muted);
+    }
+
+    #[test]
+    fn muted_text_reads_on_every_row_fill() {
+        // Including the selected row and the picker cursor, so secondary text never swaps to `text` there.
+        for p in [&LIGHT, &DARK] {
+            for row in [p.surface, p.hover_row, p.bg, p.selected_row, p.surface_2] {
+                assert!(contrast(p.muted, row) >= 4.5, "dark={} {:?}: {:.2}", p.dark, row, contrast(p.muted, row));
+            }
+        }
+        assert!(contrast(DARK.muted, DARK_DIALOG) >= 4.5);
     }
 
     #[test]
@@ -448,29 +436,20 @@ mod tests {
         for p in [&LIGHT, &DARK] {
             for container in [p.surface, p.surface_2] {
                 let c = chip_fill_on(container, p);
-                assert!(contrast(c, container) >= 1.1, "dark={} {container:?}: {:.2}", p.dark, contrast(c, container));
+                assert!(contrast(c, container) >= CHIP_STEP, "dark={} {container:?}: {:.2}", p.dark, contrast(c, container));
             }
         }
-        assert_eq!(chip_fill_on(DARK.surface_2, &DARK), hex(0x3a3a37), "help keys in the dark dialog");
-        assert_eq!(chip_fill_on(LIGHT.surface, &LIGHT), LIGHT.surface_2);
+        assert_eq!(chip_fill_on(LIGHT.surface, &LIGHT), hex(0xe8e8e4), "code on the light page");
+        assert_eq!(chip_fill_on(DARK.surface, &DARK), DARK_DIALOG, "code on the dark page");
+        assert_eq!(chip_fill_on(LIGHT.surface_2, &LIGHT), LIGHT.selected_row, "code in a light comment card");
+        assert_eq!(chip_fill_on(DARK.surface_2, &DARK), DARK.border, "code in a dark comment card");
+        assert_eq!(chip_fill_on(DARK_DIALOG, &DARK), DARK_EDGE, "help keys in the dark dialog");
     }
 
     #[test]
     fn caret_is_the_accent() {
         for p in [&LIGHT, &DARK] {
             assert_eq!(visuals(p).text_cursor.stroke.color, p.accent);
-        }
-    }
-
-    #[test]
-    fn epic_hues_stay_out_of_the_status_and_danger_bands() {
-        for banned in [RED, TEAL, ACCENT, GREEN, BLUE, 0xc8403a, 0x0f9d9a] {
-            assert!(!EPIC_HUES.contains(&banned), "{banned:06x}");
-        }
-        for &h in &EPIC_HUES {
-            let a = hue_angle(h);
-            assert!(band_dist(a, 340.0, 360.0).min(band_dist(a, 0.0, 20.0)) >= 14.0, "{h:06x} ({a:.0}°) in or near the danger band");
-            assert!(band_dist(a, 210.0, 230.0) >= 15.0, "{h:06x} ({a:.0}°) in or near the status-blue band");
         }
     }
 
@@ -499,36 +478,23 @@ mod tests {
         d.min(360.0 - d)
     }
 
-    /// Distance from `h` to the band `lo..=hi` (0 inside it).
-    fn band_dist(h: f32, lo: f32, hi: f32) -> f32 {
-        if (lo..=hi).contains(&h) { 0.0 } else { hue_dist(h, lo).min(hue_dist(h, hi)) }
-    }
-
     #[test]
     fn hue_angle_of_primaries() {
         assert_eq!(hue_angle(0xff0000), 0.0);
         assert!((hue_angle(0x00ff00) - 120.0).abs() < 1e-3);
         assert!((hue_angle(0x0000ff) - 240.0).abs() < 1e-3);
         assert!((hue_dist(350.0, 10.0) - 20.0).abs() < 1e-3);
-        assert_eq!(band_dist(10.0, 0.0, 15.0), 0.0);
     }
 
     #[test]
-    fn epic_hues_are_spaced_and_clear_of_meaning_hues() {
+    fn ten_epic_hues_evenly_spaced() {
+        assert_eq!(EPIC_HUES.len(), 10);
         let hues: Vec<f32> = EPIC_HUES.iter().map(|&h| hue_angle(h)).collect();
         for (i, a) in hues.iter().enumerate() {
             for b in &hues[i + 1..] {
                 assert!(hue_dist(*a, *b) >= 35.0, "{a:.0}° vs {b:.0}°");
             }
-            for (name, lo, hi) in
-                [("danger", 340.0, 360.0), ("danger", 0.0, 20.0), ("amber", 40.0, 40.0), ("green", 145.0, 145.0), ("status blue", 210.0, 230.0)]
-            {
-                assert!(band_dist(*a, lo, hi) >= 14.0, "{a:.0}° too near {name}");
-            }
         }
-        assert!((210.0..=230.0).contains(&hue_angle(ACCENT)), "the status-blue band holds the accent");
-        let violets = hues.iter().filter(|h| (255.0..=300.0).contains(*h)).count();
-        assert!(violets <= 2, "{violets} violets");
     }
 
     #[test]
@@ -570,26 +536,23 @@ mod tests {
     }
 
     #[test]
-    fn epic_slots_step_past_collisions() {
-        // Find two keys that hash to the same slot.
-        let keys: Vec<String> = (1000..1100).map(|n| format!("CI-{n}")).collect();
-        let (a, b) = keys
-            .iter()
-            .enumerate()
-            .find_map(|(i, a)| keys[i + 1..].iter().find(|b| stable_index(b) == stable_index(a)).map(|b| (a.as_str(), b.as_str())))
-            .expect("a collision in 100 keys");
-        let slots = epic_slots([b, a]);
-        assert_eq!(slots[a.min(b)], stable_index(a), "the first in key order keeps its slot");
-        assert_eq!(slots[a.max(b)], (stable_index(a) + 1) % EPIC_HUES.len(), "the next steps to the next free slot");
-        // As many epics as hues take different hues; one more repeats.
-        let n = EPIC_HUES.len();
-        let all = epic_slots(keys.iter().take(n).map(String::as_str));
-        let distinct: std::collections::BTreeSet<_> = all.values().collect();
-        assert_eq!(distinct.len(), n);
-        assert_eq!(epic_slots(keys.iter().take(n + 1).map(String::as_str)).len(), n + 1);
-        assert_eq!(epic_slots(["CI-1", "CI-1"]).len(), 1);
-        let one = epic_slots(["CI-1860"]);
-        assert_eq!(epic_tint_in("CI-1860", &one, &LIGHT, &none()), epic_tint("CI-1860", &LIGHT, &none()));
+    fn epic_hues_go_by_first_appearance() {
+        let mut slots = BTreeMap::new();
+        // The epic list in rank order first; two epics named alike are still two keys, two hues.
+        extend_epic_slots(&mut slots, ["CI-9", "CI-3", "CI-7"]);
+        assert_eq!((slots["CI-9"], slots["CI-3"], slots["CI-7"]), (0, 1, 2));
+        // Rows seen later: known keys keep their slot, new ones take the next.
+        extend_epic_slots(&mut slots, ["CI-7", "CI-1", "CI-9"]);
+        assert_eq!((slots["CI-7"], slots["CI-1"], slots["CI-9"]), (2, 3, 0), "same key, same hue in every list");
+        // Distinct until the palette is exhausted, then repeating in order.
+        let keys: Vec<String> = (100..120).map(|n| format!("CI-{n}")).collect();
+        let mut fresh = BTreeMap::new();
+        extend_epic_slots(&mut fresh, keys.iter().map(String::as_str));
+        let first: std::collections::BTreeSet<_> = keys[..EPIC_HUES.len()].iter().map(|k| fresh[k]).collect();
+        assert_eq!(first.len(), EPIC_HUES.len());
+        assert_eq!(fresh[&keys[EPIC_HUES.len()]], 0);
+        let t = |k: &str, s: &BTreeMap<String, usize>| epic_tint_in(k, s, &LIGHT, &none());
+        assert_ne!(t("CI-9", &slots), t("CI-3", &slots));
     }
 
     #[test]
@@ -622,7 +585,8 @@ mod tests {
     #[test]
     fn epic_tint_honours_override() {
         let o = BTreeMap::from([("CI-1860".to_string(), "#8250df".to_string())]);
-        assert_eq!(epic_tint("CI-1860", &LIGHT, &o), tint_from_hue(hex(0x8250df), &LIGHT));
-        assert_eq!(epic_tint("CI-1569", &LIGHT, &o), tint_from_hue(hex(EPIC_HUES[stable_index("CI-1569")]), &LIGHT));
+        let slots = BTreeMap::from([("CI-1860".to_string(), 3), ("CI-1569".to_string(), 4)]);
+        assert_eq!(epic_tint_in("CI-1860", &slots, &LIGHT, &o), tint_from_hue(hex(0x8250df), &LIGHT));
+        assert_eq!(epic_tint_in("CI-1569", &slots, &LIGHT, &o), tint_from_hue(hex(EPIC_HUES[4]), &LIGHT));
     }
 }

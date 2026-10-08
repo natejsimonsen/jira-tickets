@@ -5,7 +5,7 @@ use crate::app::{
     Action, App, Picker, assign_current_row, assign_cursor_after_filter, assign_note, assign_rows, sprint_current_row, sprint_row_label, transition_row,
 };
 use crate::theme::{self, Palette};
-use crate::views::{button, primary_button};
+use crate::views::primary_button;
 use egui::{Frame, Margin, RichText, vec2};
 
 pub fn show(app: &mut App, ctx: &egui::Context) {
@@ -31,12 +31,8 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
     egui::Area::new(egui::Id::new("picker")).order(egui::Order::Foreground).anchor(egui::Align2::CENTER_TOP, vec2(0.0, top)).show(ctx, |ui| {
         Frame::new().fill(crate::views::dialog_fill(p)).stroke(crate::views::dialog_stroke(p)).corner_radius(6).inner_margin(Margin::same(16)).show(ui, |ui| {
             ui.set_width(440.0);
-            // Field frames: `border` sinks into the dark dialog (1.15:1), so they take the dialog's lifted edge.
-            if p.dark {
-                let w = &mut ui.visuals_mut().widgets;
-                w.inactive.bg_stroke.color = crate::views::DARK_EDGE;
-                w.hovered.bg_stroke.color = crate::views::DARK_EDGE;
-            }
+            // Fields on `bg` with the dialog's own edge, in both themes.
+            crate::views::dialog_fields(ui, p);
             match picker {
                 Picker::Transition { key, items, cursor } => {
                     title(ui, p, &format!("Transition {key}"));
@@ -103,7 +99,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                 if ui.add(primary_button("Confirm", p)).clicked() {
                     confirm = true;
                 }
-                if ui.add(button("Cancel", p)).clicked() {
+                if ui.add(crate::views::dialog_button("Cancel", p)).clicked() {
                     cancel = true;
                 }
             });
@@ -214,8 +210,8 @@ fn row_list(ui: &mut egui::Ui, p: &Palette, names: &[Row], confirm: &mut bool, c
                 .show(ui, |ui| {
                     ui.set_width(ui.available_width());
                     ui.set_min_height(ROW_H - 12.0);
-                    // Muted text on the cursor fill turns `text` where muted would fall below 4.5:1.
-                    let muted = theme::muted_on(if i == *cursor { p.selected_row } else { crate::views::dialog_fill(p) }, p);
+                    // Muted holds 4.5:1 on the cursor fill too, so secondary text stays muted there.
+                    let muted = p.muted;
                     let color = if n.muted { muted } else { p.text };
                     let mut job = egui::text::LayoutJob::default();
                     job.append(&n.text, 0.0, egui::TextFormat { font_id: theme::body(14.0), color, ..Default::default() });

@@ -26,7 +26,7 @@ pub fn show(app: &mut App, ui: &mut Ui) {
             ui.label(RichText::new(&issue.key).font(theme::mono(12.5)).color(p.muted));
             if let (Some(pk), Some(ps)) = (&issue.parent_key, &issue.parent_summary) {
                 ui.label(RichText::new("·").color(p.muted));
-                let epic = theme::epic_tint_in(pk, &super::issues::visible_epic_slots(app), p, &app.cfg.issues.epic_colors);
+                let epic = theme::epic_tint_in(pk, &app.epic_slots, p, &app.cfg.issues.epic_colors);
                 if ui.link(RichText::new(format!("{pk} {ps}")).color(epic.fg).size(13.0)).clicked() {
                     app.actions.push(Action::SetEpic(Some(pk.clone())));
                 }
