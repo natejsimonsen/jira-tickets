@@ -17,7 +17,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
         app.actions.push(Action::ToggleHelp);
     }
     egui::Area::new(egui::Id::new("help")).order(egui::Order::Tooltip).anchor(egui::Align2::CENTER_CENTER, vec2(0.0, -20.0)).show(ctx, |ui| {
-        Frame::new().fill(crate::views::dialog_fill(p)).stroke(Stroke::new(1.0, p.border)).corner_radius(6).inner_margin(Margin::same(16)).show(ui, |ui| {
+        Frame::new().fill(crate::views::dialog_fill(p)).stroke(crate::views::dialog_stroke(p)).corner_radius(6).inner_margin(Margin::same(16)).show(ui, |ui| {
             ui.set_width(WIDTH);
             ui.label(RichText::new("Keyboard").font(theme::bold(15.0)).color(p.text));
             ui.add_space(12.0);

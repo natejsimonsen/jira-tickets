@@ -4,7 +4,7 @@
 use crate::app::{Action, App, Picker, assign_cursor_after_filter, filtered_users, transition_row};
 use crate::theme::{self, Palette};
 use crate::views::{button, primary_button};
-use egui::{Frame, Margin, RichText, Stroke, vec2};
+use egui::{Frame, Margin, RichText, vec2};
 
 pub fn show(app: &mut App, ctx: &egui::Context) {
     let p = theme::palette(ctx);
@@ -23,7 +23,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
     // A fixed top edge, so a list that shrinks while filtering never moves the dialog.
     let top = dialog_top(ctx.content_rect().height());
     egui::Area::new(egui::Id::new("picker")).order(egui::Order::Foreground).anchor(egui::Align2::CENTER_TOP, vec2(0.0, top)).show(ctx, |ui| {
-        Frame::new().fill(crate::views::dialog_fill(p)).stroke(Stroke::new(1.0, p.border)).corner_radius(6).inner_margin(Margin::same(16)).show(ui, |ui| {
+        Frame::new().fill(crate::views::dialog_fill(p)).stroke(crate::views::dialog_stroke(p)).corner_radius(6).inner_margin(Margin::same(16)).show(ui, |ui| {
             ui.set_width(440.0);
             match picker {
                 Picker::Transition { key, items, cursor } => {

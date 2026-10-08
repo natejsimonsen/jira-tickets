@@ -241,7 +241,12 @@ pub const BUTTON_H: f32 = 28.0;
 
 /// The page dimming behind a modal: light needs less to read as "behind".
 pub fn backdrop_alpha(p: &Palette) -> u8 {
-    if p.dark { 150 } else { 70 }
+    if p.dark { 170 } else { 70 }
+}
+
+/// A modal dialog's 1 px edge: `border` in light, a lifted #4a4a46 in dark so the dialog separates from the dimmed page.
+pub fn dialog_stroke(p: &Palette) -> Stroke {
+    Stroke::new(1.0, if p.dark { Color32::from_rgb(0x4a, 0x4a, 0x46) } else { p.border })
 }
 
 /// A modal dialog's fill: a step above the dimmed page in dark, plain surface in light.

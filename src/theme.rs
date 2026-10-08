@@ -49,15 +49,15 @@ pub const LIGHT: Palette = Palette {
     bg: hex(0xf7f7f5),
     surface: hex(0xffffff),
     surface_2: hex(0xf0f0ed),
-    border: hex(0xe3e2de),
+    border: hex(0xdad9d4),
     text: hex(0x1f1f1d),
     muted: hex(0x62615d),
     accent: hex(0x2f6fdb),
     on_accent: hex(0xffffff),
     on_track: hex(0x2e8b57),
-    at_risk: hex(0xc98a12),
+    at_risk: hex(0xb07a0c),
     off_track: hex(0xb5352f),
-    no_health: hex(0x9a9893),
+    no_health: hex(0x8a8984),
     done: hex(0x6b6a66),
     today: hex(0xc8403a),
     selected_row: hex(0xdde7fa),
@@ -82,10 +82,10 @@ pub const DARK: Palette = Palette {
     no_health: hex(0x7d7b76),
     done: hex(0xa3a29d),
     today: hex(0xec6d66),
-    selected_row: hex(0x24365a),
-    hover_row: hex(0x2a2a28),
+    selected_row: hex(0x26334d),
+    hover_row: hex(0x343432),
     danger_subtle: hex(0x3a2422),
-    tooltip: hex(0x44494f),
+    tooltip: hex(0x454b54),
 };
 
 pub fn palette(ctx: &egui::Context) -> &'static Palette {
@@ -455,6 +455,19 @@ mod tests {
         let t = status_tint("In Progress", "", &LIGHT, &none());
         let c = contrast(over(t.bg, LIGHT.surface), LIGHT.selected_row);
         assert!(c >= 1.2, "{c:.2}");
+    }
+
+    #[test]
+    fn dark_hover_is_a_step_above_surface_2() {
+        assert!(contrast(DARK.hover_row, DARK.surface_2) > 1.05);
+        assert_ne!(DARK.selected_row, DARK.surface_2);
+    }
+
+    #[test]
+    fn light_health_dots_read_on_surface() {
+        for c in [LIGHT.at_risk, LIGHT.no_health, LIGHT.on_track, LIGHT.off_track] {
+            assert!(contrast(c, LIGHT.surface) >= 3.0, "{c:?}: {:.2}", contrast(c, LIGHT.surface));
+        }
     }
 
     #[test]
