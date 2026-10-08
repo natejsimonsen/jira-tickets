@@ -5,7 +5,7 @@ use crate::filter;
 use crate::jira::Issue;
 use crate::store::ListId;
 use crate::theme::{self, Palette};
-use crate::views::{button, pill};
+use crate::views::{button, pill, toggle_button};
 use egui::{CornerRadius, Frame, Margin, Rect, RichText, Sense, Stroke, Ui, vec2};
 use std::collections::BTreeSet;
 
@@ -135,14 +135,14 @@ fn filters(app: &mut App, ui: &mut Ui, p: &Palette) {
         let quick = app.cfg.issues.filters.clone();
         for (i, f) in quick.iter().enumerate() {
             let active = app.filter.quick == Some(i);
-            if ui.add(button(&f.name, p).fill(if active { p.selected_row } else { p.surface_2 })).clicked() {
+            if ui.add(toggle_button(&f.name, active, p)).clicked() {
                 app.actions.push(Action::SetQuick(if active { None } else { Some(i) }));
             }
         }
-        if ui.add(button("Mine", p).fill(if app.filter.mine { p.selected_row } else { p.surface_2 })).clicked() {
+        if ui.add(toggle_button("Mine", app.filter.mine, p)).clicked() {
             app.actions.push(Action::ToggleMine);
         }
-        if ui.add(button("Roadmap", p).fill(if app.filter.roadmap { p.selected_row } else { p.surface_2 })).clicked() {
+        if ui.add(toggle_button("Roadmap", app.filter.roadmap, p)).clicked() {
             app.actions.push(Action::ToggleRoadmap);
         }
     });

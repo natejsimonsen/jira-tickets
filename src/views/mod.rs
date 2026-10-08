@@ -189,6 +189,20 @@ pub fn button(text: &str, p: &Palette) -> egui::Button<'static> {
     egui::Button::new(RichText::new(text.to_string()).color(p.text).size(13.0)).fill(p.surface_2).stroke(Stroke::new(1.0, p.border)).corner_radius(6)
 }
 
+pub fn toggle_label(text: &str, active: bool) -> String {
+    if active { format!("\u{2713} {text}") } else { text.to_string() }
+}
+
+pub fn toggle_button(text: &str, active: bool, p: &Palette) -> egui::Button<'static> {
+    if !active {
+        return button(&toggle_label(text, false), p);
+    }
+    egui::Button::new(RichText::new(toggle_label(text, true)).color(Color32::WHITE).size(13.0))
+        .fill(p.accent)
+        .stroke(Stroke::new(1.0, p.accent))
+        .corner_radius(6)
+}
+
 pub fn primary_button(text: &str, p: &Palette) -> egui::Button<'static> {
     egui::Button::new(RichText::new(text.to_string()).color(Color32::WHITE).size(13.0)).fill(p.accent).stroke(Stroke::NONE).corner_radius(6)
 }
@@ -211,4 +225,15 @@ pub fn error_banner(ui: &mut Ui, p: &Palette, title: &str, raw: &str) -> bool {
         retry = ui.add(button("Retry", p)).clicked();
     });
     retry
+}
+
+#[cfg(test)]
+mod toggle_tests {
+    use super::toggle_label;
+
+    #[test]
+    fn toggle_label_prefixes_check_when_active() {
+        assert_eq!(toggle_label("Mine", true), "\u{2713} Mine");
+        assert_eq!(toggle_label("Mine", false), "Mine");
+    }
 }
