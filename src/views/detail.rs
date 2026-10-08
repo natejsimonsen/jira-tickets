@@ -2,7 +2,7 @@
 
 use crate::app::{Action, App};
 use crate::theme::{self, Palette};
-use crate::views::{adf_view, button, pill, primary_button};
+use crate::views::{adf_view, button, pill, primary_button_if};
 use egui::{Frame, Margin, RichText, Stroke, Ui, vec2};
 
 pub fn show(app: &mut App, ui: &mut Ui) {
@@ -30,10 +30,11 @@ pub fn show(app: &mut App, ui: &mut Ui) {
                 }
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.add(button("Open in Jira", p)).on_hover_text("⌘O").clicked() {
+                ui.spacing_mut().item_spacing.x = 8.0;
+                if ui.add(button("Open in Jira", p)).on_hover_text("Open in Jira (⌘O)").clicked() {
                     app.actions.push(Action::OpenUrl(app.cfg.browse_url(&issue.key)));
                 }
-                if ui.add(button("Copy link", p)).on_hover_text("c").clicked() {
+                if ui.add(button("Copy link", p)).on_hover_text("Copy link (c)").clicked() {
                     app.actions.push(Action::Copy(app.cfg.browse_url(&issue.key)));
                 }
                 if loading {
@@ -41,15 +42,17 @@ pub fn show(app: &mut App, ui: &mut Ui) {
                 }
             });
         });
+        ui.add_space(8.0);
         ui.label(RichText::new(&issue.summary).font(theme::bold(22.0)).color(p.text));
-        ui.add_space(6.0);
-        ui.horizontal(|ui| {
+        ui.add_space(TITLE_TO_PILLS);
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing = vec2(6.0, 4.0);
             let st = theme::status_tint(&issue.status.name, &issue.status.category, p, &app.cfg.issues.status_colors);
             pill(ui, &issue.status.name, st.bg, st.fg);
             if let crate::filter::TeamScope::Label(l) = &app.filter.team
                 && super::issues::missing_label_pill(ui, &app.filter, &issue, l, p)
             {
-                ui.label(RichText::new("l applies it").color(p.muted).size(11.0));
+                ui.label(RichText::new("l applies it").color(p.muted).size(12.0));
             }
             pill(ui, &issue.issue_type, p.surface_2, p.muted);
             if !issue.priority.is_empty() {
@@ -59,13 +62,12 @@ pub fn show(app: &mut App, ui: &mut Ui) {
                 pill(ui, l, p.surface_2, p.muted);
             }
         });
-        ui.add_space(12.0);
+        ui.add_space(SECTION_GAP);
         ui.horizontal_top(|ui| {
             let main_w = (ui.available_width() - 260.0).max(360.0);
             ui.allocate_ui_with_layout(vec2(main_w, 0.0), egui::Layout::top_down(egui::Align::Min), |ui| {
                 ui.set_width(main_w);
-                ui.label(RichText::new("Description").font(theme::bold(12.0)).color(p.muted));
-                ui.add_space(4.0);
+                section_heading(ui, p, "Description");
                 match &issue.description {
                     Some(d) => adf_view::show_value(ui, d, p),
                     None if loading => {
@@ -73,32 +75,22 @@ pub fn show(app: &mut App, ui: &mut Ui) {
                     }
                     None => adf_view::show_value(ui, &serde_json::Value::Null, p),
                 }
-                ui.add_space(16.0);
-                ui.label(RichText::new(format!("Comments ({})", issue.comments.len())).font(theme::bold(12.0)).color(p.muted));
+                ui.add_space(SECTION_GAP);
+                section_heading(ui, p, &format!("Comments ({})", issue.comments.len()));
                 for c in &issue.comments {
-                    ui.add_space(6.0);
-                    Frame::new().fill(p.bg).stroke(Stroke::new(1.0, p.border)).corner_radius(6).inner_margin(Margin::same(10)).show(ui, |ui| {
+                    Frame::new().fill(p.bg).stroke(Stroke::new(1.0, p.border)).corner_radius(6).inner_margin(Margin::same(12)).show(ui, |ui| {
                         ui.set_width(ui.available_width());
                         ui.horizontal(|ui| {
-                            ui.label(RichText::new(&c.author).font(theme::bold(13.0)));
+                            ui.label(RichText::new(&c.author).font(theme::bold(13.5)));
                             ui.label(RichText::new(short_date(&c.created)).color(p.muted).size(12.0));
                         });
+                        ui.add_space(4.0);
                         adf_view::show_value(ui, &c.body, p);
                     });
+                    ui.add_space(8.0);
                 }
-                ui.add_space(10.0);
-                let draft = app.drafts.entry(key.clone()).or_default();
-                let resp = ui.add(egui::TextEdit::multiline(draft).hint_text("Add a comment (⌘Enter to post)").desired_rows(3).desired_width(f32::INFINITY));
-                let enabled = comment_enabled(draft, &app.posting);
-                let post = resp.has_focus() && ui.input_mut(|i| i.consume_shortcut(&egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::Enter)));
-                ui.horizontal(|ui| {
-                    if ui.add_enabled(enabled, primary_button("Comment", p)).clicked() || (post && enabled) {
-                        app.actions.push(Action::Comment);
-                    }
-                    if app.posting.is_some() {
-                        crate::views::icons::spinner(ui, crate::views::icons::INLINE_SPINNER, p);
-                    }
-                });
+                ui.add_space(4.0);
+                composer(app, ui, p, &key);
             });
             ui.add_space(16.0);
             ui.vertical(|ui| {
@@ -116,10 +108,60 @@ pub fn show(app: &mut App, ui: &mut Ui) {
     });
 }
 
+/// Title → pills.
+const TITLE_TO_PILLS: f32 = 12.0;
+/// Pills → Description, Description → Comments.
+const SECTION_GAP: f32 = 24.0;
+/// The composer's fixed height.
+const COMPOSER_H: f32 = 72.0;
+
+/// A section heading; the 24 px above it comes from SECTION_GAP, 8 below.
+fn section_heading(ui: &mut Ui, p: &Palette, text: &str) {
+    ui.label(RichText::new(text).font(theme::bold(12.0)).color(p.muted));
+    ui.add_space(8.0);
+}
+
+/// Always-visible comment box (border, accent when focused) with the Comment button right-aligned under it.
+fn composer(app: &mut App, ui: &mut Ui, p: &Palette, key: &str) {
+    let id = egui::Id::new(("composer", key));
+    let focused = ui.memory(|m| m.has_focus(id));
+    let draft = app.drafts.entry(key.to_string()).or_default();
+    let resp = Frame::new()
+        .fill(p.surface)
+        .stroke(Stroke::new(1.0, if focused { p.accent } else { p.border }))
+        .corner_radius(6)
+        .inner_margin(Margin::same(8))
+        .show(ui, |ui| {
+            ui.add_sized(
+                [ui.available_width(), COMPOSER_H - 16.0],
+                egui::TextEdit::multiline(draft)
+                    .id(id)
+                    .frame(Frame::new())
+                    .margin(vec2(0.0, 0.0))
+                    .hint_text(RichText::new("Add a comment (⌘Enter to post)").color(p.muted)),
+            )
+        })
+        .inner;
+    // Clicking the frame's padding focuses the box too.
+    let enabled = comment_enabled(draft, &app.posting);
+    let post = resp.has_focus() && ui.input_mut(|i| i.consume_shortcut(&egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::Enter)));
+    ui.add_space(8.0);
+    ui.allocate_ui_with_layout(vec2(ui.available_width(), crate::views::BUTTON_H), egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        ui.spacing_mut().item_spacing.x = 8.0;
+        if ui.add(primary_button_if("Comment", enabled, p)).on_hover_text("Post the comment (⌘Enter)").clicked() || (post && enabled) {
+            app.actions.push(Action::Comment);
+        }
+        if app.posting.is_some() {
+            crate::views::icons::spinner(ui, crate::views::icons::INLINE_SPINNER, p);
+        }
+    });
+}
+
 fn field(ui: &mut Ui, p: &Palette, name: &str, value: &str) {
-    ui.label(RichText::new(name).font(theme::bold(11.5)).color(p.muted));
-    ui.label(RichText::new(if value.is_empty() { "—" } else { value }).size(13.0).color(p.text));
-    ui.add_space(6.0);
+    ui.label(RichText::new(name).font(theme::bold(12.0)).color(p.muted));
+    ui.add_space(4.0);
+    ui.label(RichText::new(if value.is_empty() { "—" } else { value }).size(14.0).color(p.text));
+    ui.add_space(12.0);
 }
 
 /// The Comment button and ⌘Enter work when the draft has text and no post is in flight.

@@ -64,6 +64,13 @@ fn block(n: &Value) -> Option<Block> {
         "blockquote" => Block::Quote(blocks(n.get("content"))),
         "panel" => Block::Panel { kind: n["attrs"]["panelType"].as_str().unwrap_or("info").to_string(), blocks: blocks(n.get("content")) },
         "rule" => Block::Rule,
+        "blockCard" | "embedCard" => {
+            let url = n["attrs"]["url"].as_str().unwrap_or("").to_string();
+            if url.is_empty() {
+                return None;
+            }
+            Block::Paragraph(vec![Span { text: url.clone(), link: Some(url), ..Default::default() }])
+        }
         "table" => Block::Table(
             n["content"]
                 .as_array()
@@ -88,6 +95,34 @@ fn block(n: &Value) -> Option<Block> {
             Block::Paragraph(vec![Span { text, ..Default::default() }])
         }
     })
+}
+
+/// Splits bare `http(s)://` URLs out of plain (non-link, non-code) spans as link spans.
+pub fn linkify(spans: &[Span]) -> Vec<Span> {
+    let mut out = Vec::new();
+    for sp in spans {
+        if sp.link.is_some() || sp.code || !sp.text.contains("://") {
+            out.push(sp.clone());
+            continue;
+        }
+        let mut rest = sp.text.as_str();
+        while let Some(at) = ["https://", "http://"].iter().filter_map(|s| rest.find(s)).min() {
+            if at > 0 {
+                out.push(Span { text: rest[..at].to_string(), link: None, ..sp.clone() });
+            }
+            let len = rest[at..].find(char::is_whitespace).unwrap_or(rest.len() - at);
+            let mut url = &rest[at..at + len];
+            // Sentence punctuation after a URL is not part of it.
+            let trimmed = url.trim_end_matches(['.', ',', ')', ';', ':']);
+            url = trimmed;
+            out.push(Span { text: url.to_string(), link: Some(url.to_string()), ..sp.clone() });
+            rest = &rest[at + url.len()..];
+        }
+        if !rest.is_empty() {
+            out.push(Span { text: rest.to_string(), link: None, ..sp.clone() });
+        }
+    }
+    out
 }
 
 /// Flatten a block to spans (for table cells and plain text).
@@ -207,6 +242,28 @@ pub fn text_doc(text: &str) -> Value {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn linkify_splits_bare_urls() {
+        let plain = |t: &str| super::Span { text: t.into(), ..Default::default() };
+        let out = super::linkify(&[plain("PR: https://github.com/x/pull/1. Done")]);
+        let texts: Vec<_> = out.iter().map(|s| (s.text.as_str(), s.link.as_deref())).collect();
+        assert_eq!(texts, [("PR: ", None), ("https://github.com/x/pull/1", Some("https://github.com/x/pull/1")), (". Done", None)]);
+        let code = super::Span { code: true, ..plain("see https://x.y") };
+        assert_eq!(super::linkify(std::slice::from_ref(&code)), vec![code], "code stays code");
+        assert_eq!(super::linkify(&[plain("no links")]), vec![plain("no links")]);
+    }
+
+    #[test]
+    fn block_card_is_a_link_paragraph() {
+        let v = serde_json::json!({"content": [{"type": "blockCard", "attrs": {"url": "https://a.b/c"}}]});
+        let d = super::parse(&v);
+        assert_eq!(d.blocks.len(), 1);
+        match &d.blocks[0] {
+            super::Block::Paragraph(s) => assert_eq!(s[0].link.as_deref(), Some("https://a.b/c")),
+            b => panic!("{b:?}"),
+        }
+    }
+
     use super::*;
 
     fn sample() -> serde_json::Value {
