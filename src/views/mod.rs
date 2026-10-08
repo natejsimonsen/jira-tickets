@@ -412,31 +412,29 @@ pub fn dialog_button_fill(p: &Palette) -> Color32 {
     if p.dark { p.selected_row } else { p.surface_2 }
 }
 
-/// Placeholder text for a field, inset 3 px past the caret so the caret never sits on its first glyph.
+/// Placeholder text for a field, muted, starting exactly where typed text does (the first keystroke moves
+/// nothing).
 pub fn field_hint(text: &str, font: egui::FontId, p: &Palette) -> egui::text::LayoutJob {
     let mut job = egui::text::LayoutJob::default();
-    job.append(text, HINT_INSET, egui::TextFormat { font_id: font, color: p.muted, ..Default::default() });
+    job.append(text, 0.0, egui::TextFormat { font_id: font, color: p.muted, ..Default::default() });
     job
 }
 
-/// How far a placeholder starts past the text start (the caret).
-pub const HINT_INSET: f32 = 3.0;
+/// An input's text (and placeholder) inset: 12, the filter row's one text inset.
+pub const INPUT_PAD_X: f32 = 12.0;
 
-/// An input's text inset: with HINT_INSET the placeholder starts at 12, the filter row's one text inset.
-pub const INPUT_PAD_X: f32 = 9.0;
+/// Height of every single-line input (search, go-to, token, picker fields): BUTTON_H, like every control.
+pub const INPUT_H: f32 = BUTTON_H;
 
-/// Height of every single-line input (search, go-to, token, picker fields).
-pub const INPUT_H: f32 = 32.0;
-
-/// The one single-line input: 9/6 inner margin (so the placeholder, HINT_INSET past the caret, starts 12 in
-/// like combo and chip text), INPUT_H tall, full width, `font` for text and placeholder. Focus draws the
-/// theme's one 1 px accent stroke.
+/// The one single-line input: 12/4 inner margin (typed text and placeholder both start 12 in, like combo
+/// and chip text), INPUT_H tall, full width, `font` for text and placeholder. Focus draws the theme's one
+/// 1 px accent stroke.
 pub fn input_field<'a>(text: &'a mut String, hint: &str, font: egui::FontId, p: &Palette) -> egui::TextEdit<'a> {
     egui::TextEdit::singleline(text)
         .font(font.clone())
         .hint_text(field_hint(hint, font, p))
         .desired_width(f32::INFINITY)
-        .margin(vec2(INPUT_PAD_X, 6.0))
+        .margin(vec2(INPUT_PAD_X, 4.0))
         .min_size(vec2(0.0, INPUT_H))
         // The text row (and caret, and placeholder) centred in the 32 px box, not riding at the top margin.
         .vertical_align(egui::Align::Center)
@@ -640,7 +638,8 @@ mod widget_tests {
     fn chips_pad_12_either_side() {
         assert_eq!(chip_width(40.0), 64.0);
         assert_eq!(chip_width(40.2), 65.0);
-        assert_eq!(INPUT_PAD_X + HINT_INSET, CHIP_PAD, "the search placeholder starts where chip text does");
+        assert_eq!(INPUT_PAD_X, CHIP_PAD, "typed text and placeholder start where chip text does");
+        assert_eq!(INPUT_H, BUTTON_H, "one control height");
     }
 
     #[test]

@@ -50,7 +50,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                     }
                     Picker::Assign { key, items, current, cursor, filter } => {
                         title(ui, p, &format!("Assign {key}"));
-                        let r = ui.add(field(filter).hint_text(crate::views::field_hint("Type a name", theme::body(14.0), p)));
+                        let r = ui.add(field(filter, "Type a name", p));
                         ui.add_space(8.0);
                         // Not under the help overlay, or typing would land in the filter behind it.
                         if !help_open {
@@ -85,16 +85,15 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                     Picker::Edit { key, labels, priority, points, .. } => {
                         title(ui, p, &format!("Edit {key}"));
                         let labels_id = egui::Id::new("edit-labels");
-                        let r = edit_group(ui, p, "Labels, comma separated", field(labels).id(labels_id));
+                        let r = edit_group(ui, p, "Labels, comma separated", field(labels, "", p).id(labels_id));
                         // Labels takes focus on open (and whenever no field holds it); Tab moves on.
                         if !help_open && ui.memory(|m| m.focused().is_none()) {
                             r.request_focus();
                         }
                         ui.add_space(12.0);
-                        let hint = |t: String| crate::views::field_hint(&t, theme::body(14.0), p);
-                        edit_group(ui, p, "Priority", field(priority).hint_text(hint(crate::app::PRIORITY_HINT.to_string())));
+                        edit_group(ui, p, "Priority", field(priority, crate::app::PRIORITY_HINT, p));
                         ui.add_space(12.0);
-                        edit_group(ui, p, "Story points", field(points).hint_text(hint(crate::app::POINTS_HINT.to_string())));
+                        edit_group(ui, p, "Story points", field(points, crate::app::POINTS_HINT, p));
                     }
                 }
                 ui.add_space(16.0);
@@ -144,9 +143,9 @@ fn title(ui: &mut egui::Ui, p: &Palette, text: &str) {
     ui.add_space(12.0);
 }
 
-/// A framed single-line input (the theme's 1 px edge) with 8 px margins.
-fn field(text: &mut String) -> egui::TextEdit<'_> {
-    egui::TextEdit::singleline(text).desired_width(f32::INFINITY).margin(vec2(8.0, 6.0))
+/// The app's one single-line input (`views::input_field`): text and placeholder from the same 12 px inset.
+fn field<'a>(text: &'a mut String, hint: &str, p: &Palette) -> egui::TextEdit<'a> {
+    crate::views::input_field(text, hint, theme::body(14.0), p)
 }
 
 /// A small muted label, 4 px, then the field (full width).

@@ -282,52 +282,82 @@ pub fn combo_widths(team_full_nat: f32, team_short_nat: f32, sprint_nat: f32, ep
     for (team, short) in [(team_full_nat.ceil(), false), (team_short_nat.ceil(), true)] {
         let left = room - sprint - team;
         if left >= EPIC_MIN.min(epic_nat) {
-            return ([team, sprint, epic_nat.min(left).floor()], short);
+            // Cut to the room left, exactly, so the row ends flush with the search box.
+            return ([team, sprint, epic_nat.min(left)], short);
         }
     }
     let team = (room - sprint - EPIC_MIN).max(TEAM_MIN).floor();
-    let epic = (room - sprint - team).max(0.0).min(epic_nat).floor();
+    let epic = (room - sprint - team).max(0.0).min(epic_nat);
     ([team, sprint, epic], true)
 }
 
 /// A combo popup's outer width, one rule for all three: the combo's width, or the widest option plus its
 /// row padding either side (`row_pad`), the popup frame and 2 px of rounding room when that is wider;
-/// never past `cap`, the room from the combo's left edge to the list pane's right edge.
+/// never past `cap`, the list pane's width.
 pub fn popup_width(combo_w: f32, widest_text: f32, row_pad: f32, cap: f32) -> f32 {
     (widest_text + 2.0 * row_pad + POPUP_FRAME + 2.0).ceil().max(combo_w).min(cap.max(combo_w))
 }
 
+/// A popup's left edge: under its combo, shifted left only as far as it must to end at the pane's right
+/// edge, and never past the pane's left edge.
+pub fn popup_left(combo_left: f32, popup_w: f32, pane_left: f32, pane_right: f32) -> f32 {
+    combo_left.min(pane_right - popup_w).max(pane_left)
+}
+
 /// A popup frame's margin (6) and stroke (1), both sides.
 const POPUP_FRAME: f32 = 14.0;
+/// A popup row's text inset: with the frame's 7 it starts at INNER_X, where the combo's own text does.
+const POPUP_ROW_PAD: f32 = INNER_X - POPUP_FRAME / 2.0;
 
 /// The team combo's label: the full "PLAT · Platform" when it fits, else just "PLAT".
 pub fn team_combo_label(full: &str, fits: bool) -> &str {
     if fits { full } else { full.split(" · ").next().unwrap_or(full) }
 }
 
-/// A small muted chevron for the combos.
-fn chevron(color: egui::Color32) -> impl FnOnce(&Ui, Rect, &egui::style::WidgetVisuals, bool) + 'static {
-    move |ui, rect, _, _| {
-        let c = rect.center();
-        let pts = vec![c + vec2(-4.0, -2.0), c + vec2(0.0, 2.0), c + vec2(4.0, -2.0)];
-        ui.painter().add(egui::Shape::line(pts, Stroke::new(1.5, color)));
-    }
+/// The epic combo's natural width for the session: measured once, at first paint, and kept, so it never
+/// grows when the first issues land.
+pub fn session_width(stored: Option<f32>, measure: impl FnOnce() -> f32, min: f32) -> f32 {
+    stored.unwrap_or_else(|| measure().max(min))
 }
 
-/// A ComboBox confined to `w`, its selected text truncated with "…". Its popup follows `popup_width` from
-/// the options' widest text (`widest`) and the popup's own row padding; `contents` gets the room a row's text has.
-fn combo(ui: &mut Ui, salt: &str, text: String, w: f32, widest: f32, p: &Palette, contents: impl FnOnce(&mut Ui, f32)) {
-    let cap = ui.max_rect().right() - ui.cursor().left();
-    ui.allocate_ui(vec2(w, crate::views::BUTTON_H), |ui| {
-        egui::ComboBox::from_id_salt(salt).selected_text(text).width(w).truncate().icon(chevron(p.muted)).show_ui(ui, |ui| {
-            let pad = ui.spacing().button_padding.x;
-            let inner = popup_width(w, widest, pad, cap) - POPUP_FRAME;
+/// A combo exactly `w` wide and BUTTON_H tall: its text at INNER_X, truncated with "…", a muted chevron at
+/// the right. Its popup follows `popup_width` from the options' widest text (`widest`, paired with `w`) and `popup_left`
+/// within the pane (`pane`, left and right); `contents` gets the room a row's text has.
+fn combo(ui: &mut Ui, salt: &str, text: String, (w, widest): (f32, f32), pane: (f32, f32), p: &Palette, contents: impl FnOnce(&mut Ui, f32)) {
+    let (rect, resp) = ui.allocate_exact_size(vec2(w, crate::views::BUTTON_H), Sense::click());
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, true, &text));
+    let popup_id = egui::Id::new(("combo-popup", salt));
+    if ui.is_rect_visible(rect) {
+        let open = egui::Popup::is_id_open(ui.ctx(), popup_id);
+        let v = if open { ui.visuals().widgets.open } else { *ui.style().interact(&resp) };
+        ui.painter().rect(rect, f32::from(theme::RADIUS), v.weak_bg_fill, v.bg_stroke, egui::StrokeKind::Inside);
+        let font = theme::body(14.0);
+        let painter = ui.painter().clone();
+        let measure = |t: &str| painter.layout_no_wrap(t.to_string(), font.clone(), p.text).size().x;
+        let shown = crate::views::truncate_text(&text, w - COMBO_CHROME, measure);
+        let g = painter.layout_no_wrap(shown, font.clone(), p.text);
+        painter.galley(egui::pos2(rect.left() + INNER_X, (rect.center().y - g.size().y / 2.0).round()), g, p.text);
+        let c = egui::pos2(rect.right() - INNER_X - CHEVRON_W / 2.0, rect.center().y);
+        let pts = vec![c + vec2(-4.0, -2.0), c + vec2(0.0, 2.0), c + vec2(4.0, -2.0)];
+        painter.add(egui::Shape::line(pts, Stroke::new(1.5, p.muted)));
+    }
+    let pop_w = popup_width(w, widest, POPUP_ROW_PAD, pane.1 - pane.0);
+    let left = popup_left(rect.left(), pop_w, pane.0, pane.1);
+    let anchor = Rect::from_min_max(egui::pos2(left, rect.top()), egui::pos2(left + pop_w, rect.bottom()));
+    let inner = pop_w - POPUP_FRAME;
+    egui::Popup::menu(&resp)
+        .id(popup_id)
+        .anchor(anchor)
+        .align(egui::RectAlign::BOTTOM_START)
+        .align_alternatives(&[egui::RectAlign::TOP_START])
+        .width(inner)
+        .show(|ui| {
             ui.set_min_width(inner);
             ui.set_max_width(inner);
+            ui.spacing_mut().button_padding.x = POPUP_ROW_PAD;
             ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
-            contents(ui, inner - 2.0 * pad);
+            egui::ScrollArea::vertical().max_height(ui.spacing().combo_height).show(ui, |ui| contents(ui, inner - 2.0 * POPUP_ROW_PAD));
         });
-    });
 }
 
 /// What Esc does in the search box: first it clears the text and any search, then it blurs.
@@ -347,6 +377,7 @@ fn filters(app: &mut App, ui: &mut Ui, p: &Palette) {
     ui.spacing_mut().icon_width = CHEVRON_W;
     ui.spacing_mut().interact_size.y = crate::views::BUTTON_H;
     let pane_w = ui.available_width();
+    let pane = (ui.max_rect().left(), ui.max_rect().right());
     let text_w = |ui: &Ui, t: &str| ui.painter().layout_no_wrap(t.to_string(), theme::body(14.0), p.text).size().x;
     // Team scope: All, each configured sub-team, or tickets with no team label.
     let team_options = filter::team_options(&app.cfg.scope.teams);
@@ -379,25 +410,35 @@ fn filters(app: &mut App, ui: &mut Ui, p: &Palette) {
     let sprint_widest = widest(ui, &mut sprint_options.iter().map(|(_, l)| l.clone()));
     let sprint_nat = sprint_widest.max(text_w(ui, SPRINT_SAMPLE)) + COMBO_CHROME;
     let epic_widest = widest(ui, &mut epics.iter().map(|(k, s)| format!("{}{}", entry(k, s), suffix(k))).chain(["All epics".to_string()]));
-    let ([team_w, sprint_w, epic_w], team_short) = combo_widths(team_widest + COMBO_CHROME, team_short_nat, sprint_nat, epic_widest + COMBO_CHROME, pane_w);
+    // The combo's own width comes from the epic list cached at launch, once, so it never moves when issues land.
+    let epic_nat = session_width(
+        app.epic_combo_nat,
+        || {
+            let cached = app.store.list(ListId::Epics);
+            widest(ui, &mut cached.iter().map(|e| format!("{}{}", entry(&e.key, &e.summary), suffix(&e.key)))) + COMBO_CHROME
+        },
+        EPIC_MIN,
+    );
+    app.epic_combo_nat = Some(epic_nat);
+    let ([team_w, sprint_w, epic_w], team_short) = combo_widths(team_widest + COMBO_CHROME, team_short_nat, sprint_nat, epic_nat, pane_w);
     let team_text = team_combo_label(&team_label, !team_short).to_string();
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = GAP;
-        combo(ui, "team", team_text, team_w, team_widest, p, |ui, _| {
+        combo(ui, "team", team_text, (team_w, team_widest), pane, p, |ui, _| {
             for (scope, l) in &team_options {
                 if ui.selectable_label(app.filter.team == *scope, l).clicked() {
                     app.actions.push(Action::SetTeam(scope.clone()));
                 }
             }
         });
-        combo(ui, "sprint", sprint_label, sprint_w, sprint_widest, p, |ui, _| {
+        combo(ui, "sprint", sprint_label, (sprint_w, sprint_widest), pane, p, |ui, _| {
             for (scope, l) in &sprint_options {
                 if ui.selectable_label(app.filter.sprint == *scope, l).clicked() {
                     app.actions.push(Action::SetSprint(scope.clone()));
                 }
             }
         });
-        combo(ui, "epic", epic_label, epic_w, epic_widest, p, |ui, row_text_w| {
+        combo(ui, "epic", epic_label, (epic_w, epic_widest), pane, p, |ui, row_text_w| {
             if ui.selectable_label(app.filter.epic.is_none(), "All epics").clicked() {
                 app.actions.push(Action::SetEpic(None));
             }
@@ -474,7 +515,7 @@ pub fn count_label(shown: usize, total: Option<usize>, loading_first: bool, suff
     match suffix {
         CountSuffix::None => base,
         CountSuffix::Jql => format!("{base} · JQL"),
-        CountSuffix::Text => format!("{base} · text"),
+        CountSuffix::Text => format!("{base} · text match"),
     }
 }
 
@@ -899,7 +940,7 @@ mod tests {
         assert_eq!(count_label(20, Some(20), false, CountSuffix::None), "20 issues", "a filter that hides nothing");
         assert_eq!(count_label(0, Some(1), false, CountSuffix::None), "0 of 1 issue");
         assert_eq!(count_label(3, Some(20), false, CountSuffix::Jql), "3 of 20 issues · JQL");
-        assert_eq!(count_label(14, None, false, CountSuffix::Text), "14 issues · text", "a text search's rows");
+        assert_eq!(count_label(14, None, false, CountSuffix::Text), "14 issues · text match", "a text search's rows");
     }
 
     #[test]
@@ -999,6 +1040,21 @@ mod tests {
         assert_eq!(popup_width(190.0, 300.0, 12.0, 500.0), 340.0, "grows for a wide option");
         assert_eq!(popup_width(190.0, 900.0, 12.0, 500.0), 500.0, "capped at the pane's right edge");
         assert_eq!(popup_width(190.0, 900.0, 12.0, 100.0), 190.0, "never narrower than the combo");
+        assert_eq!(POPUP_ROW_PAD + POPUP_FRAME / 2.0, INNER_X, "popup text starts where the combo's does");
+    }
+
+    #[test]
+    fn popups_stay_in_the_pane() {
+        assert_eq!(popup_left(300.0, 200.0, 16.0, 588.0), 300.0, "fits under its combo");
+        assert_eq!(popup_left(300.0, 400.0, 16.0, 588.0), 188.0, "shifts left to end at the pane edge");
+        assert_eq!(popup_left(300.0, 572.0, 16.0, 588.0), 16.0, "as wide as the pane: from its left edge");
+    }
+
+    #[test]
+    fn epic_combo_width_is_fixed_for_the_session() {
+        assert_eq!(session_width(None, || 300.0, EPIC_MIN), 300.0, "first paint: the cached epics' widest");
+        assert_eq!(session_width(None, || 0.0, EPIC_MIN), EPIC_MIN, "nothing cached: All epics whole");
+        assert_eq!(session_width(Some(EPIC_MIN), || 400.0, EPIC_MIN), EPIC_MIN, "issues landing later change nothing");
     }
 
     #[test]
@@ -1055,8 +1111,8 @@ mod tests {
 
     #[test]
     fn fifteen_rows_fit_at_1440_by_900() {
-        // 900 less the header (48), the filter block (12 + 28 + 12 + 28 + 12 + 32 + 12 + 28 + 4) and the hint bar.
-        let list_h = 900.0 - 48.0 - (12.0 + 28.0 + 12.0 + 28.0 + 12.0 + 32.0 + 12.0 + 28.0 + 4.0) - HINT_BAR_H;
+        // 900 less the header (48), the filter block (12 + 28 + 12 + 28 + 12 + 28 + 12 + 28 + 4) and the hint bar.
+        let list_h = 900.0 - 48.0 - (12.0 + 28.0 + 12.0 + 28.0 + 12.0 + crate::views::INPUT_H + 12.0 + 28.0 + 4.0) - HINT_BAR_H;
         assert!((list_h / ROW_PITCH).floor() >= 15.0, "{}", list_h / ROW_PITCH);
     }
 

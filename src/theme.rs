@@ -238,6 +238,8 @@ fn visuals(p: &Palette) -> Visuals {
         w.expansion = 0.0;
     }
     v.popup_shadow = Shadow::NONE;
+    // Popup and tooltip frames take the one `border`, not egui's grey.
+    v.window_stroke = Stroke::new(1.0, p.border);
     v
 }
 
