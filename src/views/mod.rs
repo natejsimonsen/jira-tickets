@@ -19,16 +19,20 @@ pub fn main(app: &mut App, ui: &mut Ui) {
     }
     match app.screen {
         Screen::Issues => issues::show(app, ui),
-        Screen::Grooming => placeholder(ui, p, "Grooming arrives in plan 2."),
-        Screen::Team => placeholder(ui, p, "Team view arrives in plan 3."),
-        Screen::Roadmap => placeholder(ui, p, "Roadmap arrives in plan 3."),
+        Screen::Grooming => placeholder(ui, p, "Grooming"),
+        Screen::Team => placeholder(ui, p, "Team"),
+        Screen::Roadmap => placeholder(ui, p, "Roadmap"),
     }
 }
 
-fn placeholder(ui: &mut Ui, p: &Palette, text: &str) {
-    ui.vertical_centered(|ui| {
-        ui.add_space(80.0);
-        ui.label(RichText::new(text).color(p.muted).size(16.0));
+/// "<Tab> is coming soon", named as the tab is.
+pub fn placeholder_text(tab: &str) -> String {
+    format!("{tab} is coming soon")
+}
+
+fn placeholder(ui: &mut Ui, p: &Palette, tab: &str) {
+    ui.centered_and_justified(|ui| {
+        ui.label(RichText::new(placeholder_text(tab)).color(p.muted).size(14.0));
     });
 }
 
@@ -115,26 +119,34 @@ fn offline_banner(app: &mut App, ui: &mut Ui, p: &Palette) {
     });
 }
 
+/// The sign-in panel's first line: the token error when there is one (it replaces the prompt), else the prompt.
+pub fn sign_in_lead(token_error: Option<&str>) -> (&str, bool) {
+    match token_error {
+        Some(e) => (e, true),
+        None => ("Paste an Atlassian API token to connect.", false),
+    }
+}
+
 pub fn sign_in(app: &mut App, ui: &mut Ui) {
     let p = theme::palette(ui.ctx());
     ui.vertical_centered(|ui| {
         ui.add_space((ui.available_height() / 2.0 - 160.0).max(40.0));
-        ui.label(RichText::new("Sign in to Jira").font(theme::body(24.0)).color(p.text));
-        ui.add_space(16.0);
         if app.finding_token {
             icons::spinner(ui, 20.0, p);
+            ui.add_space(8.0);
             ui.label(RichText::new("Looking for your Jira token…").color(p.muted));
             return;
         }
         Frame::new().fill(p.surface).stroke(Stroke::new(1.0, p.border)).corner_radius(6).inner_margin(Margin::same(16)).show(ui, |ui| {
             ui.set_width(380.0);
             ui.vertical(|ui| {
-                if let Some(e) = &app.token_error {
-                    ui.label(RichText::new(e).color(p.off_track).size(13.0));
-                    ui.add_space(4.0);
-                }
+                ui.label(RichText::new("Sign in to Jira").font(theme::bold(22.0)).color(p.text));
+                ui.add_space(16.0);
+                let (lead, is_error) = sign_in_lead(app.token_error.as_deref());
+                ui.label(RichText::new(lead).size(14.0).color(if is_error { p.off_track } else { p.text }));
                 // A login means Jira rejected it (401): show what was sent.
-                let prompt = if let Some(login) = &app.login {
+                if let Some(login) = &app.login {
+                    ui.add_space(8.0);
                     ui.label(
                         RichText::new(format!(
                             "Site: {}\nEmail: {}\nToken: {} ({})\nCheck that the email matches your Atlassian account and the token is valid (https://id.atlassian.com/manage-profile/security/api-tokens).",
@@ -146,36 +158,40 @@ pub fn sign_in(app: &mut App, ui: &mut Ui) {
                         .color(p.muted)
                         .size(12.0),
                     );
-                    ui.add_space(6.0);
+                    ui.add_space(8.0);
                     if ui.add(button("Sign out", p)).on_hover_text("Forget the saved token").clicked() {
                         app.actions.push(Action::SignOut);
                     }
-                    ui.add_space(8.0);
-                    "Paste a new Atlassian API token."
-                } else if app.cfg.api_token.is_some() && app.token_error.is_some() {
-                    "The config api_token could not be resolved. Fix it and look again, or paste an Atlassian API token."
-                } else if app.cfg.api_token.is_some() {
-                    "Signed out. Look again to use the config api_token, or paste an Atlassian API token."
-                } else {
-                    "No JIRA_API_TOKEN, saved token, or config api_token was found. Paste an Atlassian API token."
-                };
-                ui.label(RichText::new(prompt).size(13.0).color(p.muted));
-                ui.add_space(10.0);
-                let r = ui.add(egui::TextEdit::singleline(&mut app.token_input).password(true).desired_width(f32::INFINITY).margin(vec2(8.0, 6.0)));
+                }
+                ui.add_space(4.0);
+                ui.label(RichText::new("Or set JIRA_API_TOKEN, or api_token in config.toml, then choose Check again.").size(12.0).color(p.muted));
+                ui.add_space(12.0);
+                let r = ui.add(
+                    egui::TextEdit::singleline(&mut app.token_input)
+                        .id(egui::Id::new("token-input"))
+                        .password(true)
+                        .hint_text(RichText::new("API token").color(p.muted))
+                        .desired_width(f32::INFINITY)
+                        .margin(vec2(8.0, 6.0)),
+                );
+                if ui.memory(|m| m.focused().is_none()) {
+                    r.request_focus();
+                }
                 if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                     app.actions.push(Action::SubmitToken);
                 }
                 ui.add_space(12.0);
                 let w = ui.available_width();
-                if ui.add_sized([w, 32.0], primary_button("Sign in", p)).clicked() {
+                if ui.add_sized([w, BUTTON_H], primary_button("Sign in", p)).clicked() {
                     app.actions.push(Action::SubmitToken);
+                }
+                ui.add_space(8.0);
+                let again = egui::Button::new(RichText::new("Check again").color(p.muted).size(14.0)).frame(false);
+                if ui.add_sized([w, BUTTON_H], again).on_hover_text("Look for JIRA_API_TOKEN or the config api_token again").clicked() {
+                    app.actions.push(Action::FindToken);
                 }
             });
         });
-        ui.add_space(8.0);
-        if ui.add(button("Look again", p)).clicked() {
-            app.actions.push(Action::FindToken);
-        }
     });
 }
 
@@ -326,6 +342,17 @@ mod widget_tests {
         assert_eq!(on.text, "\u{2713} Mine");
         assert_eq!(off.sections[0].format.color, Color32::TRANSPARENT);
         assert_eq!(on.sections[0].format.color, Color32::WHITE);
+    }
+
+    #[test]
+    fn placeholders_name_the_tab() {
+        assert_eq!(placeholder_text("Grooming"), "Grooming is coming soon");
+    }
+
+    #[test]
+    fn sign_in_error_replaces_the_prompt() {
+        assert_eq!(sign_in_lead(None), ("Paste an Atlassian API token to connect.", false));
+        assert_eq!(sign_in_lead(Some("op read failed")), ("op read failed", true));
     }
 
     #[test]
