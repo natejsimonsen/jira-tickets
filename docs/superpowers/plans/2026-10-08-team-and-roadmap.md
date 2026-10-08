@@ -16,8 +16,10 @@
 - Before each commit: fmt, clippy `-D warnings` with and without `--features snapshot`, full `cargo test`. Conventional commits, no trailers; BLOCKED on a 1Password signing failure.
 - Team members come from `cfg.team.members` (Jira account ids or display names; the live config holds account ids). Match an issue to a member by `assignee.account_id` or `assignee.display_name`, case-insensitive. Column order = config order. A member matching no issue in any list shows "no tickets found".
 - Team columns show, per member: In Progress status category first, then assigned `Ready for Work`, each as a card with key, summary, epic chip (epic tint), status pill (status tint), and "N d in status" from `status_changed`. "Unassigned" column last shows the top of the `Ready for Work` queue (team-label scoped). A collapsed "done in the last 7 days" footer per column loads on expand with `project in ({projects}) AND assignee = "{member}" AND statusCategory = Done AND resolved >= -7d ORDER BY resolved DESC`.
-- Roadmap field mapping (spec §9 table) with these defaults: horizon from `cfg.roadmap.horizon_by_status` plus Done category → Done (the live config must include `"Work in Progress" = "now"`; add it to `config::Roadmap::default()` and `EXAMPLE`); health from labels `health:on-track|at-risk|off-track` or `health_field`; priority chip from `priority` Highest → P0, High → P1 or labels `P0`/`P1`; target from `duedate` or `target_field`; start from `start_field`; lane from the first label present in `cfg.roadmap.lanes` else "No lane"; latest update from the newest epic comment (author, date, first paragraph via `adf::to_plain_text`); confidence / next milestone / definition of done from the configured custom fields, else missing; metrics from labels prefixed `metric:`.
-- Quarters: current calendar year, Q1–Q4; a date maps to its quarter; bars span start quarter → target quarter (target only → one quarter); no target → Unscheduled tray. Today line at the current date's fraction of the year.
+- Which epics are initiatives: those with the label `cfg.roadmap.initiative_label` (new config key, default `"roadmap"`); when no epic in the store carries that label, fall back to every epic whose `summary` does not contain `(ongoing)` (case-insensitive). Excluded "(ongoing)" epics are listed in a KTLO footnote under the Now column ("Also ongoing (KTLO, not initiatives): Deployer, Node Autoscaling, …").
+- Roadmap time is quarters, never dates by default. Target quarter from the label `target:YYYY-Qn` (e.g. `target:2026-Q4`), start quarter from `start:YYYY-Qn`; `cfg.roadmap.target_field` / `start_field`, when set, are read instead and accept either `YYYY-Qn` or a `YYYY-MM-DD` date (mapped to its quarter). `duedate` is NOT used unless `target_field = "duedate"`.
+- Remaining mapping (spec §9 table): horizon from `cfg.roadmap.horizon_by_status` plus Done category → Done (the live config must include `"Work in Progress" = "now"`; add it to `config::Roadmap::default()` and `EXAMPLE`); health from labels `health:on-track|at-risk|off-track` or `health_field`; priority chip from `priority` Highest → P0, High → P1 or labels `P0`/`P1`; lane from the first label present in `cfg.roadmap.lanes` else "No lane"; latest update from the newest epic comment (author, date, first paragraph via `adf::to_plain_text`); confidence / next milestone / definition of done from the configured custom fields, else missing; metrics from labels prefixed `metric:`.
+- Quarters: current calendar year, Q1–Q4; `Quarter::parse("2026-Q4")` and `Quarter::of(date)` both exist; bars span start quarter → target quarter (target only → one quarter); no target → Unscheduled tray. Today line at the current date's fraction of the year.
 - Progress per initiative = children (`store.children_of(epic)`) counted by status category (`new` → to do, `indeterminate` → in progress, `done` → done).
 - Missing values render as red "missing"/"not set" text (`p.off_track`), never as blanks.
 - New keys go into `keys::BINDINGS` first (README table test). Team: `j`/`k` move within a column, `h`/`l` switch column, Enter opens the issue in the Issues screen (select + `SetScreen(Issues)`), `d` toggles the Done footer. Roadmap: `1`–`4` switch tabs, `j`/`k` move, Enter opens the epic in Issues.
@@ -126,15 +128,17 @@ mod tests {
 
 **Files:**
 - Create: `src/roadmap.rs`
-- Modify: `src/main.rs` (`mod roadmap;`), `src/config.rs` (`Roadmap::default()` and `EXAMPLE` gain `"Work in Progress" = "now"`; update `minimal_config_gets_defaults`)
+- Modify: `src/main.rs` (`mod roadmap;`), `src/config.rs` (`Roadmap` gains `pub initiative_label: String` default `"roadmap"`; `Roadmap::default()` and `EXAMPLE` gain `"Work in Progress" = "now"` and `initiative_label = "roadmap"`; update `minimal_config_gets_defaults`)
 
 **Interfaces:**
 - `#[derive(Clone, Copy, PartialEq, Eq, Debug, PartialOrd, Ord)] pub enum Horizon { Now, Next, Later, Done }`
 - `#[derive(Clone, Copy, PartialEq, Eq, Debug, PartialOrd, Ord)] pub enum Health { OffTrack, AtRisk, OnTrack, None }` (ordered worst first for sorting)
-- `pub struct Quarter { pub year: i32, pub q: u8 }` with `pub fn of(date: chrono::NaiveDate) -> Quarter` and `pub fn label(&self) -> String` ("Q4 2026")
+- `pub struct Quarter { pub year: i32, pub q: u8 }` with `pub fn of(date: chrono::NaiveDate) -> Quarter`, `pub fn parse(s: &str) -> Option<Quarter>` (accepts `2026-Q4`, `2026-q4`, `Q4 2026`, `Q4-2026`, or a `YYYY-MM-DD` date), and `pub fn label(&self) -> String` ("Q4 2026")
+- `pub fn is_initiative(epic: &Issue, label: &str, any_labelled: bool) -> bool`: true when the epic carries `label`; when `any_labelled` is false, true when the summary does not contain "(ongoing)" (case-insensitive). `pub fn select<'a>(epics: &[&'a Issue], label: &str) -> (Vec<&'a Issue>, Vec<&'a Issue>)` returns (initiatives, ongoing) using `any_labelled = epics.iter().any(has label)`.
+- `pub fn quarter_from_labels(labels: &[String], prefix: &str) -> Option<Quarter>` for `target:` and `start:`.
 - `pub struct Progress { pub todo: usize, pub doing: usize, pub done: usize }`
 - `pub struct Initiative { pub key: String, pub name: String, pub horizon: Horizon, pub health: Health, pub priority: Option<String>, pub lane: String, pub start: Option<Quarter>, pub target: Option<Quarter>, pub owner: Option<String>, pub latest_update: Option<(String, String, String)>, pub confidence: Option<String>, pub next_milestone: Option<String>, pub definition_of_done: Option<String>, pub metrics: Vec<String>, pub progress: Progress, pub jira_key: String }`
-- `pub fn derive(epic: &Issue, children: &[&Issue], cfg: &config::Roadmap) -> Initiative` implementing the spec §9 table: horizon from `cfg.horizon_by_status[status.name]` else by status category (`done` → Done, `indeterminate` → Now, else Later), overridable by labels `horizon:now|next|later`; health from labels or `health_field` (string value or object `.value`); priority Highest → "P0", High → "P1", labels `P0`/`P1` win; target from `target_field` (custom string `YYYY-MM-DD`) else `due_date`; start from `start_field`; lane = first label in `cfg.lanes` (map value) else "No lane"; owner = assignee display name; latest update = newest comment `(author, short date, first paragraph of to_plain_text)`; confidence/next milestone/DoD from custom fields as plain strings (ADF objects via `adf::to_plain_text`); metrics = labels with `metric:` prefix stripped; progress from children by status category.
+- `pub fn derive(epic: &Issue, children: &[&Issue], cfg: &config::Roadmap) -> Initiative` implementing the spec §9 table: horizon from `cfg.horizon_by_status[status.name]` else by status category (`done` → Done, `indeterminate` → Now, else Later), overridable by labels `horizon:now|next|later`; health from labels or `health_field` (string value or object `.value`); priority Highest → "P0", High → "P1", labels `P0`/`P1` win; target from `target_field` (a `YYYY-Qn` or `YYYY-MM-DD` string) when configured else the `target:` label; start likewise from `start_field` else the `start:` label; `due_date` is never read unless `target_field == "duedate"`; lane = first label in `cfg.lanes` (map value) else "No lane"; owner = assignee display name; latest update = newest comment `(author, short date, first paragraph of to_plain_text)`; confidence/next milestone/DoD from custom fields as plain strings (ADF objects via `adf::to_plain_text`); metrics = labels with `metric:` prefix stripped; progress from children by status category.
 - Tab projections: `pub fn now_next_later(items: &[Initiative]) -> [Vec<&Initiative>; 3]` sorted P0 first then worst health; `pub fn shipped(items: &[Initiative]) -> Vec<&Initiative>`; `pub fn timeline(items: &[Initiative], year: i32) -> (Vec<(String, Vec<&Initiative>)>, Vec<&Initiative>)` lanes in `cfg.lanes` order then "No lane", items with a target in `year` sorted by start quarter, plus the unscheduled tray; `pub fn status_rows(items: &[Initiative]) -> Vec<&Initiative>` (Now only, worst health first); `pub fn health_counts(rows: &[&Initiative]) -> [usize; 4]`; `pub fn owners_set(rows: &[&Initiative]) -> (usize, usize)`; `pub fn outcomes(items: &[Initiative]) -> Vec<(String, Vec<&Initiative>, Vec<&Initiative>)>` (metric → active Now items, other non-Done items), sorted by metric name; `pub fn today_fraction(today: NaiveDate) -> f32` (0.0–1.0 through the year).
 
 - [ ] **Step 1: Failing tests**
@@ -153,7 +157,25 @@ mod tests {
     fn child(cat: &str) -> Issue { Issue { status: Status { name: "x".into(), category: cat.into() }, ..Default::default() } }
 
     #[test]
+    fn selects_initiatives_by_label_or_ongoing_rule() {
+        let a = epic("CI-1", "Canary Deployments", "indeterminate", &["roadmap"]);
+        let b = epic("CI-2", "Deployer (ongoing)", "indeterminate", &[]);
+        let c = epic("CI-3", "Cluster Migration", "new", &[]);
+        let (inits, ongoing) = select(&[&a, &b, &c], "roadmap");
+        assert_eq!(inits.iter().map(|e| e.key.as_str()).collect::<Vec<_>>(), ["CI-1"], "label present on some epic: only labelled ones count");
+        assert!(ongoing.iter().any(|e| e.key == "CI-2"));
+        let (inits2, ongoing2) = select(&[&b, &c], "roadmap");
+        assert_eq!(inits2.iter().map(|e| e.key.as_str()).collect::<Vec<_>>(), ["CI-3"], "no label anywhere: everything not (ongoing)");
+        assert_eq!(ongoing2.iter().map(|e| e.key.as_str()).collect::<Vec<_>>(), ["CI-2"]);
+    }
+
+    #[test]
     fn quarters_and_today_fraction() {
+        assert_eq!(Quarter::parse("2026-Q4"), Some(Quarter { year: 2026, q: 4 }));
+        assert_eq!(Quarter::parse("Q1 2027"), Some(Quarter { year: 2027, q: 1 }));
+        assert_eq!(Quarter::parse("2026-05-01"), Some(Quarter { year: 2026, q: 2 }));
+        assert_eq!(Quarter::parse("2026-Q5"), None);
+        assert_eq!(quarter_from_labels(&["PLAT".into(), "target:2026-Q3".into()], "target:"), Some(Quarter { year: 2026, q: 3 }));
         assert_eq!(Quarter::of(NaiveDate::from_ymd_opt(2026, 10, 6).unwrap()), Quarter { year: 2026, q: 4 });
         assert_eq!(Quarter { year: 2026, q: 1 }.label(), "Q1 2026");
         let f = today_fraction(NaiveDate::from_ymd_opt(2026, 10, 6).unwrap());
@@ -162,8 +184,8 @@ mod tests {
 
     #[test]
     fn derive_uses_status_labels_and_children() {
-        let mut e = epic("CI-1860", "Work in Progress", "indeterminate", &["PLAT", "health:at-risk", "P0", "metric:Deployment Frequency"]);
-        e.due_date = Some("2026-12-31".into());
+        let mut e = epic("CI-1860", "Work in Progress", "indeterminate", &["PLAT", "health:at-risk", "P0", "metric:Deployment Frequency", "target:2026-Q4", "roadmap"]);
+        e.due_date = Some("2026-06-30".into()); // must be ignored: quarters come from labels
         e.assignee = Some(User { account_id: "a".into(), display_name: "Ada".into() });
         e.comments = vec![Comment { id: "1".into(), author: "Grace".into(), created: "2026-10-01T09:00:00.000-0700".into(), body: crate::adf::text_doc("Bar 1 missed.\nSecond para") }];
         let kids = [child("done"), child("indeterminate"), child("new"), child("new")];
@@ -218,7 +240,7 @@ mod tests {
 }
 ```
 
-- [ ] **Step 2: Run to verify failure. Step 3: Implement.** Use `chrono::NaiveDate::ordinal0` for `today_fraction` (`ordinal0 as f32 / days_in_year`). Children categories: `"done"` → done, `"indeterminate"` → doing, else todo. **Step 4:** `ndc cargo test roadmap` → 4 passed, plus the config default test updated. **Step 5: Commit** `feat(roadmap): derive initiatives from epics with the mockup's field mapping`.
+- [ ] **Step 2: Run to verify failure. Step 3: Implement.** Use `chrono::NaiveDate::ordinal0` for `today_fraction` (`ordinal0 as f32 / days_in_year`). Children categories: `"done"` → done, `"indeterminate"` → doing, else todo. **Step 4:** `ndc cargo test roadmap` → 5 passed, plus the config default test updated. **Step 5: Commit** `feat(roadmap): derive initiatives from epics with the mockup's field mapping`.
 
 ---
 
@@ -230,7 +252,7 @@ mod tests {
 
 **Interfaces:**
 - `views::roadmap::show(app, ui)`: derive `Vec<Initiative>` each frame from `store.list(ListId::Epics)` and `store.children_of` (cheap at ~35 epics; cache by `store.fetched_at` if a profiler says otherwise), a tab strip ("1 Now / Next / Later", "2 Timeline", "3 Status review", "4 Outcomes") styled like the mockup's tabs (underline in `p.accent`), then the tab body. Shared pieces: `fn health_dot(ui, health, p)` using `views::health_dot` with `on_track`/`at_risk`/`off_track`/`no_health` (hollow ring for None), `fn missing(ui, p, text)` red small text, `fn progress_bar(ui, p, &Progress)` a 6 px three-segment bar (done `on_track`, doing `accent`, todo `surface_2`) with "d / n" text.
-- Tab 1: three columns (`col` frames on `surface_2`), column heads with counts and the mockup's subtitles ("In progress this quarter", "Committed, starts when capacity frees up", "Ideas and parked work, not committed"); cards: health dot (Now only) + name (bold), chips: P0 (`off_track` outline), lane, up to two metrics; the card body shows the latest update text in Now, otherwise the name only; progress bar at the bottom. Below: "Shipped in {year}" list of Done initiatives with their target quarter.
+- Tab 1: three columns (`col` frames on `surface_2`), column heads with counts and the mockup's subtitles ("In progress this quarter", "Committed, starts when capacity frees up", "Ideas and parked work, not committed"); cards: health dot (Now only) + name (bold), chips: P0 (`off_track` outline), lane, up to two metrics; the card body shows the latest update text in Now, otherwise the name only; progress bar at the bottom. Under the Now column, the KTLO footnote listing the ongoing epics by summary (from `roadmap::select`'s second list). Below: "Shipped in {year}" list of Done initiatives with their target quarter.
 - Tab 3: health summary tiles (counts per health + "owners set n / total") then a table (`egui::Grid`, striped) of `status_rows`: Initiative (name + P0 chip, sub-line lane · jira key · owner or red "missing"), Health, Confidence (or "not set"), Latest update, Next milestone (or "not set"), Definition of done (or "not defined"), Progress bar.
 - Keys: `1`–`4` tab, `j`/`k` move the cursor through the current tab's rows (tab 1: all three columns top to bottom; tab 3: table rows), Enter → `Select(jira_key)` + `SetScreen(Issues)`; cursor row highlighted.
 
@@ -265,5 +287,5 @@ mod tests {
 
 ## Known gaps to state in the README
 
-- Epics in the live project currently have no due dates, priorities, or roadmap custom fields, and only three have comments, so the Roadmap will show mostly "missing" flags until the team fills those fields or sets `health:`/`horizon:`/`metric:` labels. That is by design (spec §9): the red flags are the to-do list.
+- Epics in the live project currently carry none of the roadmap labels (`roadmap`, `target:YYYY-Qn`, `start:YYYY-Qn`, `health:`, `horizon:`, `metric:`), have no priorities or roadmap custom fields, and only three have comments. Until those labels are added, every non-"(ongoing)" epic counts as an initiative and sits in the Unscheduled tray with "missing" flags. That is by design (spec §9): the red flags are the to-do list, and the labels are the lightweight way to fill them in from Jira.
 - The TOOLS board includes unlabelled tickets by assignee; team columns only cover members listed in `[team].members`.

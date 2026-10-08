@@ -110,8 +110,10 @@ jql = 'statusCategory = "To Do"'
 # epics = ["CI-1860", "CI-1569"]   # optional allowlist; default is every epic a team-label ticket points at
 lanes = { PLAT = "Platform" }  # label -> lane name
 horizon_by_status = { "Work in Progress" = "now", "In Progress" = "now", "Ready for Work" = "next", "Planning" = "next", "New" = "later", "Backlog" = "later" }
+initiative_label = "roadmap"          # epics with this label are initiatives; else all epics not named "(ongoing)"
+# Quarters come from labels target:YYYY-Qn / start:YYYY-Qn by default.
 # health_field = "customfield_XXXXX"
-# target_field = "customfield_XXXXX"   # default: duedate
+# target_field = "customfield_XXXXX"   # optional: a date or YYYY-Qn field instead of the label
 # start_field = "customfield_XXXXX"
 # confidence_field = "customfield_XXXXX"
 # next_milestone_field = "customfield_XXXXX"
@@ -326,10 +328,16 @@ visible.
 
 ## 9. Roadmap view
 
-Four tabs from the mockup, over `epics` joined to their children. Each
-initiative shows a progress bar of children done / in progress / to do.
-Empty fields render as red "missing" / "not set" flags. Epics with no
-target quarter go to the Unscheduled tray.
+Four tabs from the mockup, over `epics` joined to their children. Which
+epics count as initiatives: those carrying `initiative_label` (default
+`roadmap`); when no epic carries it, every epic whose summary does not
+contain "(ongoing)". Ongoing epics are listed in a KTLO footnote under the
+Now column, as in the mockup. Each initiative shows a progress bar of
+children done / in progress / to do. Empty fields render as red
+"missing" / "not set" flags. Roadmap time is quarters, not dates: an
+initiative's target and start come from labels `target:YYYY-Qn` and
+`start:YYYY-Qn` (for example `target:2026-Q4`). Epics with no target
+quarter go to the Unscheduled tray.
 
 Field mapping:
 
@@ -338,8 +346,9 @@ Field mapping:
 | Horizon | `horizon_by_status` (the live team's in-progress status is literally `Work in Progress`); Done status category → Done | Label `horizon:now`, `horizon:next`, `horizon:later` |
 | Health | Labels `health:on-track`, `health:at-risk`, `health:off-track`; absent → no health | `health_field` |
 | Priority chip | Priority Highest → P0, High → P1 | Labels `P0`, `P1` |
-| Target date | Epic `duedate` | `target_field` |
-| Start date | Unset: bar spans the target quarter only | `start_field` |
+| Target quarter | Label `target:YYYY-Qn` | `target_field` (a date or `YYYY-Qn` custom field; a date maps to its quarter) |
+| Start quarter | Label `start:YYYY-Qn`; unset: bar spans the target quarter only | `start_field` |
+| Initiative set | Label `initiative_label` (default `roadmap`); fallback: summary without "(ongoing)" | `initiative_label` |
 | Lane | `lanes` label → name; epics with no lane label go to a "No lane" lane | Add entries |
 | Latest update | Newest epic comment: author, date, first paragraph | None |
 | Next milestone, confidence, definition of done | Missing | Custom field ids |
@@ -351,8 +360,9 @@ Tabs:
    health; health dot only in Now. A "Shipped in {year}" list of Done epics
    with their last quarter.
 2. Timeline: lane rows by configured label, quarter columns for the current
-   year, bars from start quarter to target quarter, a today line, done bars
-   muted, P0 bars with a red left edge, and the Unscheduled tray.
+   year, bars from start quarter to target quarter (quarters from the
+   `start:`/`target:` labels), a today line, done bars muted, P0 bars with
+   a red left edge, and the Unscheduled tray.
 3. Status review: health summary tiles (counts per health, owners set / total)
    and a table of Now epics sorted worst health first: initiative with lane,
    key, owner; health; confidence; latest update; next milestone; definition
