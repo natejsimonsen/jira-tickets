@@ -51,7 +51,7 @@ pub const BINDINGS: &[KeyBinding] = &[
     b(Group::Issues, "⌘Enter", "Post the comment (composer focused)"),
     b(Group::Pickers, "↑/↓", "Move"),
     b(Group::Pickers, "j/k", "Move, except in Assign"),
-    b(Group::Pickers, "Tab", "Next field in Edit"),
+    b(Group::Pickers, "Tab/⇧Tab", "Next or previous field in Edit"),
     b(Group::Pickers, "Enter", "Confirm"),
     b(Group::Pickers, "Esc", "Cancel"),
 ];
@@ -187,7 +187,7 @@ pub fn hints(c: HintContext) -> &'static [Hint] {
         HintContext::SearchEmpty => &[&[K("Enter"), W("search JQL")], &[K("Esc"), W("done")]],
         HintContext::Composer => &[&[K("⌘Enter"), W("post")], &[K("Esc"), W("keep draft")]],
         HintContext::ComposerReadOnly => &[&[K("Esc"), W("keep draft")]],
-        HintContext::EditPicker => &[&[K("Tab/Shift+Tab"), W("field")], &[K("Enter"), W("confirm")], &[K("Esc"), W("cancel")]],
+        HintContext::EditPicker => &[&[K("Tab/⇧Tab"), W("field")], &[K("Enter"), W("confirm")], &[K("Esc"), W("cancel")]],
         HintContext::AssignPicker => &[&[W("Type to filter")], &[K("↑/↓"), W("move")], &[K("Enter"), W("confirm")], &[K("Esc"), W("cancel")]],
         HintContext::Picker => &[&[K("j/k"), W("or"), K("↑/↓"), W("move")], &[K("Enter"), W("confirm")], &[K("Esc"), W("cancel")]],
         HintContext::Selected => &[
@@ -315,7 +315,7 @@ mod tests {
         assert_eq!(hint_text(hints(Help)), "? or Esc close");
         assert_eq!(hint_text(hints(GoTo)), "Enter open · Esc close");
         assert_eq!(hint_text(hints(Search)), "Enter search JQL · Esc clear");
-        assert_eq!(hint_text(hints(EditPicker)), "Tab/Shift+Tab field · Enter confirm · Esc cancel");
+        assert_eq!(hint_text(hints(EditPicker)), "Tab/⇧Tab field · Enter confirm · Esc cancel");
         assert_eq!(hint_text(hints(Picker)), "j/k or ↑/↓ move · Enter confirm · Esc cancel");
         assert_eq!(hint_text(hints(Browse)), "j/k move · ⌘K go to · ⌘F search · ? help");
         assert_eq!(hint_text(hints(Selected)), "j/k move · t transition · a assign · s sprint · e edit · l label · J/K rank · c copy · ⌘O open · ? help");

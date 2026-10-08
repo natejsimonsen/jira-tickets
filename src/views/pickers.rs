@@ -128,9 +128,10 @@ fn picker_key(p: &Picker) -> &str {
     }
 }
 
-/// The dialog's top edge: 20% down the window.
+/// The dialog's top edge: 20% down the window and 8 more, so at 900 it clears the detail pane's pill row
+/// instead of cutting across it.
 pub fn dialog_top(window_h: f32) -> f32 {
-    (window_h * 0.2).round()
+    (window_h * 0.2).round() + 8.0
 }
 
 /// Rows the Assign list holds: Unassigned, up to ASSIGN_USERS users, and the "Type to see more" line.
@@ -238,7 +239,7 @@ fn row_list(ui: &mut egui::Ui, p: &Palette, names: &[Row], confirm: &mut bool, c
 mod tests {
     #[test]
     fn dialog_sits_a_fifth_down() {
-        assert_eq!(super::dialog_top(900.0), 180.0);
-        assert_eq!(super::dialog_top(0.0), 0.0);
+        assert_eq!(super::dialog_top(900.0), 188.0);
+        assert_eq!(super::dialog_top(0.0), 8.0);
     }
 }
