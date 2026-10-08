@@ -390,13 +390,7 @@ fn filters(app: &mut App, ui: &mut Ui, p: &Palette) {
             app.actions.push(Action::RunSearch(String::new()));
         }
     }
-    let r = ui.add(
-        egui::TextEdit::singleline(&mut app.filter.text)
-            .id(id)
-            .hint_text("Filter, or type JQL and press Enter (⌘F)")
-            .desired_width(f32::INFINITY)
-            .margin(vec2(INNER_X, 6.0)),
-    );
+    let r = ui.add(crate::views::input_field(&mut app.filter.text, "Filter, or type JQL and press Enter (⌘F)", theme::body(14.0), p).id(id));
     if app.focus_search {
         r.request_focus();
         app.focus_search = false;
@@ -436,14 +430,15 @@ pub fn count_color(updating: bool, p: &Palette) -> egui::Color32 {
     if updating { p.muted } else { p.text }
 }
 
-/// The clear control shows whenever a row filter is on: a quick filter, Mine, Roadmap, or typed JQL.
-pub fn clear_visible(quick: bool, mine: bool, roadmap: bool, typed_jql: bool) -> bool {
-    quick || mine || roadmap || typed_jql
+/// The clear control shows whenever a row filter is on: a quick filter, Mine, Roadmap, or anything in the
+/// search box (typed JQL or a local text filter).
+pub fn clear_visible(quick: bool, mine: bool, roadmap: bool, box_text: bool) -> bool {
+    quick || mine || roadmap || box_text
 }
 
-/// "Clear search" while a typed JQL search is active; "Clear filters" otherwise.
-pub fn clear_label(typed_jql: bool) -> &'static str {
-    if typed_jql { "Clear search" } else { "Clear filters" }
+/// "Clear search" while the search box holds text (JQL or a local filter); "Clear filters" otherwise.
+pub fn clear_label(box_text: bool) -> &'static str {
+    if box_text { "Clear search" } else { "Clear filters" }
 }
 
 fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
@@ -470,8 +465,8 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
     let text_filter = !app.filter.text.trim().is_empty() && !filter::looks_like_jql(&app.filter.text);
     let total = text_filter.then(|| rows_without_text_filter(app));
     let label = count_label(rows.len(), total, loading_first, count_shows_jql(pending, app.typed_search, app.typed_shown));
-    let typed = app.typed_search && app.search_active;
-    let show_clear = clear_visible(app.filter.quick.is_some(), app.filter.mine, app.filter.roadmap, typed);
+    let box_text = !app.filter.text.trim().is_empty() || (app.typed_search && app.search_active);
+    let show_clear = clear_visible(app.filter.quick.is_some(), app.filter.mine, app.filter.roadmap, box_text);
     ui.allocate_ui_with_layout(vec2(ui.available_width(), crate::views::BUTTON_H), egui::Layout::left_to_right(egui::Align::Center), |ui| {
         ui.set_min_height(crate::views::BUTTON_H);
         ui.spacing_mut().item_spacing.x = 8.0;
@@ -486,7 +481,7 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
         }
         if show_clear {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if small_link(ui, clear_label(typed), p).clicked() {
+                if small_link(ui, clear_label(box_text), p).clicked() {
                     app.actions.push(Action::ClearFilters);
                 }
             });
@@ -696,24 +691,48 @@ fn hint_bar(ui: &mut Ui, hs: &[crate::keys::Hint], p: &Palette) {
 const SEP_SPACE: f32 = 12.0;
 
 fn goto_box(app: &mut App, ctx: &egui::Context, p: &Palette) {
+    if app.goto.is_none() {
+        return;
+    }
+    // The standard modal backdrop: the box is an overlay, not a widget floating over the filters.
+    if crate::views::backdrop(ctx, "goto-backdrop", egui::Order::Middle, crate::views::hint_bar_height(app), p).clicked() {
+        app.goto = None;
+        return;
+    }
     let Some(text) = app.goto.as_mut() else { return };
     let mut go = false;
-    egui::Area::new(egui::Id::new("goto")).anchor(egui::Align2::CENTER_TOP, vec2(0.0, 80.0)).show(ctx, |ui| {
-        Frame::new().fill(p.surface).stroke(Stroke::new(1.0, p.border)).corner_radius(8).inner_margin(Margin::same(12)).show(ui, |ui| {
-            ui.set_width(420.0);
-            ui.label(RichText::new("Go to issue").font(theme::bold(13.0)));
-            let r = ui.add(egui::TextEdit::singleline(text).hint_text("9001, CI-9001, or a browse link").desired_width(f32::INFINITY));
-            // The box keeps focus while open, so Enter counts whether or not the field just gave it up.
-            if (r.has_focus() || r.lost_focus()) && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                go = true;
-            } else {
-                r.request_focus();
-            }
-        });
+    let x = ((ctx.content_rect().width() - GOTO_W) / 2.0).round();
+    egui::Area::new(egui::Id::new("goto")).order(egui::Order::Foreground).fixed_pos(egui::pos2(x, goto_top())).show(ctx, |ui| {
+        Frame::new()
+            .fill(crate::views::dialog_fill(p))
+            .stroke(crate::views::dialog_stroke(p))
+            .corner_radius(6)
+            .inner_margin(Margin::same(GOTO_PAD as i8))
+            .show(ui, |ui| {
+                ui.set_width(GOTO_W - 2.0 * GOTO_PAD);
+                ui.label(RichText::new("Go to issue").font(theme::bold(13.5)).color(p.text));
+                ui.add_space(4.0);
+                let r = ui.add(crate::views::input_field(text, "9001, CI-9001, or a browse link", theme::mono(12.5), p));
+                // The box keeps focus while open, so Enter counts whether or not the field just gave it up.
+                if (r.has_focus() || r.lost_focus()) && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                    go = true;
+                } else {
+                    r.request_focus();
+                }
+            });
     });
     if go {
         app.actions.push(Action::GoTo);
     }
+}
+
+/// The go-to box's outer width and padding.
+const GOTO_W: f32 = 444.0;
+const GOTO_PAD: f32 = 12.0;
+
+/// The go-to box's top edge: 12 px below the 48 px header.
+pub fn goto_top() -> f32 {
+    48.0 + 12.0
 }
 
 #[cfg(test)]
@@ -766,6 +785,12 @@ mod tests {
         }
         assert_eq!(clear_label(true), "Clear search");
         assert_eq!(clear_label(false), "Clear filters");
+    }
+
+    #[test]
+    fn goto_box_sits_just_under_the_header() {
+        let gap = goto_top() - 48.0;
+        assert!((8.0..=16.0).contains(&gap), "{gap}");
     }
 
     #[test]

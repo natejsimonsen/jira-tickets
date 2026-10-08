@@ -812,9 +812,8 @@ impl App {
                 self.filter.mine = false;
                 self.filter.roadmap = false;
                 self.filter.quick = None;
-                if crate::filter::looks_like_jql(&self.filter.text) {
-                    self.filter.text.clear();
-                }
+                // The box too: a local text filter as well as typed JQL ("Clear search" shows for either).
+                self.filter.text.clear();
                 self.cursor = 0;
                 // No team label is itself a search; keep it, without the quick filter or typed JQL.
                 match self.scoped_search_jql() {

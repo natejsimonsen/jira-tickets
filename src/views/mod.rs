@@ -317,6 +317,20 @@ pub fn field_hint(text: &str, font: egui::FontId, p: &Palette) -> egui::text::La
 /// How far a placeholder starts past the text start (the caret).
 pub const HINT_INSET: f32 = 3.0;
 
+/// Height of every single-line input (search, go-to, token, picker fields).
+pub const INPUT_H: f32 = 32.0;
+
+/// The one single-line input: 8/6 inner margin, INPUT_H tall, full width, `font` for text and placeholder
+/// (the placeholder inset past the caret). Focus draws the theme's one 1 px accent stroke.
+pub fn input_field<'a>(text: &'a mut String, hint: &str, font: egui::FontId, p: &Palette) -> egui::TextEdit<'a> {
+    egui::TextEdit::singleline(text)
+        .font(font.clone())
+        .hint_text(field_hint(hint, font, p))
+        .desired_width(f32::INFINITY)
+        .margin(vec2(8.0, 6.0))
+        .min_size(vec2(0.0, INPUT_H))
+}
+
 /// A modal dialog's fill: a step above the dimmed page in dark, plain surface in light.
 pub fn dialog_fill(p: &Palette) -> Color32 {
     if p.dark { p.surface_2 } else { p.surface }
