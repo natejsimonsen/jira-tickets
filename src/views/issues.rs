@@ -5,7 +5,7 @@ use crate::filter;
 use crate::jira::Issue;
 use crate::store::ListId;
 use crate::theme::{self, Palette};
-use crate::views::{outline_pill, outline_pill_selected, pill, pill_outlined, small_link, toggle_chip};
+use crate::views::{outline_pill, outline_pill_selected, pill_outlined, small_link, toggle_chip};
 use egui::{CornerRadius, Frame, Margin, Rect, RichText, Sense, Stroke, Ui, vec2};
 use std::collections::BTreeSet;
 
@@ -71,20 +71,17 @@ pub enum PillLook {
     Outline,
 }
 
-/// The row's leading pill: under All teams, its team labels in a neutral pill;
-/// under one team, an amber "no <label> label" when it is the team's by membership only.
-pub fn team_pill(f: &filter::IssueFilter, i: &Issue, p: &Palette) -> Option<(String, PillLook)> {
+/// The row's team pill, neutral like the labels it sits with: under All teams, its team labels; under one
+/// team, "no <label> label" when it is the team's by membership only.
+pub fn team_pill(f: &filter::IssueFilter, i: &Issue) -> Option<String> {
     match &f.team {
         filter::TeamScope::All => {
             let teams: Vec<&str> = i.labels.iter().filter(|l| f.team_labels.contains(l)).map(String::as_str).collect();
-            (!teams.is_empty()).then(|| (teams.join(" · "), PillLook::Outline))
+            (!teams.is_empty()).then(|| teams.join(" · "))
         }
         filter::TeamScope::Label(l) => {
             let members = f.team_members.get(l.as_str()).map(Vec::as_slice).unwrap_or_default();
-            filter::missing_team_label(i, l, members).then(|| {
-                let t = theme::tint_from_hue(p.at_risk, p);
-                (format!("no {l} label"), PillLook::Tint(t.bg, t.fg))
-            })
+            filter::missing_team_label(i, l, members).then(|| format!("no {l} label"))
         }
         filter::TeamScope::None => None,
     }
@@ -95,56 +92,73 @@ pub fn row_labels(labels: &[String], team_filter: Option<&str>) -> String {
     labels.iter().filter(|l| Some(l.as_str()) != team_filter).cloned().collect::<Vec<_>>().join(", ")
 }
 
-/// What a row pill is, for deciding what gives way when the row is narrow.
+/// What a row pill is, for its place in the row and for deciding what gives way when the row is narrow.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PillKind {
-    Assignee,
+    Status,
     Epic,
+    /// Labels, team, type, priority: neutral values.
     Other,
+    Assignee,
+}
+
+/// One order for every row: status, epic, labels and other neutral values, assignee (a stable sort keeps
+/// the configured column order within a kind).
+pub fn pill_rank(k: PillKind) -> u8 {
+    match k {
+        PillKind::Status => 0,
+        PillKind::Epic => 1,
+        PillKind::Other => 2,
+        PillKind::Assignee => 3,
+    }
 }
 
 /// An epic pill narrower than this is dropped rather than cut to a stub.
 const EPIC_PILL_MIN: f32 = 64.0;
 
-/// Below this row width no row shows the assignee pill; at or above it every row does (unless a row is so
-/// crowded that even a cut epic does not fit). Decided once per list width, so rows never disagree.
-const ASSIGNEE_ROW_MIN: f32 = 420.0;
-
-pub fn rows_show_assignee(row_w: f32) -> bool {
-    row_w >= ASSIGNEE_ROW_MIN
+/// The assignee's short form when the row is tight: the first name.
+pub fn first_name(name: &str) -> &str {
+    name.split_whitespace().next().unwrap_or(name)
 }
 
-/// Fits a row's pills on one line: each gets Some(width) or None (dropped). When they do not all fit the
-/// epic pill is cut to the remaining room (dropped below EPIC_PILL_MIN); only when the rest still overflows
-/// does the assignee go, and the epic gets the room it frees.
-pub fn fit_pills(pills: &[(PillKind, f32)], available: f32, spacing: f32) -> Vec<Option<f32>> {
+/// Fits a row's pills on one line: `pills` are (kind, full width, short width; the short form only differs
+/// for the assignee, its first name); each gets Some(width) or None (dropped). What gives way, in order: the
+/// epic is cut to the room left, down to EPIC_PILL_MIN; then the assignee shows its first name; then it is
+/// dropped; only then the epic. At each step the epic gets whatever room there is.
+pub fn fit_pills(pills: &[(PillKind, f32, f32)], available: f32, spacing: f32) -> Vec<Option<f32>> {
     let total = |ws: &[Option<f32>]| {
         let n = ws.iter().flatten().count();
         ws.iter().flatten().sum::<f32>() + spacing * n.saturating_sub(1) as f32
     };
-    let mut out: Vec<Option<f32>> = pills.iter().map(|(_, w)| Some(*w)).collect();
-    if total(&out) <= available {
-        return out;
-    }
-    let epic = pills.iter().position(|(k, _)| *k == PillKind::Epic);
-    let fit_epic = |out: &mut Vec<Option<f32>>| {
+    let epic = pills.iter().position(|(k, _, _)| *k == PillKind::Epic);
+    let mut out = Vec::new();
+    for stage in 0..3 {
+        out = pills
+            .iter()
+            .map(|&(k, full, short)| match (k, stage) {
+                (PillKind::Assignee, 1) => Some(short),
+                (PillKind::Assignee, 2) => None,
+                _ => Some(full),
+            })
+            .collect();
+        if total(&out) <= available {
+            return out;
+        }
         if let Some(e) = epic {
             out[e] = None;
-            let room = available - total(out) - if out.iter().flatten().count() > 0 { spacing } else { 0.0 };
-            out[e] = (room >= EPIC_PILL_MIN).then_some(room.min(pills[e].1).floor());
-        }
-    };
-    fit_epic(&mut out);
-    if total(&out) <= available {
-        return out;
-    }
-    for (o, (k, _)) in out.iter_mut().zip(pills) {
-        if *k == PillKind::Assignee {
-            *o = None;
+            let room = available - total(&out) - if out.iter().flatten().count() > 0 { spacing } else { 0.0 };
+            if room >= EPIC_PILL_MIN {
+                out[e] = Some(room.min(pills[e].1).floor());
+                return out;
+            }
         }
     }
-    fit_epic(&mut out);
     out
+}
+
+/// The key column's width: the widest key in the list, so every summary starts on one edge.
+pub fn key_column_width(widths: impl IntoIterator<Item = f32>) -> f32 {
+    widths.into_iter().fold(0.0, f32::max).ceil()
 }
 
 /// An epic pill's tooltip: its key and name, so two epics with one name stay apart.
@@ -152,13 +166,12 @@ pub fn epic_tip(key: &str, name: &str) -> String {
     if name.is_empty() { key.to_string() } else { format!("{key} · {name}") }
 }
 
-/// The amber "no <label> label" pill; true when it was shown.
+/// The neutral "no <label> label" pill; true when it was shown.
 pub fn missing_label_pill(ui: &mut Ui, f: &filter::IssueFilter, i: &Issue, label: &str, p: &Palette) -> bool {
     let members = f.team_members.get(label).map(Vec::as_slice).unwrap_or_default();
     let missing = filter::missing_team_label(i, label, members);
     if missing {
-        let t = theme::tint_from_hue(p.at_risk, p);
-        pill(ui, &format!("no {label} label"), t.bg, t.fg);
+        outline_pill(ui, &format!("no {label} label"), p, crate::views::PILL_MARGIN);
     }
     missing
 }
@@ -633,8 +646,10 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
     // Keyboard moves change the cursor; bring its row into view once per change.
     let scroll_cursor = app.cursor != app.last_cursor;
     app.last_cursor = app.cursor;
-    // Row width less the 12 px card padding either side; one assignee decision for every row.
-    let show_assignee = rows_show_assignee(ui.available_width() - 24.0);
+    let key_w = {
+        let painter = ui.painter();
+        key_column_width(rows.iter().map(|i| painter.layout_no_wrap(i.key.clone(), theme::mono(12.5), p.muted).size().x))
+    };
     // egui's own fade dims whatever sits near an edge; the list fades only a row that is really cut (`fade_strip`).
     ui.spacing_mut().scroll.fade = egui::style::ScrollFadeStyle { strength: 0.0, size: 0.0 };
     let mut row_spans: Vec<(f32, f32)> = Vec::with_capacity(rows.len());
@@ -656,7 +671,9 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
                     ui.set_width(ui.available_width());
                     ui.spacing_mut().item_spacing.y = ROW_LINE_GAP;
                     ui.horizontal(|ui| {
-                        ui.add(egui::Label::new(RichText::new(&i.key).font(theme::mono(12.5)).color(p.muted)).selectable(false));
+                        let g = ui.painter().layout_no_wrap(i.key.clone(), theme::mono(12.5), p.muted);
+                        let (kr, _) = ui.allocate_exact_size(vec2(key_w, g.size().y), Sense::hover());
+                        ui.painter().galley(kr.min, g, p.muted);
                         let painter = ui.painter().clone();
                         let title = crate::views::truncate_text(&i.summary, ui.available_width(), |t| {
                             painter.layout_no_wrap(t.to_string(), theme::bold(13.5), p.text).size().x
@@ -668,8 +685,8 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
                     });
                     // One line of pills, never wrapped: see `fit_pills`.
                     let mut pills: Vec<(PillKind, String, PillLook)> = Vec::new();
-                    if let Some((t, look)) = team_pill(&app.filter, i, p) {
-                        pills.push((PillKind::Other, t, look));
+                    if let Some(t) = team_pill(&app.filter, i) {
+                        pills.push((PillKind::Other, t, PillLook::Outline));
                     }
                     for c in &columns {
                         let v = match c.as_str() {
@@ -682,7 +699,7 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
                         let (kind, look) = match (c.as_str(), epic) {
                             ("status", _) => {
                                 let t = theme::status_tint(&i.status.name, &i.status.category, p, status_colors);
-                                (PillKind::Other, PillLook::Tint(t.bg, t.fg))
+                                (PillKind::Status, PillLook::Tint(t.bg, t.fg))
                             }
                             ("parent.summary" | "parent.key", Some(t)) => (PillKind::Epic, PillLook::Epic(t.fg, t.stripe)),
                             ("parent.summary" | "parent.key", None) => (PillKind::Epic, PillLook::Outline),
@@ -691,18 +708,19 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
                         };
                         pills.push((kind, v, look));
                     }
-                    if !show_assignee {
-                        pills.retain(|(k, _, _)| *k != PillKind::Assignee);
-                    }
+                    pills.sort_by_key(|(k, _, _)| pill_rank(*k));
                     ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing = vec2(PILL_GAP, 4.0);
                         let painter = ui.painter().clone();
                         let measure = |t: &str| painter.layout_no_wrap(t.to_string(), theme::body(12.0), p.text).size().x;
-                        let widths: Vec<(PillKind, f32)> = pills.iter().map(|(k, t, _)| (*k, measure(t) + 2.0 * crate::views::ROW_PILL_MARGIN.x)).collect();
+                        let pad = 2.0 * crate::views::ROW_PILL_MARGIN.x;
+                        let short = |k: PillKind, t: &str| if k == PillKind::Assignee { first_name(t).to_string() } else { t.to_string() };
+                        let widths: Vec<(PillKind, f32, f32)> = pills.iter().map(|(k, t, _)| (*k, measure(t) + pad, measure(&short(*k, t)) + pad)).collect();
                         let fit = fit_pills(&widths, ui.available_width(), PILL_GAP);
-                        for ((kind, full, look), w) in pills.iter().zip(fit) {
+                        for (((kind, full, look), w), (_, full_w, _)) in pills.iter().zip(fit).zip(&widths) {
                             let Some(w) = w else { continue };
-                            let text = crate::views::truncate_text(full, w - 2.0 * crate::views::ROW_PILL_MARGIN.x, measure);
+                            let source = if *kind == PillKind::Assignee && w < *full_w { short(*kind, full) } else { full.clone() };
+                            let text = crate::views::truncate_text(&source, w - pad, measure);
                             let r = match look {
                                 PillLook::Tint(bg, fg) => pill_outlined(ui, &text, *bg, *fg),
                                 PillLook::Epic(fg, edge) => {
@@ -747,6 +765,10 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
         ui.add_space(LIST_BOTTOM_PAD);
     });
     let view = out.inner_rect;
+    // More rows below the viewport: a 1 px rule at its bottom edge says so, without dimming any row.
+    if more_below(&row_spans, view.bottom()) {
+        ui.painter().hline(view.x_range(), view.bottom() - 0.5, Stroke::new(1.0, p.border));
+    }
     let fade = p.bg.gamma_multiply(FADE_STRENGTH);
     for (strip, dir, colors) in [
         (fade_strip(&row_spans, view.bottom(), true), egui::epaint::Direction::BottomUp, [fade, egui::Color32::TRANSPARENT]),
@@ -774,6 +796,11 @@ pub fn fade_strip(rows: &[(f32, f32)], edge: f32, bottom: bool) -> Option<(f32, 
     if bottom { (bot - edge > CLIP_MIN).then(|| (top.max(edge - FADE_MAX), edge)) } else { (edge - top > CLIP_MIN).then(|| (edge, bot.min(edge + FADE_MAX))) }
 }
 
+/// Whether any row reaches past the viewport's bottom edge (by more than half a pixel).
+pub fn more_below(rows: &[(f32, f32)], edge: f32) -> bool {
+    rows.last().is_some_and(|(_, b)| *b > edge + 0.5)
+}
+
 /// Between the count row's parts.
 const COUNT_GAP: f32 = 7.0;
 /// Count row → first card.
@@ -785,12 +812,12 @@ const LIST_BOTTOM_PAD: f32 = 56.0;
 /// Rows stack as one list: −1 overlaps neighbouring borders, so a single 1 px divider separates rows, and
 /// only the list's outer corners are rounded (no doubled lines or notches at the seams).
 const ROW_GAP: f32 = -1.0;
-/// Row inner vertical padding. The title's line box carries ~4 px of leading above the caps, so 1 above reads
-/// as ~5–6, as do the 4 under the pills; with 2 px between the lines (pills stay 16 tall) the pitch is 44 px,
-/// rule 10's two-line row, and 15 full rows fit at 1440×900.
-const ROW_PAD_TOP: i8 = 1;
+/// Row inner vertical padding. The title's line box carries ~4 px of leading above the caps, so 0 above reads
+/// as ~4–5, like the 4 under the pills; with 1 px between the lines and the pills at their 8/2 padding (18
+/// tall) the pitch stays 44 px, rule 10's two-line row, and 15 full rows fit at 1440×900.
+const ROW_PAD_TOP: i8 = 0;
 const ROW_PAD_BOTTOM: i8 = 4;
-const ROW_LINE_GAP: f32 = 2.0;
+const ROW_LINE_GAP: f32 = 1.0;
 /// One row's pitch (rows overlap by ROW_GAP's 1 px), for the density check.
 pub const ROW_PITCH: f32 = 44.0;
 
@@ -1060,25 +1087,40 @@ mod tests {
     #[test]
     fn pills_fit_on_one_line() {
         use PillKind::*;
-        let row = [(Other, 100.0), (Other, 40.0), (Epic, 150.0), (Assignee, 110.0)];
+        let row = [(Status, 100.0, 100.0), (Epic, 150.0, 150.0), (Other, 40.0, 40.0), (Assignee, 110.0, 50.0)];
         // Everything fits: 400 + 3 gaps of 6.
-        assert_eq!(fit_pills(&row, 418.0, 6.0), vec![Some(100.0), Some(40.0), Some(150.0), Some(110.0)]);
-        // The epic is cut first (417 − 250 − 3 gaps), keeping the assignee.
-        assert_eq!(fit_pills(&row, 417.0, 6.0), vec![Some(100.0), Some(40.0), Some(149.0), Some(110.0)]);
-        assert_eq!(fit_pills(&row, 332.0, 6.0), vec![Some(100.0), Some(40.0), Some(64.0), Some(110.0)]);
-        // Below the epic minimum it is dropped; while the rest fits the assignee stays.
-        assert_eq!(fit_pills(&row, 300.0, 6.0), vec![Some(100.0), Some(40.0), None, Some(110.0)]);
-        // Only when even that overflows does the assignee go, and the epic gets its room back.
-        assert_eq!(fit_pills(&row, 250.0, 6.0), vec![Some(100.0), Some(40.0), Some(98.0), None]);
-        assert_eq!(fit_pills(&row, 200.0, 6.0), vec![Some(100.0), Some(40.0), None, None]);
+        assert_eq!(fit_pills(&row, 418.0, 6.0), vec![Some(100.0), Some(150.0), Some(40.0), Some(110.0)]);
+        // The epic is cut first (417 − 250 − 3 gaps), keeping the full assignee.
+        assert_eq!(fit_pills(&row, 417.0, 6.0), vec![Some(100.0), Some(149.0), Some(40.0), Some(110.0)]);
+        assert_eq!(fit_pills(&row, 332.0, 6.0), vec![Some(100.0), Some(64.0), Some(40.0), Some(110.0)]);
+        // Below the epic minimum the assignee shows its first name, and the epic gets the room back.
+        assert_eq!(fit_pills(&row, 300.0, 6.0), vec![Some(100.0), Some(92.0), Some(40.0), Some(50.0)]);
+        assert_eq!(fit_pills(&row, 272.0, 6.0), vec![Some(100.0), Some(64.0), Some(40.0), Some(50.0)]);
+        // Then the assignee goes.
+        assert_eq!(fit_pills(&row, 250.0, 6.0), vec![Some(100.0), Some(98.0), Some(40.0), None]);
+        // Only then the epic.
+        assert_eq!(fit_pills(&row, 200.0, 6.0), vec![Some(100.0), None, Some(40.0), None]);
         assert!(fit_pills(&[], 10.0, 6.0).is_empty());
+        // No epic: the first name before dropping.
+        let plain = [(Status, 100.0, 100.0), (Assignee, 110.0, 50.0)];
+        assert_eq!(fit_pills(&plain, 160.0, 6.0), vec![Some(100.0), Some(50.0)]);
+        assert_eq!(fit_pills(&plain, 150.0, 6.0), vec![Some(100.0), None]);
     }
 
     #[test]
-    fn assignee_shows_on_all_rows_or_none() {
-        assert!(!rows_show_assignee(314.0), "1000 px window");
-        assert!(rows_show_assignee(548.0), "1440 px window");
-        assert!(rows_show_assignee(ASSIGNEE_ROW_MIN));
+    fn row_pills_keep_one_order() {
+        use PillKind::*;
+        let mut kinds = vec![Assignee, Other, Epic, Status];
+        kinds.sort_by_key(|k| pill_rank(*k));
+        assert_eq!(kinds, vec![Status, Epic, Other, Assignee], "status, epic, labels, assignee");
+        assert_eq!(first_name("Shawn Sorichetti"), "Shawn");
+        assert_eq!(first_name("Cher"), "Cher");
+    }
+
+    #[test]
+    fn summaries_share_one_left_edge() {
+        assert_eq!(key_column_width([52.0, 60.4, 45.0]), 61.0);
+        assert_eq!(key_column_width([]), 0.0);
     }
 
     #[test]
@@ -1107,6 +1149,14 @@ mod tests {
         assert_eq!(fade_strip(&rows, 200.0, true), None, "nothing at the edge");
         assert_eq!(fade_strip(&rows, 20.0, false), Some((20.0, 44.0)), "the same rule at the top");
         assert_eq!(fade_strip(&rows, 5.0, false), None);
+    }
+
+    #[test]
+    fn a_rule_marks_rows_below() {
+        let rows = [(0.0, 44.0), (43.0, 87.0), (86.0, 130.0)];
+        assert!(more_below(&rows, 87.0), "the last row is out of view");
+        assert!(!more_below(&rows, 130.0), "every row is in view");
+        assert!(!more_below(&[], 10.0));
     }
 
     #[test]
