@@ -223,8 +223,11 @@ configured the parent team sub-team label such as PLAT or TOOLS, or "No team
 label"; defaults to the user's own team), an epic picker, a sprint scope (All, the
 board's active sprint, each future sprint, or Backlog; defaults to the
 active sprint, as jira-cli did), quick filters from config, a "Mine"
-toggle, and a search box (`/` or `⌘F`) that takes JQL. `⌘K` jumps to a key
-or pasted browse link. A ticket assigned to a team member counts as that
+toggle, a "Roadmap" toggle (`m`) that keeps only tickets whose parent epic
+carries `initiative_label`, and a search box (`/` or `⌘F`) that takes JQL.
+Epics never appear in the Issues list: they are containers, not action
+items, and stay in the store for the epic picker, grooming, and the
+roadmap. `⌘K` jumps to a key or pasted browse link. A ticket assigned to a team member counts as that
 team's work even without the team label; such rows carry an amber "no
 PLAT label" pill and `l` applies the label (a write, never automatic,
 sent as an atomic Jira `labels add` so concurrent edits are kept). "No
