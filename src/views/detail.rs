@@ -151,6 +151,7 @@ pub fn composer_id(key: &str) -> egui::Id {
 fn composer(app: &mut App, ui: &mut Ui, p: &Palette, key: &str) {
     let id = composer_id(key);
     let focused = ui.memory(|m| m.has_focus(id));
+    let read_only = crate::jira::READ_ONLY.load(std::sync::atomic::Ordering::Relaxed);
     let draft = app.drafts.entry(key.to_string()).or_default();
     let resp = Frame::new()
         .fill(p.surface)
@@ -165,7 +166,7 @@ fn composer(app: &mut App, ui: &mut Ui, p: &Palette, key: &str) {
                     .id(id)
                     .frame(Frame::new())
                     .margin(vec2(0.0, 0.0))
-                    .hint_text(RichText::new("Add a comment (⌘Enter to post)").color(p.muted)),
+                    .hint_text(RichText::new(composer_hint(read_only)).color(p.muted)),
             )
         })
         .inner;
@@ -174,7 +175,6 @@ fn composer(app: &mut App, ui: &mut Ui, p: &Palette, key: &str) {
     let post = resp.has_focus() && ui.input_mut(|i| i.consume_shortcut(&egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::Enter)));
     // 12 px box → button, counting the layout's own item spacing.
     ui.add_space(BOX_TO_BUTTON - ui.spacing().item_spacing.y);
-    let read_only = crate::jira::READ_ONLY.load(std::sync::atomic::Ordering::Relaxed);
     ui.allocate_ui_with_layout(vec2(ui.available_width(), crate::views::BUTTON_H), egui::Layout::right_to_left(egui::Align::Center), |ui| {
         ui.spacing_mut().item_spacing.x = 8.0;
         let tip = if read_only { "Writes are blocked (JIRA_TICKETS_READONLY)" } else { "Post the comment (⌘Enter)" };
@@ -185,6 +185,11 @@ fn composer(app: &mut App, ui: &mut Ui, p: &Palette, key: &str) {
             crate::views::icons::spinner(ui, crate::views::icons::INLINE_SPINNER, p);
         }
     });
+}
+
+/// The composer's placeholder: in read-only mode it says nothing can be posted rather than promising ⌘Enter.
+pub fn composer_hint(read_only: bool) -> &'static str {
+    if read_only { "Read-only, comments can't be posted" } else { "Add a comment (⌘Enter to post)" }
 }
 
 /// Label, 4, value, then 16 to the next group.
@@ -242,6 +247,12 @@ mod tests {
         assert_eq!(detail_columns(1000.0, 580.0), (424.0, 140.0));
         assert_eq!(detail_columns(1000.0, 300.0).0, 300.0, "floor");
         assert_eq!(detail_columns(2560.0, 1800.0).0, MAIN_MAX);
+    }
+
+    #[test]
+    fn read_only_composer_promises_nothing() {
+        assert_eq!(composer_hint(true), "Read-only, comments can't be posted");
+        assert_eq!(composer_hint(false), "Add a comment (⌘Enter to post)");
     }
 
     #[test]
