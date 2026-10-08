@@ -209,7 +209,10 @@ fn sign_in_aside(p: &Palette) -> egui::text::LayoutJob {
 }
 
 /// Alternating prose and identifiers.
-pub const SIGN_IN_ASIDE: [&str; 7] = ["Or set ", "JIRA_API_TOKEN", " or ", "api_token", " in ", "config.toml", ", then Check again"];
+pub const SIGN_IN_ASIDE: [&str; 7] = ["Or set ", "JIRA_API_TOKEN", ", or ", "api_token", " in ", "config.toml", "."];
+
+/// The sign-in aside → token field, in code (see the comment at its use).
+const ASIDE_TO_FIELD: f32 = 15.0;
 
 /// The sign-in panel's content width: 380, or the aside's one-line width when wider.
 pub fn sign_in_width(aside_w: f32) -> f32 {
@@ -234,6 +237,7 @@ pub fn sign_in(app: &mut App, ui: &mut Ui) {
             ui.set_width(w);
             ui.vertical(|ui| {
                 // Every gap is explicit: 16 title → body, 8 body → aside, 16 aside → field, 12 → button, 8 → Check again.
+                // The aside's mono runs make its line box ~1 px taller than its prose, so 15 reads as 16.
                 ui.spacing_mut().item_spacing.y = 0.0;
                 ui.label(RichText::new("Sign in to Jira").font(theme::bold(22.0)).color(p.text));
                 ui.add_space(16.0);
@@ -260,7 +264,7 @@ pub fn sign_in(app: &mut App, ui: &mut Ui) {
                 }
                 ui.add_space(8.0);
                 ui.add(egui::Label::new(aside).extend());
-                ui.add_space(16.0);
+                ui.add_space(ASIDE_TO_FIELD);
                 let r = ui.add(input_field(&mut app.token_input, "API token", theme::body(14.0), p).id(egui::Id::new("token-input")).password(true));
                 if ui.memory(|m| m.focused().is_none()) {
                     r.request_focus();
@@ -269,7 +273,8 @@ pub fn sign_in(app: &mut App, ui: &mut Ui) {
                     app.actions.push(Action::SubmitToken);
                 }
                 ui.add_space(12.0);
-                if ui.add_sized([w, BUTTON_H], primary_button("Sign in", p)).clicked() {
+                // Full width and the field's height: the two stack as one unit.
+                if ui.add_sized([w, INPUT_H], primary_button("Sign in", p)).clicked() {
                     app.actions.push(Action::SubmitToken);
                 }
                 ui.add_space(8.0);
@@ -391,6 +396,8 @@ pub fn input_field<'a>(text: &'a mut String, hint: &str, font: egui::FontId, p: 
         .desired_width(f32::INFINITY)
         .margin(vec2(INPUT_PAD_X, 6.0))
         .min_size(vec2(0.0, INPUT_H))
+        // The text row (and caret, and placeholder) centred in the 32 px box, not riding at the top margin.
+        .vertical_align(egui::Align::Center)
 }
 
 /// A modal dialog's fill: a step above the dimmed page in dark, plain surface in light.
@@ -620,7 +627,7 @@ mod widget_tests {
 
     #[test]
     fn sign_in_aside_reads_as_one_sentence() {
-        assert_eq!(SIGN_IN_ASIDE.concat(), "Or set JIRA_API_TOKEN or api_token in config.toml, then Check again");
+        assert_eq!(SIGN_IN_ASIDE.concat(), "Or set JIRA_API_TOKEN, or api_token in config.toml.");
         assert_eq!(sign_in_width(300.0), 380.0);
         assert_eq!(sign_in_width(452.3), 453.0, "the aside fits on one line");
     }
