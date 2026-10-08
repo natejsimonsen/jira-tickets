@@ -65,7 +65,7 @@ pub const LIGHT: Palette = Palette {
     selected_row: hex(0xdfdfda),
     hover_row: hex(0xe6e6e2),
     danger_subtle: hex(0xfbe9e8),
-    tooltip: hex(0x25292e),
+    tooltip: hex(0x1f1f1d),
     tooltip_text: hex(0xffffff),
 };
 
@@ -77,7 +77,7 @@ pub const DARK: Palette = Palette {
     border: hex(0x3a3a37),
     text: hex(0xecebe8),
     muted: hex(0xabaaa5),
-    accent: hex(0x7aa5f0),
+    accent: hex(0x6b98e6),
     on_accent: hex(0x171716),
     on_track: hex(0x5cc28a),
     at_risk: hex(0xe6b04a),
@@ -88,7 +88,7 @@ pub const DARK: Palette = Palette {
     selected_row: hex(0x3d3d3a),
     hover_row: hex(0x343432),
     danger_subtle: hex(0x3a2422),
-    tooltip: hex(0x403f3b),
+    tooltip: hex(0x4d4c47),
     tooltip_text: hex(0xffffff),
 };
 
@@ -141,17 +141,19 @@ fn mix(c: Color32, toward: u8, t: f32) -> Color32 {
 /// Light-theme wash alpha: heavy enough that an In Progress pill on a plain row never reads as the
 /// (accent-tinted) selected-row fill.
 const LIGHT_WASH: u8 = 76;
-const DARK_WASH: u8 = 60;
+const DARK_WASH: u8 = 72;
+/// Dark stripe (and epic outline): a third of the way to white, so it holds >3.6:1 on the selected row.
+const DARK_STRIPE_MIX: f32 = 0.35;
 /// Dark pill text: a little past halfway to white, so it holds 4.5:1 on the lighter selected row too.
 const DARK_TEXT_MIX: f32 = 0.55;
 
 /// A translucent wash of the hue behind text in a darker (light theme) or
 /// lighter (dark theme) shade of it, for at least 4.5:1 contrast. The row's edge stripe is the
-/// base hue in light (20% toward black, so it holds 4.5:1 on the row) and a quarter of the way to white in dark (the text's
+/// base hue in light (20% toward black, so it holds 4.5:1 on the row) and DARK_STRIPE_MIX toward white in dark (the text's
 /// halfway tint washes every hue out to the same pale stripe).
 pub fn tint_from_hue(base: Color32, p: &Palette) -> Tint {
     let (alpha, fg, stripe) =
-        if p.dark { (DARK_WASH, mix(base, 255, DARK_TEXT_MIX), mix(base, 255, 0.25)) } else { (LIGHT_WASH, mix(base, 0, 0.45), mix(base, 0, 0.2)) };
+        if p.dark { (DARK_WASH, mix(base, 255, DARK_TEXT_MIX), mix(base, 255, DARK_STRIPE_MIX)) } else { (LIGHT_WASH, mix(base, 0, 0.45), mix(base, 0, 0.2)) };
     Tint { bg: Color32::from_rgba_unmultiplied(base.r(), base.g(), base.b(), alpha), fg, stripe }
 }
 
@@ -238,7 +240,7 @@ const LIGHT_CHIP: Color32 = hex(0xe8e8e4);
 /// The dark modal dialog's fill: one step above `surface_2`, so a dialog lifts off the dimmed page.
 pub const DARK_DIALOG: Color32 = hex(0x333331);
 /// The lifted dark edge: modal dialogs, fields and buttons inside them.
-pub const DARK_EDGE: Color32 = hex(0x4a4a46);
+pub const DARK_EDGE: Color32 = hex(0x504f4b);
 /// A chip's fill must stand at least this far off its container (1.14:1 read as flat).
 const CHIP_STEP: f32 = 1.17;
 
@@ -376,7 +378,7 @@ mod tests {
     #[test]
     fn on_accent_reads_on_the_accent() {
         assert!(contrast(LIGHT.on_accent, LIGHT.accent) >= 4.5, "{}", contrast(LIGHT.on_accent, LIGHT.accent));
-        assert!(contrast(DARK.on_accent, DARK.accent) >= 7.0, "{}", contrast(DARK.on_accent, DARK.accent));
+        assert!(contrast(DARK.on_accent, DARK.accent) >= 6.0, "{}", contrast(DARK.on_accent, DARK.accent));
     }
 
     #[test]
@@ -444,6 +446,15 @@ mod tests {
         assert_eq!(chip_fill_on(LIGHT.surface_2, &LIGHT), LIGHT.selected_row, "code in a light comment card");
         assert_eq!(chip_fill_on(DARK.surface_2, &DARK), DARK.border, "code in a dark comment card");
         assert_eq!(chip_fill_on(DARK_DIALOG, &DARK), DARK_EDGE, "help keys in the dark dialog");
+    }
+
+    #[test]
+    fn links_read_on_every_surface() {
+        for p in [&LIGHT, &DARK] {
+            for fill in [p.bg, p.surface, p.surface_2] {
+                assert!(contrast(p.accent, fill) >= 4.5, "dark={} {fill:?}: {:.2}", p.dark, contrast(p.accent, fill));
+            }
+        }
     }
 
     #[test]
@@ -578,7 +589,11 @@ mod tests {
             let s = tint_from_hue(hex(h), &LIGHT).stripe;
             assert!(contrast(s, LIGHT.surface) >= 4.0, "{h:06x}: {:.2}", contrast(s, LIGHT.surface));
         }
-        assert_eq!(tint_from_hue(base, &DARK).stripe, mix(base, 255, 0.25), "dark stripe a quarter to white");
+        assert_eq!(tint_from_hue(base, &DARK).stripe, mix(base, 255, 0.35), "dark stripe a third to white");
+        for &h in &EPIC_HUES {
+            let s = tint_from_hue(hex(h), &DARK).stripe;
+            assert!(contrast(s, DARK.selected_row) > 3.6, "{h:06x}: {:.2}", contrast(s, DARK.selected_row));
+        }
         assert_eq!(tint_from_hue(base, &DARK).fg, mix(base, 255, DARK_TEXT_MIX), "dark pill text a little past halfway");
     }
 

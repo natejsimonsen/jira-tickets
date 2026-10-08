@@ -294,7 +294,7 @@ pub fn hint_bar_height(app: &App) -> Option<f32> {
 
 /// The toast's edge: `border` in light; in dark a warm step lighter than the fill so it separates from the page.
 pub fn toast_stroke(p: &Palette) -> Color32 {
-    if p.dark { Color32::from_rgb(0x56, 0x55, 0x4f) } else { p.border }
+    if p.dark { Color32::from_rgb(0x63, 0x62, 0x5b) } else { p.border }
 }
 
 /// How far the toast's bottom sits above the window bottom: 16 px above the hint bar when one shows, else 24 px.
@@ -304,11 +304,14 @@ pub fn toast_offset(hint_bar: Option<f32>) -> f32 {
 
 /// The toast's dot marks its type only: green for done, red for failures, none for a notice (read-only
 /// refusals, "No changes"). The toast is a dark fill in both themes, so the dot takes the dark palette's tokens.
+/// The failure dot: off_track lifted a step, so it holds 3:1 on the dark toast fill (#4d4c47).
+const TOAST_ERROR_DOT: Color32 = Color32::from_rgb(0xf2, 0x80, 0x79);
+
 pub fn toast_dot(kind: crate::app::ToastKind) -> Option<Color32> {
     match kind {
         crate::app::ToastKind::Success => Some(theme::DARK.on_track),
         crate::app::ToastKind::Info => None,
-        crate::app::ToastKind::Error => Some(theme::DARK.off_track),
+        crate::app::ToastKind::Error => Some(TOAST_ERROR_DOT),
     }
 }
 
@@ -368,7 +371,7 @@ pub fn backdrop_alpha(p: &Palette) -> u8 {
 
 /// A modal dialog's one edge colour, used for its 1 px stroke and for the fields and buttons inside it, in both
 /// themes: a step darker than `border` in light (`border` sits between white and the dimmed page and
-/// vanishes), the lifted #4a4a46 in dark.
+/// vanishes), the lifted #504f4b in dark (1.54:1 on the #333331 dialog).
 pub fn dialog_stroke(p: &Palette) -> Stroke {
     Stroke::new(1.0, if p.dark { DARK_EDGE } else { Color32::from_rgb(0xb4, 0xb3, 0xac) })
 }
@@ -430,9 +433,10 @@ pub fn input_field<'a>(text: &'a mut String, hint: &str, font: egui::FontId, p: 
         .vertical_align(egui::Align::Center)
 }
 
-/// A modal dialog's fill: a step above the dimmed page in dark, plain surface in light.
+/// A modal dialog's fill: plain surface in light; in dark #333331, a step past surface_2, so the dialog lifts
+/// off the dimmed page about as far as the light one does (the backdrop stays at 110).
 pub fn dialog_fill(p: &Palette) -> Color32 {
-    if p.dark { p.surface_2 } else { p.surface }
+    if p.dark { theme::DARK_DIALOG } else { p.surface }
 }
 
 /// The dimmed area: the window, less the hint bar at the bottom (it carries the dialog's keys, so it stays lit).
@@ -734,14 +738,14 @@ mod widget_tests {
     #[test]
     fn backdrop_is_heavier_in_dark() {
         assert!(backdrop_alpha(&theme::DARK) > backdrop_alpha(&theme::LIGHT));
-        assert_eq!(dialog_fill(&theme::DARK), theme::DARK.surface_2);
+        assert_eq!(dialog_fill(&theme::DARK), theme::DARK_DIALOG);
         assert_eq!(dialog_fill(&theme::LIGHT), theme::LIGHT.surface);
     }
 
     #[test]
     fn toast_dot_marks_the_type_only() {
         use crate::app::ToastKind;
-        assert_eq!(toast_dot(ToastKind::Error), Some(theme::DARK.off_track));
+        assert_eq!(toast_dot(ToastKind::Error), Some(TOAST_ERROR_DOT));
         assert_eq!(toast_dot(ToastKind::Success), Some(theme::DARK.on_track));
         assert_eq!(toast_dot(ToastKind::Info), None, "no decorative dot on a notice");
         for p in [&theme::LIGHT, &theme::DARK] {
