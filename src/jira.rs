@@ -431,6 +431,13 @@ impl Client {
         Ok(())
     }
 
+    /// Adds one label server-side, leaving the issue's other labels alone even if they changed since our fetch.
+    pub fn add_label(&self, key: &str, label: &str) -> Result<()> {
+        check_writable()?;
+        self.send("PUT", &format!("/rest/api/3/issue/{key}"), &json!({ "update": { "labels": [{ "add": label }] } }))?;
+        Ok(())
+    }
+
     pub fn add_comment(&self, key: &str, text: &str) -> Result<()> {
         check_writable()?;
         self.send("POST", &format!("/rest/api/3/issue/{key}/comment"), &json!({ "body": crate::adf::text_doc(text) }))?;
@@ -766,6 +773,23 @@ pub mod tests {
         c.add_comment("CI-1", "hello\nworld").unwrap();
         let body: serde_json::Value = serde_json::from_str(&rx.recv().unwrap().body).unwrap();
         assert_eq!(body["body"]["content"].as_array().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn add_label_is_an_atomic_update() {
+        let _g = WRITE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (base, rx) = stub_server(vec![("PUT", "/rest/api/3/issue/CI-1", serde_json::json!({}))]);
+        let c = client(&base);
+        {
+            let _ro = ReadOnlyGuard::new();
+            assert!(c.add_label("CI-1", "PLAT").is_err());
+        }
+        assert!(rx.try_recv().is_err(), "read-only sent nothing");
+        c.add_label("CI-1", "PLAT").unwrap();
+        let r = rx.recv().unwrap();
+        assert_eq!((r.method.as_str(), r.path.as_str()), ("PUT", "/rest/api/3/issue/CI-1"));
+        let body: serde_json::Value = serde_json::from_str(&r.body).unwrap();
+        assert_eq!(body, serde_json::json!({ "update": { "labels": [{ "add": "PLAT" }] } }));
     }
 
     #[test]

@@ -619,13 +619,13 @@ impl App {
                     return;
                 };
                 let Some(i) = self.selected.as_ref().and_then(|k| self.store.get(k)) else { return };
-                let Some(fields) = add_label_fields(&i.labels, label) else {
+                if i.labels.iter().any(|l| l == label) {
                     self.toast("Already labelled", false);
                     return;
-                };
-                let key = i.key.clone();
+                }
+                let (key, label) = (i.key.clone(), label.clone());
                 self.spawn_write(move |c, tx| {
-                    let _ = tx.send(Msg::Done { key: key.clone(), what: "Label", result: c.update_fields(&key, fields) });
+                    let _ = tx.send(Msg::Done { key: key.clone(), what: "Label", result: c.add_label(&key, &label) });
                 });
             }
             Action::SetQuick(q) => {
@@ -992,16 +992,6 @@ fn edit_fields(labels: &str, priority: &str, points: &str, orig_labels: &str, or
     (!fields.is_empty()).then_some(serde_json::Value::Object(fields))
 }
 
-/// The `fields` body that adds `label` to `labels`; None when it is already there.
-fn add_label_fields(labels: &[String], label: &str) -> Option<serde_json::Value> {
-    if labels.iter().any(|l| l == label) {
-        return None;
-    }
-    let mut all = labels.to_vec();
-    all.push(label.to_string());
-    Some(serde_json::json!({ "labels": all }))
-}
-
 /// A load starts only with a client to run it and none already in flight;
 /// otherwise nothing would ever clear the loading flag.
 fn should_load(client_present: bool, already_loading: bool) -> bool {
@@ -1177,14 +1167,6 @@ mod tests {
         let f = edit_fields("a, b", "Low", "3", "a, b", "Low", "3");
         assert_eq!(f, None, "nothing changed");
         assert_eq!(edit_fields("a, b", "Low", "5", "a, b", "Low", "3"), Some(serde_json::json!({ "customfield_10016": 5.0 })));
-    }
-
-    #[test]
-    fn add_label_keeps_existing_labels() {
-        let labels = ["infra".to_string()];
-        assert_eq!(add_label_fields(&labels, "PLAT"), Some(serde_json::json!({ "labels": ["infra", "PLAT"] })));
-        assert_eq!(add_label_fields(&[], "PLAT"), Some(serde_json::json!({ "labels": ["PLAT"] })));
-        assert_eq!(add_label_fields(&["PLAT".to_string()], "PLAT"), None);
     }
 
     #[test]
