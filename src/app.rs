@@ -621,7 +621,11 @@ impl App {
             Msg::Transitions { key, result } => {
                 self.picker_loading = false;
                 match result {
-                    Ok(items) => self.picker = Some(Picker::Transition { key, items, cursor: 0 }),
+                    Ok(items) => {
+                        let status = self.store.get(&key).map(|i| i.status.name.clone()).unwrap_or_default();
+                        let cursor = transition_cursor(&items, &status);
+                        self.picker = Some(Picker::Transition { key, items, cursor });
+                    }
                     Err(e) => self.toast(e.to_string(), true),
                 }
             }
@@ -636,14 +640,22 @@ impl App {
             Msg::Users { key, result } => {
                 self.picker_loading = false;
                 match result {
-                    Ok(items) => self.picker = Some(Picker::Assign { key, items, cursor: 0, filter: String::new() }),
+                    Ok(items) => {
+                        let current = self.store.get(&key).and_then(|i| i.assignee.as_ref()).map(|u| u.account_id.clone());
+                        let cursor = assign_cursor(&items, current.as_deref());
+                        self.picker = Some(Picker::Assign { key, items, cursor, filter: String::new() });
+                    }
                     Err(e) => self.toast(e.to_string(), true),
                 }
             }
             Msg::Sprints { key, result } => {
                 self.picker_loading = false;
                 match result {
-                    Ok(items) => self.picker = Some(Picker::Sprint { key, items, cursor: 0 }),
+                    Ok(items) => {
+                        let current = self.store.get(&key).and_then(|i| i.sprint.clone());
+                        let cursor = sprint_cursor(&items, current.as_deref());
+                        self.picker = Some(Picker::Sprint { key, items, cursor });
+                    }
                     Err(e) => self.toast(e.to_string(), true),
                 }
             }
@@ -1124,6 +1136,26 @@ pub fn rank_target(rows: &[String], key: &str, delta: i32) -> Option<(String, bo
     Some((rows[j as usize].clone(), delta < 0))
 }
 
+/// The Transition picker opens on the first transition into the current status, else the first row.
+pub fn transition_cursor(items: &[Transition], status: &str) -> usize {
+    items.iter().position(|t| t.to.eq_ignore_ascii_case(status)).unwrap_or(0)
+}
+
+/// The Assign picker opens on the current assignee (row 0 is "Unassigned").
+pub fn assign_cursor(items: &[User], current: Option<&str>) -> usize {
+    current.and_then(|id| items.iter().position(|u| u.account_id == id)).map_or(0, |i| i + 1)
+}
+
+/// The Sprint picker opens on the issue's sprint (row 0 is "Backlog").
+pub fn sprint_cursor(items: &[Sprint], current: Option<&str>) -> usize {
+    current.and_then(|n| items.iter().position(|s| s.name == n)).map_or(0, |i| i + 1)
+}
+
+/// A transition row: just the name when it is named after its target status.
+pub fn transition_row(t: &Transition) -> String {
+    if t.name.eq_ignore_ascii_case(&t.to) { t.name.clone() } else { format!("{}  →  {}", t.name, t.to) }
+}
+
 /// Users whose display name contains `filter`, case-insensitively.
 pub fn filtered_users(items: &[User], filter: &str) -> Vec<User> {
     let f = filter.trim().to_lowercase();
@@ -1428,6 +1460,30 @@ mod tests {
         assert_eq!(rows, ["A", "B", "C"]);
         undo_swap(&mut rows, "A", "Z");
         assert_eq!(rows, ["A", "B", "C"], "a missing key leaves the order alone");
+    }
+
+    #[test]
+    fn pickers_open_on_the_current_value() {
+        let t = |n: &str, to: &str| Transition { id: n.into(), name: n.into(), to: to.into() };
+        let items = [t("Start", "In Progress"), t("Review", "In Review"), t("In Review", "In Review")];
+        assert_eq!(transition_cursor(&items, "in review"), 1);
+        assert_eq!(transition_cursor(&items, "Done"), 0);
+        let u = |id: &str| User { account_id: id.into(), display_name: id.into() };
+        let users = [u("a"), u("b")];
+        assert_eq!(assign_cursor(&users, Some("b")), 2);
+        assert_eq!(assign_cursor(&users, None), 0, "unassigned");
+        assert_eq!(assign_cursor(&users, Some("zed")), 0);
+        let sp = |n: &str| Sprint { id: 1, name: n.into(), state: "active".into() };
+        let sprints = [sp("Sprint 91"), sp("Sprint 92")];
+        assert_eq!(sprint_cursor(&sprints, Some("Sprint 92")), 2);
+        assert_eq!(sprint_cursor(&sprints, None), 0, "backlog");
+    }
+
+    #[test]
+    fn transition_rows_drop_a_repeated_target() {
+        let t = |n: &str, to: &str| Transition { id: "1".into(), name: n.into(), to: to.into() };
+        assert_eq!(transition_row(&t("Done", "Done")), "Done");
+        assert_eq!(transition_row(&t("Start work", "In Progress")), "Start work  →  In Progress");
     }
 
     #[test]
