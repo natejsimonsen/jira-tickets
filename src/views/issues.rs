@@ -194,8 +194,9 @@ const GAP: f32 = 8.0;
 const V_GAP: f32 = 12.0;
 /// One inner horizontal padding for combo text and the search box.
 const INNER_X: f32 = 8.0;
-/// Room a combo needs beside its text: the chevron and its padding.
-const COMBO_CHROME: f32 = 16.0 + 16.0;
+/// Room a combo needs beside its text: 8 px padding either side, the 14 px chevron slot and its 4 px
+/// spacing (egui truncates the text at that width), plus 2 px so rounding never cuts the last glyph.
+const COMBO_CHROME: f32 = 16.0 + 14.0 + 4.0 + 2.0;
 const COMBO_MIN: f32 = 120.0;
 
 /// Narrowest the epic combo gets before the team combo gives way (about "All epics" and its chevron).
