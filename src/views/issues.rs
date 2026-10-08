@@ -434,9 +434,11 @@ fn goto_box(app: &mut App, ctx: &egui::Context, p: &Palette) {
             ui.set_width(420.0);
             ui.label(RichText::new("Go to issue").font(theme::bold(13.0)));
             let r = ui.add(egui::TextEdit::singleline(text).hint_text("9001, CI-9001, or a browse link").desired_width(f32::INFINITY));
-            r.request_focus();
-            if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+            // The box keeps focus while open, so Enter counts whether or not the field just gave it up.
+            if (r.has_focus() || r.lost_focus()) && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                 go = true;
+            } else {
+                r.request_focus();
             }
         });
     });
