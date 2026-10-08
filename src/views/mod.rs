@@ -319,19 +319,23 @@ pub fn button(text: &str, p: &Palette) -> egui::Button<'static> {
         .min_size(vec2(0.0, BUTTON_H))
 }
 
-/// The check mark the active state shows.
-pub const CHECK: &str = "\u{2713} ";
 /// A filter chip's inner padding on each side.
 pub const CHIP_PAD: f32 = 12.0;
 
-/// A chip is always as wide as its active state (padding, check, label), so toggling never moves neighbours.
-pub fn chip_width(check_w: f32, label_w: f32) -> f32 {
-    (2.0 * CHIP_PAD + check_w + label_w).ceil()
+/// A chip is its label plus 12 either side in both states (the accent fill marks it on), so toggling never
+/// moves its neighbours.
+pub fn chip_width(label_w: f32) -> f32 {
+    (2.0 * CHIP_PAD + label_w).ceil()
 }
 
-/// Where the label starts in the chip: after the check when active, centred (equal padding) when not.
-pub fn chip_label_x(chip_w: f32, check_w: f32, label_w: f32, active: bool) -> f32 {
-    if active { CHIP_PAD + check_w } else { ((chip_w - label_w) / 2.0).round() }
+/// A config name in sentence case for a chip: words after the first are lowercased unless they are
+/// acronyms (two or more capitals, e.g. "PLAT", "JQL"). "Only Opened" → "Only opened", "To Do" → "To do".
+pub fn sentence_case(name: &str) -> String {
+    name.split(' ')
+        .enumerate()
+        .map(|(i, w)| if i == 0 || w.chars().filter(|c| c.is_uppercase()).count() > 1 { w.to_string() } else { w.to_lowercase() })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// An active toggle chip's fill: the accent in light; in dark one step below it, so a lit chip is not
@@ -340,12 +344,11 @@ pub fn active_chip_fill(p: &Palette) -> Color32 {
     if p.dark { Color32::from_rgb(0x66, 0x8f, 0xd6) } else { p.accent }
 }
 
-/// A filter toggle chip: 28 px tall, radius 10 like the pills, constant width, label centred when off.
+/// A filter toggle chip: 28 px tall, radius 10 like the pills, label centred with 12 px padding.
 pub fn toggle_chip(ui: &mut Ui, text: &str, active: bool, p: &Palette) -> egui::Response {
     let fg = if active { p.on_accent } else { p.text };
-    let check = ui.painter().layout_no_wrap(CHECK.to_string(), theme::body(14.0), fg);
     let label = ui.painter().layout_no_wrap(text.to_string(), theme::body(14.0), fg);
-    let w = chip_width(check.size().x, label.size().x);
+    let w = chip_width(label.size().x);
     let (rect, resp) = ui.allocate_exact_size(vec2(w, BUTTON_H), Sense::click());
     resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, active, text));
     if ui.is_rect_visible(rect) {
@@ -356,11 +359,7 @@ pub fn toggle_chip(ui: &mut Ui, text: &str, active: bool, p: &Palette) -> egui::
         };
         ui.painter().rect(rect, 10.0, fill, Stroke::new(1.0, stroke), egui::StrokeKind::Inside);
         let y = (rect.center().y - label.size().y / 2.0).round();
-        let x = rect.left() + chip_label_x(w, check.size().x, label.size().x, active);
-        if active {
-            ui.painter().galley(egui::pos2(rect.left() + CHIP_PAD, y), check, fg);
-        }
-        ui.painter().galley(egui::pos2(x, y), label, fg);
+        ui.painter().galley(egui::pos2(rect.left() + CHIP_PAD, y), label, fg);
     }
     resp
 }
@@ -476,15 +475,18 @@ mod widget_tests {
     use super::*;
 
     #[test]
-    fn chips_keep_their_width_and_centre_the_label_when_off() {
-        let (check, label) = (10.0, 40.0);
-        let w = chip_width(check, label);
-        assert_eq!(w, 74.0);
-        let off = chip_label_x(w, check, label, false);
-        assert_eq!(off, 17.0);
-        assert_eq!(off, w - off - label, "equal padding either side when off");
-        assert_eq!(chip_label_x(w, check, label, true), CHIP_PAD + check, "after the check when on");
-        assert_eq!(chip_label_x(w, check, label, true) + label + CHIP_PAD, w);
+    fn chips_pad_12_either_side() {
+        assert_eq!(chip_width(40.0), 64.0);
+        assert_eq!(chip_width(40.2), 65.0);
+    }
+
+    #[test]
+    fn chip_names_are_sentence_case() {
+        assert_eq!(sentence_case("Only Opened"), "Only opened");
+        assert_eq!(sentence_case("To Do"), "To do");
+        assert_eq!(sentence_case("Mine"), "Mine");
+        assert_eq!(sentence_case("Open PLAT Work"), "Open PLAT work", "acronyms stay");
+        assert_eq!(sentence_case("already sentence"), "already sentence");
     }
 
     #[test]
