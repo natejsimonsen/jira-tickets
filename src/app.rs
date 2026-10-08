@@ -126,6 +126,8 @@ pub enum Picker {
     Assign {
         key: String,
         items: Vec<User>,
+        /// The issue's assignee when the picker opened; pinned right after "Unassigned".
+        current: Option<User>,
         cursor: usize,
         filter: String,
     },
@@ -648,9 +650,9 @@ impl App {
                 self.picker_loading = false;
                 match result {
                     Ok(items) => {
-                        let current = self.store.get(&key).and_then(|i| i.assignee.as_ref()).map(|u| u.account_id.clone());
-                        let cursor = assign_cursor(&items, current.as_deref());
-                        self.picker = Some(Picker::Assign { key, items, cursor, filter: String::new() });
+                        let current = self.store.get(&key).and_then(|i| i.assignee.clone());
+                        let cursor = assign_cursor_after_filter(&assign_rows(&items, "", current.as_ref()).0, "", current.is_some());
+                        self.picker = Some(Picker::Assign { key, items, current, cursor, filter: String::new() });
                     }
                     Err(e) => self.toast(e.to_string(), true),
                 }
@@ -917,7 +919,7 @@ impl App {
                     let (cur, len) = match p {
                         Picker::Transition { cursor, items, .. } => (cursor, items.len()),
                         Picker::Resolution { cursor, items, .. } => (cursor, items.len()),
-                        Picker::Assign { cursor, items, filter, .. } => (cursor, filtered_users(items, filter).len() + 1),
+                        Picker::Assign { cursor, items, filter, current, .. } => (cursor, assign_rows(items, filter, current.as_ref()).0.len() + 1),
                         Picker::Sprint { cursor, items, .. } => (cursor, items.len() + 1),
                         Picker::Edit { .. } => return,
                     };
@@ -981,8 +983,8 @@ impl App {
                     let _ = tx.send(Msg::Done { key: key.clone(), what: "Transition", result: c.transition(&key, &transition_id, Some(&r.id)) });
                 });
             }
-            Picker::Assign { key, items, cursor, filter } => {
-                let shown = filtered_users(&items, &filter);
+            Picker::Assign { key, items, current, cursor, filter } => {
+                let shown = assign_rows(&items, &filter, current.as_ref()).0;
                 let account = if cursor == 0 { None } else { shown.get(cursor - 1).map(|u| u.account_id.clone()) };
                 if cursor != 0 && account.is_none() {
                     return;
@@ -1167,9 +1169,19 @@ pub fn transition_cursor(items: &[Transition], status: &str) -> usize {
     items.iter().position(|t| t.to.eq_ignore_ascii_case(status)).unwrap_or(0)
 }
 
-/// The Assign picker opens on the current assignee (row 0 is "Unassigned").
-pub fn assign_cursor(items: &[User], current: Option<&str>) -> usize {
-    current.and_then(|id| items.iter().position(|u| u.account_id == id)).map_or(0, |i| i + 1)
+/// Users the Assign picker lists after "Unassigned", at most this many, so the dialog never scrolls.
+pub const ASSIGN_USERS: usize = 9;
+
+/// The Assign picker's user rows (row 0, "Unassigned", is not included): the current assignee pinned
+/// first whatever the filter and whether or not the fetched list holds them, then the filter's other
+/// matches, capped at ASSIGN_USERS. The bool says matches were cut (the dialog says "Type to see more").
+pub fn assign_rows(items: &[User], filter: &str, current: Option<&User>) -> (Vec<User>, bool) {
+    let others: Vec<User> = filtered_users(items, filter).into_iter().filter(|u| current.is_none_or(|c| c.account_id != u.account_id)).collect();
+    let mut rows: Vec<User> = current.cloned().into_iter().collect();
+    let room = ASSIGN_USERS - rows.len();
+    let cut = others.len() > room;
+    rows.extend(others.into_iter().take(room));
+    (rows, cut)
 }
 
 /// The Sprint picker opens on the issue's sprint (row 0 is "Backlog").
@@ -1188,11 +1200,15 @@ pub fn filtered_users(items: &[User], filter: &str) -> Vec<User> {
     items.iter().filter(|u| f.is_empty() || u.display_name.to_lowercase().contains(&f)).cloned().collect()
 }
 
-/// The Assign cursor after its filter text changes: the first match (row 1,
-/// after "Unassigned") when the filter is non-empty and matches someone, so
-/// type-then-Enter assigns rather than unassigns; otherwise "Unassigned".
-pub fn assign_cursor_after_filter(matches: usize, filter_empty: bool) -> usize {
-    if filter_empty || matches == 0 { 0 } else { 1 }
+/// The Assign cursor for `rows` (from `assign_rows`; screen row = index + 1): with no filter, the pinned
+/// current assignee (else "Unassigned"); with one, the first row that matches it, so type-then-Enter
+/// assigns rather than unassigns (or re-picks the pinned assignee who does not match); none: "Unassigned".
+pub fn assign_cursor_after_filter(rows: &[User], filter: &str, pinned: bool) -> usize {
+    let f = filter.trim().to_lowercase();
+    if f.is_empty() {
+        return usize::from(pinned && !rows.is_empty());
+    }
+    rows.iter().position(|u| u.display_name.to_lowercase().contains(&f)).map_or(0, |i| i + 1)
 }
 
 /// Moves a picker cursor by `d`, wrapping at both ends.
@@ -1446,9 +1462,40 @@ mod tests {
 
     #[test]
     fn assign_filter_moves_cursor_to_first_match() {
-        assert_eq!(assign_cursor_after_filter(2, false), 1, "typed and matched");
-        assert_eq!(assign_cursor_after_filter(0, false), 0, "typed, no match");
-        assert_eq!(assign_cursor_after_filter(5, true), 0, "cleared");
+        let u = |n: &str| User { account_id: n.to_lowercase(), display_name: n.into() };
+        let shawn = u("Shawn");
+        let items: Vec<User> = ["Ann", "Grace", "Robin"].map(u).to_vec();
+        let (rows, _) = assign_rows(&items, "grace", Some(&shawn));
+        assert_eq!(assign_cursor_after_filter(&rows, "grace", true), 2, "past the pinned non-match to Grace");
+        let (rows, _) = assign_rows(&items, "sha", Some(&shawn));
+        assert_eq!(assign_cursor_after_filter(&rows, "sha", true), 1, "the pinned assignee matches");
+        let (rows, _) = assign_rows(&items, "zed", None);
+        assert_eq!(assign_cursor_after_filter(&rows, "zed", false), 0, "typed, no match");
+        let (rows, _) = assign_rows(&items, "", Some(&shawn));
+        assert_eq!(assign_cursor_after_filter(&rows, "", true), 1, "opens on the pinned assignee");
+        let (rows, _) = assign_rows(&items, "", None);
+        assert_eq!(assign_cursor_after_filter(&rows, "", false), 0, "unassigned issue opens on Unassigned");
+    }
+
+    #[test]
+    fn assign_pins_the_current_assignee() {
+        let u = |n: &str| User { account_id: n.to_lowercase(), display_name: n.into() };
+        let items: Vec<User> = (0..20).map(|i| u(&format!("User {i:02}"))).chain([u("Shawn")]).collect();
+        let shawn = u("Shawn");
+        // Capped list: Shawn is past the cap but pinned first, and the cut is reported.
+        let (rows, cut) = assign_rows(&items, "", Some(&shawn));
+        assert_eq!(rows.len(), ASSIGN_USERS);
+        assert_eq!(rows[0].display_name, "Shawn");
+        assert!(cut);
+        assert_eq!(rows.iter().filter(|r| r.display_name == "Shawn").count(), 1, "not listed twice");
+        // Filtered to others: still pinned.
+        let (rows, cut) = assign_rows(&items, "user 0", Some(&shawn));
+        assert_eq!(rows.iter().map(|r| r.display_name.as_str()).collect::<Vec<_>>()[..2], ["Shawn", "User 00"]);
+        assert!(cut, "User 00..09: 10 matches, room for 8");
+        // Short list: nothing cut.
+        let (rows, cut) = assign_rows(&items[..3], "", None);
+        assert_eq!(rows.len(), 3);
+        assert!(!cut);
     }
 
     #[test]
@@ -1494,11 +1541,6 @@ mod tests {
         let items = [t("Start", "In Progress"), t("Review", "In Review"), t("In Review", "In Review")];
         assert_eq!(transition_cursor(&items, "in review"), 1);
         assert_eq!(transition_cursor(&items, "Done"), 0);
-        let u = |id: &str| User { account_id: id.into(), display_name: id.into() };
-        let users = [u("a"), u("b")];
-        assert_eq!(assign_cursor(&users, Some("b")), 2);
-        assert_eq!(assign_cursor(&users, None), 0, "unassigned");
-        assert_eq!(assign_cursor(&users, Some("zed")), 0);
         let sp = |n: &str| Sprint { id: 1, name: n.into(), state: "active".into() };
         let sprints = [sp("Sprint 91"), sp("Sprint 92")];
         assert_eq!(sprint_cursor(&sprints, Some("Sprint 92")), 2);
