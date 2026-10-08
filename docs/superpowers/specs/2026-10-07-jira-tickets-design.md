@@ -187,7 +187,7 @@ Three queries populate it on launch and `⌘R`:
 | List | JQL | Fields |
 |---|---|---|
 | `team_open` | `project = {project} AND (labels in ({team labels}) OR assignee in ({all teams' members})) AND statusCategory != Done ORDER BY Rank ASC` | summary, status, assignee, reporter, parent, labels, priority, issuetype, created, updated, duedate, rank (customfield_10019), statuscategorychangedate, sprint, story points |
-| `epics` | `project = {project} AND issuetype = Epic AND (labels in ({lane labels}) OR key in ({parents of team_open}))` plus the optional allowlist | summary, status, assignee, labels, priority, duedate, created, updated, description, comments (last 5), configured roadmap custom fields |
+| `epics` | `project = {project} AND issuetype = Epic AND (labels in ({lane labels}) OR labels = {initiative_label} OR key in ({parents of team_open}))` plus the optional allowlist | summary, status, assignee, labels, priority, duedate, created, updated, description, comments (last 5), configured roadmap custom fields |
 | `team_in_progress` | `project in ({projects}) AND assignee in ({team}) AND statusCategory = "In Progress" ORDER BY updated DESC` | same as `team_open` |
 
 Views are projections:

@@ -128,7 +128,7 @@ mod tests {
 
 **Files:**
 - Create: `src/roadmap.rs`
-- Modify: `src/main.rs` (`mod roadmap;`), `src/config.rs` (`Roadmap` gains `pub initiative_label: String` default `"roadmap"`; `Roadmap::default()` and `EXAMPLE` gain `"Work in Progress" = "now"` and `initiative_label = "roadmap"`; update `minimal_config_gets_defaults`)
+- Modify: `src/store.rs` (`jql_epics` adds `OR labels = "{initiative_label}"` inside the parenthesised group so labelled epics load even when no team ticket points at them; update its exact-string tests), `src/main.rs` (`mod roadmap;`), `src/config.rs` (`Roadmap` gains `pub initiative_label: String` default `"roadmap"`; `Roadmap::default()` and `EXAMPLE` gain `"Work in Progress" = "now"` and `initiative_label = "roadmap"`; update `minimal_config_gets_defaults`)
 
 **Interfaces:**
 - `#[derive(Clone, Copy, PartialEq, Eq, Debug, PartialOrd, Ord)] pub enum Horizon { Now, Next, Later, Done }`
@@ -285,7 +285,11 @@ mod tests {
 - [ ] **Step 3:** If `op` is unlocked, take offscreen screenshots with `JIRA_TICKETS_VIEW=team` and `=roadmap` and look at them (`Read` the PNGs) for contrast and layout; fix obvious issues. Otherwise record "unverified visually".
 - [ ] **Step 4:** Full check set; commit `docs: describe Team and Roadmap screens and finish plan 3`.
 
+## Live state (2026-10-08)
+
+Eleven CI epics were labelled from the Notion "Sprint 2026 Roadmap" database: `roadmap` on CI-3075, CI-1860, CI-1989, CI-54, CI-3104, CI-1569, CI-3718, CI-9161, CI-3249, CI-304, CI-3103; `start:`/`target:` quarters on all but CI-3249; `P0` on CI-1860, CI-54, CI-3104, CI-1569. CI-9244 (RBAC redesign story) was re-parented under CI-1569. So the label-based selection path is the live one from day one; the "(ongoing)" fallback only matters in a workspace without labels.
+
 ## Known gaps to state in the README
 
-- Epics in the live project currently carry none of the roadmap labels (`roadmap`, `target:YYYY-Qn`, `start:YYYY-Qn`, `health:`, `horizon:`, `metric:`), have no priorities or roadmap custom fields, and only three have comments. Until those labels are added, every non-"(ongoing)" epic counts as an initiative and sits in the Unscheduled tray with "missing" flags. That is by design (spec §9): the red flags are the to-do list, and the labels are the lightweight way to fill them in from Jira.
+- Other than those labels, epics in the live project currently carry none of the roadmap labels (`roadmap`, `target:YYYY-Qn`, `start:YYYY-Qn`, `health:`, `horizon:`, `metric:`), have no priorities or roadmap custom fields, and only three have comments. Until those labels are added, every non-"(ongoing)" epic counts as an initiative and sits in the Unscheduled tray with "missing" flags. That is by design (spec §9): the red flags are the to-do list, and the labels are the lightweight way to fill them in from Jira.
 - The TOOLS board includes unlabelled tickets by assignee; team columns only cover members listed in `[team].members`.
