@@ -208,11 +208,13 @@ fn row_list(ui: &mut egui::Ui, p: &Palette, names: &[Row], confirm: &mut bool, c
                 .show(ui, |ui| {
                     ui.set_width(ui.available_width());
                     ui.set_min_height(ROW_H - 12.0);
-                    let color = if n.muted { p.muted } else { p.text };
+                    // Muted text on the cursor fill turns `text` where muted would fall below 4.5:1.
+                    let muted = theme::muted_on(if i == *cursor { p.selected_row } else { crate::views::dialog_fill(p) }, p);
+                    let color = if n.muted { muted } else { p.text };
                     let mut job = egui::text::LayoutJob::default();
                     job.append(&n.text, 0.0, egui::TextFormat { font_id: theme::body(14.0), color, ..Default::default() });
                     if n.current {
-                        job.append("current", 8.0, egui::TextFormat { font_id: theme::body(12.0), color: p.muted, ..Default::default() });
+                        job.append("current", 8.0, egui::TextFormat { font_id: theme::body(12.0), color: muted, ..Default::default() });
                     }
                     ui.add(egui::Label::new(job).truncate().selectable(false));
                 })

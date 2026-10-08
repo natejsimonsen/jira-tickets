@@ -72,18 +72,18 @@ pub fn show(app: &mut App, ui: &mut Ui) {
                 ui.set_width(main_w);
                 section_heading(ui, p, "Description");
                 match &issue.description {
-                    Some(d) => adf_view::show_value(ui, d, p),
+                    Some(d) => adf_view::show_value(ui, d, p, p.surface),
                     None if loading => {
                         crate::views::icons::spinner(ui, crate::views::icons::INLINE_SPINNER, p);
                     }
-                    None => adf_view::show_value(ui, &serde_json::Value::Null, p),
+                    None => adf_view::show_value(ui, &serde_json::Value::Null, p, p.surface),
                 }
                 ui.add_space(SECTION_GAP);
                 section_heading(ui, p, &format!("Comments ({})", issue.comments.len()));
                 // The comment cards and the composer sit 16 below their label (8 already given).
                 ui.add_space(LABEL_TO_BOX - 8.0 - ui.spacing().item_spacing.y);
                 for c in &issue.comments {
-                    // surface_2 with a 1 px border, the same step as code blocks, in both themes.
+                    // surface_2 with a 1 px border in both themes; code inside steps off it (`chip_fill_on`).
                     Frame::new().fill(p.surface_2).stroke(Stroke::new(1.0, p.border)).corner_radius(6).inner_margin(Margin::same(12)).show(ui, |ui| {
                         ui.set_width(ui.available_width());
                         ui.horizontal(|ui| {
@@ -91,7 +91,7 @@ pub fn show(app: &mut App, ui: &mut Ui) {
                             ui.label(RichText::new(short_date(&c.created)).color(p.muted).size(12.0));
                         });
                         ui.add_space(4.0);
-                        adf_view::show_value(ui, &c.body, p);
+                        adf_view::show_value(ui, &c.body, p, p.surface_2);
                     });
                     ui.add_space(COMMENT_GAP - ui.spacing().item_spacing.y);
                 }

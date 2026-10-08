@@ -278,9 +278,9 @@ pub fn hint_bar_height(app: &App) -> Option<f32> {
     (app.client.is_some() && app.screen == Screen::Issues).then_some(issues::HINT_BAR_H)
 }
 
-/// The toast's edge: `border` in light; in dark a step lighter than the fill so it separates from the page.
+/// The toast's edge: `border` in light; in dark a warm step lighter than the fill so it separates from the page.
 pub fn toast_stroke(p: &Palette) -> Color32 {
-    if p.dark { Color32::from_rgb(0x5a, 0x5f, 0x66) } else { p.border }
+    if p.dark { Color32::from_rgb(0x56, 0x55, 0x4f) } else { p.border }
 }
 
 /// How far the toast's bottom sits above the window bottom: 16 px above the hint bar when one shows, else 24 px.
@@ -288,13 +288,13 @@ pub fn toast_offset(hint_bar: Option<f32>) -> f32 {
     hint_bar.map_or(24.0, |h| h + 16.0)
 }
 
-/// The toast's dot: green for done, the accent for a notice (read-only refusals), red only for failures.
-/// The toast is a dark fill in both themes, so the dot takes the dark palette's tokens.
-pub fn toast_dot(kind: crate::app::ToastKind) -> Color32 {
+/// The toast's dot marks its type only: green for done, red for failures, none for a notice (read-only
+/// refusals, "No changes"). The toast is a dark fill in both themes, so the dot takes the dark palette's tokens.
+pub fn toast_dot(kind: crate::app::ToastKind) -> Option<Color32> {
     match kind {
-        crate::app::ToastKind::Success => theme::DARK.on_track,
-        crate::app::ToastKind::Info => theme::DARK.accent,
-        crate::app::ToastKind::Error => theme::DARK.off_track,
+        crate::app::ToastKind::Success => Some(theme::DARK.on_track),
+        crate::app::ToastKind::Info => None,
+        crate::app::ToastKind::Error => Some(theme::DARK.off_track),
     }
 }
 
@@ -318,10 +318,11 @@ pub fn toast(app: &mut App, ctx: &egui::Context) {
         Frame::new().fill(p.tooltip).stroke(Stroke::new(1.0, toast_stroke(p))).shadow(shadow).corner_radius(6).inner_margin(Margin::symmetric(16, 8)).show(
             ui,
             |ui| {
-                let color = toast_dot(t.kind);
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 8.0;
-                    health_dot(ui, color);
+                    if let Some(color) = toast_dot(t.kind) {
+                        health_dot(ui, color);
+                    }
                     ui.add(egui::Label::new(RichText::new(&t.text).color(p.tooltip_text).size(14.0)).wrap_mode(egui::TextWrapMode::Extend));
                 });
             },
@@ -336,14 +337,23 @@ pub const BUTTON_H: f32 = 28.0;
 
 /// The page dimming behind a modal: light needs less to read as "behind".
 pub fn backdrop_alpha(p: &Palette) -> u8 {
-    if p.dark { 140 } else { 100 }
+    if p.dark { 110 } else { 100 }
 }
 
 /// A modal dialog's 1 px edge, visible against both the dialog and the dimmed page in each theme: a step
 /// darker than `border` in light (`border` sits between white and the dimmed page and vanishes), a lifted
 /// #4a4a46 in dark.
 pub fn dialog_stroke(p: &Palette) -> Stroke {
-    Stroke::new(1.0, if p.dark { Color32::from_rgb(0x4a, 0x4a, 0x46) } else { Color32::from_rgb(0xb4, 0xb3, 0xac) })
+    Stroke::new(1.0, if p.dark { DARK_EDGE } else { Color32::from_rgb(0xb4, 0xb3, 0xac) })
+}
+
+/// The lifted dark edge (dialogs, fields in dialogs, outlines on a selected row): one step past `border`.
+pub const DARK_EDGE: Color32 = Color32::from_rgb(0x4a, 0x4a, 0x46);
+
+/// Outlines and dividers on a selected row: the dark edge in dark (`border` equals the selected fill there),
+/// `muted` at 40% in light, so the outline never vanishes into the fill.
+pub fn selected_edge(p: &Palette) -> Color32 {
+    if p.dark { DARK_EDGE } else { p.muted.gamma_multiply(0.4) }
 }
 
 /// Placeholder text for a field, inset 3 px past the caret so the caret never sits on its first glyph.
@@ -422,10 +432,9 @@ pub fn sentence_case(name: &str) -> String {
         .join(" ")
 }
 
-/// An active toggle chip's fill: the accent in light; in dark one step below it, so a lit chip is not
-/// the brightest thing on screen (on_accent still reads on it).
+/// An active toggle chip's fill: the one accent, in both themes (on_accent reads on it).
 pub fn active_chip_fill(p: &Palette) -> Color32 {
-    if p.dark { Color32::from_rgb(0x66, 0x8f, 0xd6) } else { p.accent }
+    p.accent
 }
 
 /// A filter toggle chip: 28 px tall, radius 10 like the pills, label centred with 12 px padding.
@@ -494,6 +503,11 @@ pub fn pill(ui: &mut Ui, text: &str, bg: Color32, fg: Color32) -> egui::Response
 /// only the status (and epic) pills carry a filled tint.
 pub fn outline_pill(ui: &mut Ui, text: &str, p: &Palette, margin: egui::Vec2) -> egui::Response {
     pill_sized(ui, text, Color32::TRANSPARENT, p.muted, Stroke::new(1.0, p.border), margin)
+}
+
+/// An outline pill on a selected row: `selected_edge` outline and `text`, so neither sinks into the fill.
+pub fn outline_pill_selected(ui: &mut Ui, text: &str, p: &Palette, margin: egui::Vec2) -> egui::Response {
+    pill_sized(ui, text, Color32::TRANSPARENT, p.text, Stroke::new(1.0, selected_edge(p)), margin)
 }
 
 /// The edge every list-row pill gets: its own text colour at 35%, so a wash stays visible on any row fill.
@@ -637,8 +651,8 @@ mod widget_tests {
         for p in [&theme::LIGHT, &theme::DARK] {
             assert_eq!(primary_colors(p), (p.accent, p.on_accent));
             assert!(theme::contrast(p.on_accent, active_chip_fill(p)) >= 4.5, "dark={}", p.dark);
+            assert_eq!(active_chip_fill(p), p.accent, "one accent");
         }
-        assert_ne!(active_chip_fill(&theme::DARK), theme::DARK.accent, "dark chips sit a step below the accent");
     }
 
     #[test]
@@ -673,11 +687,27 @@ mod widget_tests {
     }
 
     #[test]
-    fn toast_dot_comes_from_the_tokens_and_is_red_only_for_failures() {
+    fn toast_dot_marks_the_type_only() {
         use crate::app::ToastKind;
-        assert_eq!(toast_dot(ToastKind::Error), theme::DARK.off_track);
-        assert_eq!(toast_dot(ToastKind::Success), theme::DARK.on_track);
-        assert_eq!(toast_dot(ToastKind::Info), theme::DARK.accent);
+        assert_eq!(toast_dot(ToastKind::Error), Some(theme::DARK.off_track));
+        assert_eq!(toast_dot(ToastKind::Success), Some(theme::DARK.on_track));
+        assert_eq!(toast_dot(ToastKind::Info), None, "no decorative dot on a notice");
+        for p in [&theme::LIGHT, &theme::DARK] {
+            for k in [ToastKind::Error, ToastKind::Success] {
+                let c = toast_dot(k).unwrap();
+                assert!(theme::contrast(c, p.tooltip) >= 3.0, "dark={} {k:?}: {:.2}", p.dark, theme::contrast(c, p.tooltip));
+            }
+        }
+        let warm = theme::DARK.tooltip;
+        assert!(warm.r() >= warm.b(), "the dark toast fill is a warm neutral");
+    }
+
+    #[test]
+    fn selected_row_edges_show_on_the_selected_fill() {
+        for p in [&theme::LIGHT, &theme::DARK] {
+            let edge = theme::over(selected_edge(p), p.selected_row);
+            assert!(theme::contrast(edge, p.selected_row) >= 1.2, "dark={}: {:.2}", p.dark, theme::contrast(edge, p.selected_row));
+        }
     }
 
     #[test]

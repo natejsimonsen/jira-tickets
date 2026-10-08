@@ -5,13 +5,14 @@ use crate::theme::{self, Palette};
 use egui::text::LayoutJob;
 use egui::{Frame, Margin, RichText, Stroke, TextFormat, Ui};
 
-pub fn show_value(ui: &mut Ui, v: &serde_json::Value, p: &Palette) {
+/// `container` is the fill the document sits on; code chips and blocks take a step off it (`chip_fill_on`).
+pub fn show_value(ui: &mut Ui, v: &serde_json::Value, p: &Palette, container: egui::Color32) {
     let doc = adf::parse(v);
     if doc.blocks.is_empty() {
         ui.label(RichText::new("No description").italics().color(p.muted));
         return;
     }
-    show(ui, &doc, p);
+    show(ui, &doc, p, theme::chip_fill_on(container, p));
 }
 
 /// Space after a paragraph (or any block).
@@ -31,11 +32,11 @@ pub fn heading_space_above(first: bool) -> f32 {
     if first { 0.0 } else { 24.0 - BLOCK_GAP }
 }
 
-pub fn show(ui: &mut Ui, doc: &adf::Doc, p: &Palette) {
-    ui.scope(|ui| show_blocks(ui, doc, p));
+pub fn show(ui: &mut Ui, doc: &adf::Doc, p: &Palette, chip: egui::Color32) {
+    ui.scope(|ui| show_blocks(ui, doc, p, chip));
 }
 
-fn show_blocks(ui: &mut Ui, doc: &adf::Doc, p: &Palette) {
+fn show_blocks(ui: &mut Ui, doc: &adf::Doc, p: &Palette, chip: egui::Color32) {
     // Every gap below is explicit; no implicit item spacing on top of it.
     ui.spacing_mut().item_spacing.y = 0.0;
     let n = doc.blocks.len();
@@ -43,16 +44,16 @@ fn show_blocks(ui: &mut Ui, doc: &adf::Doc, p: &Palette) {
         if matches!(b, Block::Heading { .. }) {
             ui.add_space(heading_space_above(i == 0));
         }
-        block(ui, b, p, 14.0);
+        block(ui, b, p, 14.0, chip);
         if i + 1 < n {
             ui.add_space(if matches!(b, Block::Heading { .. }) { 8.0 } else { BLOCK_GAP });
         }
     }
 }
 
-fn block(ui: &mut Ui, b: &Block, p: &Palette, size: f32) {
+fn block(ui: &mut Ui, b: &Block, p: &Palette, size: f32, chip: egui::Color32) {
     match b {
-        Block::Paragraph(s) => spans(ui, s, p, size, false),
+        Block::Paragraph(s) => spans(ui, s, p, size, false, chip),
         Block::Heading { level, spans: s } => {
             let sz = match level {
                 1 => 22.0,
@@ -60,7 +61,7 @@ fn block(ui: &mut Ui, b: &Block, p: &Palette, size: f32) {
                 3 => 16.0,
                 _ => 14.5,
             };
-            spans(ui, s, p, sz, true);
+            spans(ui, s, p, sz, true, chip);
         }
         Block::List { ordered, items } => {
             for (i, item) in items.iter().enumerate() {
@@ -84,14 +85,14 @@ fn block(ui: &mut Ui, b: &Block, p: &Palette, size: f32) {
                             if j > 0 {
                                 ui.add_space(LIST_ITEM_GAP);
                             }
-                            block(ui, ib, p, size);
+                            block(ui, ib, p, size, chip);
                         }
                     });
                 });
             }
         }
         Block::Code { text, .. } => {
-            Frame::new().fill(p.surface_2).corner_radius(6).inner_margin(Margin::same(12)).show(ui, |ui| {
+            Frame::new().fill(chip).corner_radius(6).inner_margin(Margin::same(12)).show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 ui.label(RichText::new(text).font(theme::mono(12.5)).color(p.text));
             });
@@ -102,7 +103,7 @@ fn block(ui: &mut Ui, b: &Block, p: &Palette, size: f32) {
                 let top = rect.top();
                 let inner = ui.vertical(|ui| {
                     for ib in bs {
-                        block(ui, ib, p, size);
+                        block(ui, ib, p, size, chip);
                     }
                 });
                 let bottom = inner.response.rect.bottom();
@@ -119,7 +120,7 @@ fn block(ui: &mut Ui, b: &Block, p: &Palette, size: f32) {
             Frame::new().fill(bg).stroke(Stroke::new(1.0, border)).corner_radius(6).inner_margin(Margin::symmetric(12, 8)).show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 for ib in blocks {
-                    block(ui, ib, p, size);
+                    block(ui, ib, p, size, chip);
                 }
             });
         }
@@ -127,7 +128,7 @@ fn block(ui: &mut Ui, b: &Block, p: &Palette, size: f32) {
             egui::Grid::new(ui.next_auto_id()).striped(true).spacing([12.0, 4.0]).show(ui, |ui| {
                 for (ri, row) in rows.iter().enumerate() {
                     for cell in row {
-                        spans(ui, cell, p, 13.0, ri == 0);
+                        spans(ui, cell, p, 13.0, ri == 0, chip);
                     }
                     ui.end_row();
                 }
@@ -140,12 +141,12 @@ fn block(ui: &mut Ui, b: &Block, p: &Palette, size: f32) {
 }
 
 /// The text format one span is painted with. Links are accent, underlined only while `hovered`.
-/// Inline code is mono at 0.9× the surrounding size on a `surface_2` wash.
-fn span_format(sp: &Span, p: &Palette, size: f32, heading: bool, hovered: bool) -> TextFormat {
+/// Inline code is mono at 0.9× the surrounding size on the `chip` fill.
+fn span_format(sp: &Span, p: &Palette, size: f32, heading: bool, hovered: bool, chip: egui::Color32) -> TextFormat {
     let mut fmt = TextFormat { font_id: if sp.bold || heading { theme::bold(size) } else { theme::body(size) }, color: p.text, ..Default::default() };
     if sp.code {
         fmt.font_id = theme::mono((size * CODE_SCALE * 2.0).round() / 2.0);
-        fmt.background = p.surface_2;
+        fmt.background = chip;
         // Centre the smaller mono run on the surrounding text's line.
         fmt.valign = egui::Align::Center;
     }
@@ -164,7 +165,7 @@ fn span_format(sp: &Span, p: &Palette, size: f32, heading: bool, hovered: bool) 
     fmt
 }
 
-fn spans(ui: &mut Ui, s: &[Span], p: &Palette, size: f32, heading: bool) {
+fn spans(ui: &mut Ui, s: &[Span], p: &Palette, size: f32, heading: bool, chip: egui::Color32) {
     let s = adf::tidy_code_spans(&adf::linkify(s));
     let has_link = s.iter().any(|sp| sp.link.is_some());
     // The label's id is the next auto id; last frame's hover decides the underline.
@@ -174,7 +175,7 @@ fn spans(ui: &mut Ui, s: &[Span], p: &Palette, size: f32, heading: bool) {
         // 2 px either side of inline code: before it, and before whatever follows it.
         let after_code = i > 0 && s[i - 1].code;
         let pad = if sp.code || after_code { CODE_PAD_X } else { 0.0 };
-        job.append(&sp.text, pad, span_format(sp, p, size, heading, hovered));
+        job.append(&sp.text, pad, span_format(sp, p, size, heading, hovered, chip));
     }
     let sense = if has_link { egui::Sense::click() } else { egui::Sense::hover() };
     let r = ui.add(egui::Label::new(job).wrap().sense(sense));
@@ -228,28 +229,28 @@ mod tests {
     #[test]
     fn span_format_maps_marks() {
         let p = palette();
-        let plain = span_format(&span("a"), &p, 14.0, false, false);
+        let plain = span_format(&span("a"), &p, 14.0, false, false, p.surface_2);
         assert_eq!(plain.font_id, theme::body(14.0));
         assert_eq!(plain.color, p.text);
         assert_eq!(plain.underline, Stroke::NONE);
 
-        let bold = span_format(&Span { bold: true, ..span("b") }, &p, 14.0, false, false);
+        let bold = span_format(&Span { bold: true, ..span("b") }, &p, 14.0, false, false, p.surface_2);
         assert_eq!(bold.font_id, theme::bold(14.0));
-        assert_eq!(span_format(&span("h"), &p, 18.0, true, false).font_id, theme::bold(18.0));
+        assert_eq!(span_format(&span("h"), &p, 18.0, true, false, p.surface_2).font_id, theme::bold(18.0));
 
-        let code = span_format(&Span { code: true, ..span("c") }, &p, 14.0, false, false);
+        let code = span_format(&Span { code: true, ..span("c") }, &p, 14.0, false, false, p.surface_2);
         assert_eq!(code.font_id, theme::mono(12.5), "0.9 × 14, to the half point");
         assert_eq!(code.background, p.surface_2);
-        assert_eq!(span_format(&Span { code: true, ..span("c") }, &p, 18.0, true, false).font_id, theme::mono(16.0), "scales in headings");
+        assert_eq!(span_format(&Span { code: true, ..span("c") }, &p, 18.0, true, false, p.surface_2).font_id, theme::mono(16.0), "scales in headings");
 
-        let styled = span_format(&Span { italic: true, strike: true, ..span("s") }, &p, 14.0, false, false);
+        let styled = span_format(&Span { italic: true, strike: true, ..span("s") }, &p, 14.0, false, false, p.surface_2);
         assert!(styled.italics);
         assert_eq!(styled.strikethrough, Stroke::new(1.0, p.muted));
 
         let link = Span { link: Some("https://x".into()), ..span("l") };
-        assert_eq!(span_format(&link, &p, 14.0, false, false).color, p.accent);
-        assert_eq!(span_format(&link, &p, 14.0, false, false).underline, Stroke::NONE, "underline on hover only");
-        assert_eq!(span_format(&link, &p, 14.0, false, true).underline, Stroke::new(1.0, p.accent));
+        assert_eq!(span_format(&link, &p, 14.0, false, false, p.surface_2).color, p.accent);
+        assert_eq!(span_format(&link, &p, 14.0, false, false, p.surface_2).underline, Stroke::NONE, "underline on hover only");
+        assert_eq!(span_format(&link, &p, 14.0, false, true, p.surface_2).underline, Stroke::new(1.0, p.accent));
     }
 
     #[test]

@@ -5,7 +5,7 @@ use crate::filter;
 use crate::jira::Issue;
 use crate::store::ListId;
 use crate::theme::{self, Palette};
-use crate::views::{outline_pill, pill, pill_outlined, small_link, toggle_chip};
+use crate::views::{outline_pill, outline_pill_selected, pill, pill_outlined, small_link, toggle_chip};
 use egui::{CornerRadius, Frame, Margin, Rect, RichText, Sense, Stroke, Ui, vec2};
 use std::collections::BTreeSet;
 
@@ -353,7 +353,8 @@ fn filters(app: &mut App, ui: &mut Ui, p: &Palette) {
                 // The roadmap suffix is muted: it qualifies the epic, it is not part of its name.
                 let mut job = egui::text::LayoutJob::default();
                 job.append(&entry(k, s), 0.0, egui::TextFormat { font_id: theme::body(14.0), color: p.text, ..Default::default() });
-                job.append(suffix(k), 0.0, egui::TextFormat { font_id: theme::body(14.0), color: p.muted, ..Default::default() });
+                let on = if app.filter.epic.as_deref() == Some(k) { p.selected_row } else { p.surface };
+                job.append(suffix(k), 0.0, egui::TextFormat { font_id: theme::body(14.0), color: theme::muted_on(on, p), ..Default::default() });
                 job.wrap = egui::text::TextWrapping::truncate_at_width(epic_popup - POPUP_FRAME - 16.0);
                 let full = format!("{}{}", entry(k, s), suffix(k));
                 if ui.selectable_label(app.filter.epic.as_deref() == Some(k), job).on_hover_text(full).clicked() {
@@ -506,6 +507,8 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
     ui.spacing_mut().scroll.fade = egui::style::ScrollFadeStyle { strength: 0.5, size: ROW_PITCH };
     egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
         ui.spacing_mut().item_spacing.y = ROW_GAP;
+        // The selected row's dividers, drawn over its neighbours once every row is down.
+        let mut sel_dividers: Option<(Rect, bool, bool, bool)> = None;
         for (idx, i) in rows.iter().enumerate() {
             let is_sel = selected.as_deref() == Some(&i.key);
             let epic = i.parent_key.as_deref().map(|k| theme::epic_tint_in(k, &slots, p, epic_colors));
@@ -520,7 +523,9 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
                     ui.set_width(ui.available_width());
                     ui.spacing_mut().item_spacing.y = ROW_LINE_GAP;
                     ui.horizontal(|ui| {
-                        ui.add(egui::Label::new(RichText::new(&i.key).font(theme::mono(12.5)).color(p.muted)).selectable(false));
+                        // On the selected row the key is `text`: muted falls under 4.5:1 on the dark selection.
+                        let key_color = if is_sel { p.text } else { p.muted };
+                        ui.add(egui::Label::new(RichText::new(&i.key).font(theme::mono(12.5)).color(key_color)).selectable(false));
                         let painter = ui.painter().clone();
                         let title = crate::views::truncate_text(&i.summary, ui.available_width(), |t| {
                             painter.layout_no_wrap(t.to_string(), theme::bold(13.5), p.text).size().x
@@ -569,6 +574,7 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
                             let text = crate::views::truncate_text(text, w - 2.0 * crate::views::ROW_PILL_MARGIN.x, measure);
                             match look {
                                 PillLook::Tint(bg, fg) => pill_outlined(ui, &text, *bg, *fg),
+                                PillLook::Outline if is_sel => outline_pill_selected(ui, &text, p, crate::views::ROW_PILL_MARGIN),
                                 PillLook::Outline => outline_pill(ui, &text, p, crate::views::ROW_PILL_MARGIN),
                             };
                         }
@@ -578,6 +584,9 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
             let r = ui.interact(rect, row_id(&i.key), Sense::click());
             let fill = row_fill(is_sel, r.hovered(), p);
             ui.painter().set(bg, egui::epaint::RectShape::filled(rect, corners, fill));
+            if is_sel {
+                sel_dividers = Some((rect, idx > 0, idx + 1 < rows.len(), epic.is_some()));
+            }
             if let Some(t) = epic {
                 let stripe = CornerRadius { nw: corners.nw, sw: corners.sw, ne: 0, se: 0 };
                 ui.painter().rect_filled(Rect::from_min_size(rect.min, vec2(3.0, rect.height())), stripe, t.stripe);
@@ -592,6 +601,18 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
             }
             if scroll_cursor && is_sel {
                 r.scroll_to_me(None);
+            }
+        }
+        // `border` equals the dark selected fill, so the dividers it shares take `selected_edge` (the list's
+        // outer edges keep `border`, which shows against the page).
+        if let Some((rect, top, bottom, striped)) = sel_dividers {
+            let x = (rect.left() + if striped { 3.0 } else { 1.0 })..=(rect.right() - 1.0);
+            let stroke = Stroke::new(1.0, crate::views::selected_edge(p));
+            if top {
+                ui.painter().hline(x.clone(), rect.top() + 0.5, stroke);
+            }
+            if bottom {
+                ui.painter().hline(x, rect.bottom() - 0.5, stroke);
             }
         }
         // Room under the last row, so a toast (anchored above the hint bar) never covers it.

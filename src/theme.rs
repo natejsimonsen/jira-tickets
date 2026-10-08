@@ -85,10 +85,10 @@ pub const DARK: Palette = Palette {
     no_health: hex(0x7d7b76),
     done: hex(0xa3a29d),
     today: hex(0xec6d66),
-    selected_row: hex(0x393936),
+    selected_row: hex(0x3d3d3a),
     hover_row: hex(0x343432),
     danger_subtle: hex(0x3a2422),
-    tooltip: hex(0x50565f),
+    tooltip: hex(0x403f3b),
     tooltip_text: hex(0xffffff),
 };
 
@@ -118,11 +118,12 @@ const GREEN: u32 = 0x2e8b57;
 /// Waiting statuses ("Waiting for External Party"): amber, apart from the In Progress blue.
 const AMBER: u32 = 0xb07a0c;
 
-/// Distinct hues for epics: ten hues 36° apart (21°, 57°, … 345°), so any two visible epics differ by at
-/// least 36° once `epic_slots` has spread them. The offset puts every hue 14°+ from the danger red (~5°),
-/// at-risk amber (~40°), Done green (~145°) and the accent (~218°), which all fall near multiples of 36°
-/// apart from the grid. Lightness is lower for the bright yellow-to-teal band so all ten read alike.
-pub const EPIC_HUES: [u32; 10] = [0xc16533, 0x999329, 0x5b9929, 0x29993a, 0x29997d, 0x4ea2d0, 0x4e54d0, 0x954ed0, 0xd04ebc, 0xc13357];
+/// Distinct hues for epics, kept out of the danger band (340°–20°, Blocked and errors) and the status-blue
+/// band (210°–230°, In Progress) with room to spare, and 14°+ from at-risk amber (~40°) and Done green
+/// (~145°). What is left is two arcs (54°–131°, 159°–330°); the seven hues sit at least 35° apart on them
+/// (54°, 89°, 124°, 165°, 250°, 286°, 321°). Lightness is lower for the bright yellow-to-teal band so all
+/// seven read alike. `epic_slots` spreads visible epics over them.
+pub const EPIC_HUES: [u32; 7] = [0x9e942b, 0x5b9425, 0x299934, 0x22997b, 0x7763db, 0xaf52cc, 0xc7469a];
 
 /// `#rrggbb` or `rrggbb`.
 pub fn parse_hex(s: &str) -> Option<Color32> {
@@ -149,13 +150,16 @@ fn mix(c: Color32, toward: u8, t: f32) -> Color32 {
 /// (accent-tinted) selected-row fill.
 const LIGHT_WASH: u8 = 76;
 const DARK_WASH: u8 = 60;
+/// Dark pill text: a little past halfway to white, so it holds 4.5:1 on the lighter selected row too.
+const DARK_TEXT_MIX: f32 = 0.55;
 
 /// A translucent wash of the hue behind text in a darker (light theme) or
 /// lighter (dark theme) shade of it, for at least 4.5:1 contrast. The row's edge stripe is the
-/// base hue itself in light (10% toward black) and a quarter of the way to white in dark (the text's
+/// base hue in light (20% toward black, so it holds 4.5:1 on the row) and a quarter of the way to white in dark (the text's
 /// halfway tint washes every hue out to the same pale stripe).
 pub fn tint_from_hue(base: Color32, p: &Palette) -> Tint {
-    let (alpha, fg, stripe) = if p.dark { (DARK_WASH, mix(base, 255, 0.5), mix(base, 255, 0.25)) } else { (LIGHT_WASH, mix(base, 0, 0.45), mix(base, 0, 0.1)) };
+    let (alpha, fg, stripe) =
+        if p.dark { (DARK_WASH, mix(base, 255, DARK_TEXT_MIX), mix(base, 255, 0.25)) } else { (LIGHT_WASH, mix(base, 0, 0.45), mix(base, 0, 0.2)) };
     Tint { bg: Color32::from_rgba_unmultiplied(base.r(), base.g(), base.b(), alpha), fg, stripe }
 }
 
@@ -221,6 +225,8 @@ fn visuals(p: &Palette) -> Visuals {
     v.faint_bg_color = p.surface_2;
     v.override_text_color = Some(p.text);
     v.hyperlink_color = p.accent;
+    // One blue: the caret is the accent, not egui's default.
+    v.text_cursor.stroke.color = p.accent;
     // Hint (placeholder) text uses this; egui's default fades `text`, which drops below 4.5:1 in light.
     v.weak_text_color = Some(p.muted);
     v.selection.bg_fill = p.selected_row;
@@ -245,6 +251,19 @@ fn visuals(p: &Palette) -> Visuals {
     }
     v.popup_shadow = Shadow::NONE;
     v
+}
+
+/// `muted` where it holds 4.5:1 on `fill`, else `text` (the dark selected row is too light for muted).
+pub fn muted_on(fill: Color32, p: &Palette) -> Color32 {
+    if contrast(p.muted, fill) >= 4.5 { p.muted } else { p.text }
+}
+
+/// The fill for a chip (inline code, a code block, a help key) inside a `container`: the first neutral step
+/// at least 1.1:1 away from it, lighter first in dark (a key reads raised) and darker first in light.
+/// So a code chip in a surface_2 comment card never takes the card's own fill.
+pub fn chip_fill_on(container: Color32, p: &Palette) -> Color32 {
+    let steps: &[Color32] = if p.dark { &[p.surface_2, p.border, p.hover_row] } else { &[p.surface_2, p.surface, p.selected_row] };
+    steps.iter().copied().find(|&c| contrast(c, container) >= 1.1).unwrap_or(p.border)
 }
 
 /// WCAG 2 contrast ratio of two opaque colours (1.0 to 21.0).
@@ -412,9 +431,34 @@ mod tests {
     #[test]
     fn muted_text_reads_on_every_row_fill() {
         for p in [&LIGHT, &DARK] {
-            for row in [p.surface, p.selected_row, p.hover_row, p.bg] {
+            for row in [p.surface, p.hover_row, p.bg] {
                 assert!(contrast(p.muted, row) >= 4.5, "dark={} {:?}: {:.2}", p.dark, row, contrast(p.muted, row));
             }
+            // The selected row takes `text` where muted would drop below the floor.
+            for row in [p.surface, p.selected_row, p.hover_row, p.bg] {
+                assert!(contrast(muted_on(row, p), row) >= 4.5, "dark={} {:?}", p.dark, row);
+            }
+        }
+        assert_eq!(muted_on(DARK.selected_row, &DARK), DARK.text);
+        assert_eq!(muted_on(LIGHT.surface, &LIGHT), LIGHT.muted);
+    }
+
+    #[test]
+    fn chips_step_off_their_container() {
+        for p in [&LIGHT, &DARK] {
+            for container in [p.surface, p.surface_2] {
+                let c = chip_fill_on(container, p);
+                assert!(contrast(c, container) >= 1.1, "dark={} {container:?}: {:.2}", p.dark, contrast(c, container));
+            }
+        }
+        assert_eq!(chip_fill_on(DARK.surface_2, &DARK), hex(0x3a3a37), "help keys in the dark dialog");
+        assert_eq!(chip_fill_on(LIGHT.surface, &LIGHT), LIGHT.surface_2);
+    }
+
+    #[test]
+    fn caret_is_the_accent() {
+        for p in [&LIGHT, &DARK] {
+            assert_eq!(visuals(p).text_cursor.stroke.color, p.accent);
         }
     }
 
@@ -422,6 +466,11 @@ mod tests {
     fn epic_hues_stay_out_of_the_status_and_danger_bands() {
         for banned in [RED, TEAL, ACCENT, GREEN, BLUE, 0xc8403a, 0x0f9d9a] {
             assert!(!EPIC_HUES.contains(&banned), "{banned:06x}");
+        }
+        for &h in &EPIC_HUES {
+            let a = hue_angle(h);
+            assert!(band_dist(a, 340.0, 360.0).min(band_dist(a, 0.0, 20.0)) >= 14.0, "{h:06x} ({a:.0}°) in or near the danger band");
+            assert!(band_dist(a, 210.0, 230.0) >= 15.0, "{h:06x} ({a:.0}°) in or near the status-blue band");
         }
     }
 
@@ -471,11 +520,13 @@ mod tests {
             for b in &hues[i + 1..] {
                 assert!(hue_dist(*a, *b) >= 35.0, "{a:.0}° vs {b:.0}°");
             }
-            for (name, lo, hi) in [("red", 5.0, 5.0), ("amber", 40.0, 40.0), ("green", 145.0, 145.0), ("accent", 218.0, 218.0)] {
+            for (name, lo, hi) in
+                [("danger", 340.0, 360.0), ("danger", 0.0, 20.0), ("amber", 40.0, 40.0), ("green", 145.0, 145.0), ("status blue", 210.0, 230.0)]
+            {
                 assert!(band_dist(*a, lo, hi) >= 14.0, "{a:.0}° too near {name}");
             }
         }
-        assert!((hue_angle(ACCENT) - 218.0).abs() < 2.0, "the accent band tracks the accent");
+        assert!((210.0..=230.0).contains(&hue_angle(ACCENT)), "the status-blue band holds the accent");
         let violets = hues.iter().filter(|h| (255.0..=300.0).contains(*h)).count();
         assert!(violets <= 2, "{violets} violets");
     }
@@ -530,11 +581,12 @@ mod tests {
         let slots = epic_slots([b, a]);
         assert_eq!(slots[a.min(b)], stable_index(a), "the first in key order keeps its slot");
         assert_eq!(slots[a.max(b)], (stable_index(a) + 1) % EPIC_HUES.len(), "the next steps to the next free slot");
-        // Ten epics take ten different hues; an eleventh repeats.
-        let ten = epic_slots(keys.iter().take(10).map(String::as_str));
-        let distinct: std::collections::BTreeSet<_> = ten.values().collect();
-        assert_eq!(distinct.len(), 10);
-        assert_eq!(epic_slots(keys.iter().take(11).map(String::as_str)).len(), 11);
+        // As many epics as hues take different hues; one more repeats.
+        let n = EPIC_HUES.len();
+        let all = epic_slots(keys.iter().take(n).map(String::as_str));
+        let distinct: std::collections::BTreeSet<_> = all.values().collect();
+        assert_eq!(distinct.len(), n);
+        assert_eq!(epic_slots(keys.iter().take(n + 1).map(String::as_str)).len(), n + 1);
         assert_eq!(epic_slots(["CI-1", "CI-1"]).len(), 1);
         let one = epic_slots(["CI-1860"]);
         assert_eq!(epic_tint_in("CI-1860", &one, &LIGHT, &none()), epic_tint("CI-1860", &LIGHT, &none()));
@@ -558,9 +610,13 @@ mod tests {
     #[test]
     fn light_stripe_keeps_the_hue() {
         let base = hex(EPIC_HUES[0]);
-        assert_eq!(tint_from_hue(base, &LIGHT).stripe, mix(base, 0, 0.1));
+        assert_eq!(tint_from_hue(base, &LIGHT).stripe, mix(base, 0, 0.2));
+        for &h in &EPIC_HUES {
+            let s = tint_from_hue(hex(h), &LIGHT).stripe;
+            assert!(contrast(s, LIGHT.surface) >= 4.0, "{h:06x}: {:.2}", contrast(s, LIGHT.surface));
+        }
         assert_eq!(tint_from_hue(base, &DARK).stripe, mix(base, 255, 0.25), "dark stripe a quarter to white");
-        assert_eq!(tint_from_hue(base, &DARK).fg, mix(base, 255, 0.5), "dark pill text stays halfway");
+        assert_eq!(tint_from_hue(base, &DARK).fg, mix(base, 255, DARK_TEXT_MIX), "dark pill text a little past halfway");
     }
 
     #[test]
