@@ -755,7 +755,8 @@ pub const ROW_PITCH: f32 = 44.0;
 
 /// The list's outer corners are rounded (6); the seams between rows are square.
 pub fn row_corners(idx: usize, n: usize) -> CornerRadius {
-    let (top, bottom) = (if idx == 0 { 6 } else { 0 }, if idx + 1 == n { 6 } else { 0 });
+    let r = theme::RADIUS;
+    let (top, bottom) = (if idx == 0 { r } else { 0 }, if idx + 1 == n { r } else { 0 });
     CornerRadius { nw: top, ne: top, sw: bottom, se: bottom }
 }
 
@@ -842,7 +843,7 @@ fn goto_box(app: &mut App, ctx: &egui::Context, p: &Palette) {
         Frame::new()
             .fill(crate::views::dialog_fill(p))
             .stroke(crate::views::dialog_stroke(p))
-            .corner_radius(6)
+            .corner_radius(theme::RADIUS)
             .inner_margin(Margin::same(GOTO_PAD as i8))
             .show(ui, |ui| {
                 crate::views::dialog_fields(ui, p);

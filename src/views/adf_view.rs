@@ -104,7 +104,7 @@ fn block(ui: &mut Ui, b: &Block, p: &Palette, size: f32, chip: egui::Color32) {
             }
         }
         Block::Code { text, .. } => {
-            Frame::new().fill(chip).corner_radius(6).inner_margin(Margin::same(12)).show(ui, |ui| {
+            Frame::new().fill(chip).corner_radius(theme::RADIUS).inner_margin(Margin::same(12)).show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 ui.label(RichText::new(text).font(theme::mono(12.5)).line_height(Some(CODE_LINE_H)).color(p.text));
             });
@@ -129,7 +129,7 @@ fn block(ui: &mut Ui, b: &Block, p: &Palette, size: f32, chip: egui::Color32) {
                 "success" => (p.on_track.gamma_multiply(0.15), p.on_track),
                 _ => (p.accent.gamma_multiply(0.12), p.accent),
             };
-            Frame::new().fill(bg).stroke(Stroke::new(1.0, border)).corner_radius(6).inner_margin(Margin::symmetric(12, 8)).show(ui, |ui| {
+            Frame::new().fill(bg).stroke(Stroke::new(1.0, border)).corner_radius(theme::RADIUS).inner_margin(Margin::symmetric(12, 8)).show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 for ib in blocks {
                     block(ui, ib, p, size, chip);

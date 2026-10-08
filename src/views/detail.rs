@@ -84,15 +84,18 @@ pub fn show(app: &mut App, ui: &mut Ui) {
                 ui.add_space(LABEL_TO_BOX - 8.0 - ui.spacing().item_spacing.y);
                 for c in &issue.comments {
                     // surface_2 with a 1 px border in both themes; code inside steps off it (`chip_fill_on`).
-                    Frame::new().fill(p.surface_2).stroke(Stroke::new(1.0, p.border)).corner_radius(6).inner_margin(Margin::same(12)).show(ui, |ui| {
-                        ui.set_width(ui.available_width());
-                        ui.horizontal(|ui| {
-                            ui.label(RichText::new(&c.author).font(theme::bold(13.5)));
-                            ui.label(RichText::new(short_date(&c.created)).color(p.muted).size(12.0));
-                        });
-                        ui.add_space(4.0);
-                        adf_view::show_value(ui, &c.body, p, p.surface_2);
-                    });
+                    Frame::new().fill(p.surface_2).stroke(Stroke::new(1.0, p.border)).corner_radius(theme::RADIUS).inner_margin(Margin::same(12)).show(
+                        ui,
+                        |ui| {
+                            ui.set_width(ui.available_width());
+                            ui.horizontal(|ui| {
+                                ui.label(RichText::new(&c.author).font(theme::bold(13.5)));
+                                ui.label(RichText::new(short_date(&c.created)).color(p.muted).size(12.0));
+                            });
+                            ui.add_space(4.0);
+                            adf_view::show_value(ui, &c.body, p, p.surface_2);
+                        },
+                    );
                     ui.add_space(COMMENT_GAP - ui.spacing().item_spacing.y);
                 }
                 // After the cards, 16 to the composer (12 + 4); with no cards it sits 16 below the label like one.
@@ -150,7 +153,7 @@ fn composer(app: &mut App, ui: &mut Ui, p: &Palette, key: &str) {
     let resp = Frame::new()
         .fill(p.surface)
         .stroke(Stroke::new(1.0, if focused { p.accent } else { p.border }))
-        .corner_radius(6)
+        .corner_radius(theme::RADIUS)
         // The comment cards' 12 on every side.
         .inner_margin(Margin::same(COMPOSER_PAD as i8))
         .show(ui, |ui| {

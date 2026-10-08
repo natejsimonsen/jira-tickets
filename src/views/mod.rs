@@ -67,6 +67,11 @@ pub fn tab_width(label_w: f32) -> f32 {
     label_w.ceil()
 }
 
+/// The active tab's 2.0 underline, 7 below the tab slot, on whole points.
+pub fn underline_rect(tab: egui::Rect) -> egui::Rect {
+    egui::Rect::from_min_size(egui::pos2(tab.left(), (tab.bottom() + 6.0).round()), vec2(tab.width(), 2.0))
+}
+
 /// Gap between tabs.
 const TAB_GAP: f32 = 24.0;
 /// Gap from the title to the first tab: wider than TAB_GAP, so the title reads apart from the nav.
@@ -115,7 +120,8 @@ fn header(app: &mut App, ui: &mut Ui, p: &Palette) {
                 let pos = egui::pos2(rect.left(), (rect.center().y - galley.size().y / 2.0).round());
                 ui.painter().galley(pos, galley, p.text);
                 if active {
-                    ui.painter().hline(rect.x_range(), rect.bottom() + 7.0, Stroke::new(2.0, p.accent));
+                    // A filled 2.0 bar on whole points, not a stroke centred on a line, so it is exactly 2 tall.
+                    ui.painter().rect_filled(underline_rect(rect), 0.0, p.accent);
                 }
                 let r = r.on_hover_text(format!("{name} (⌘{})", i + 1));
                 if r.clicked() {
@@ -124,10 +130,10 @@ fn header(app: &mut App, ui: &mut Ui, p: &Palette) {
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.spacing_mut().item_spacing.x = 8.0;
-                // The name (14) and "Read-only" (12), both muted so they never compete with the active tab, share
-                // one baseline, NAME_GAP apart.
+                // The name and "Read-only", both small 12 muted so they never compete with the active tab and read
+                // as two labels, share one baseline, NAME_GAP apart.
                 let read_only = crate::jira::READ_ONLY.load(std::sync::atomic::Ordering::Relaxed);
-                let name = app.me.as_ref().map(|me| ui.painter().layout_no_wrap(me.display_name.clone(), theme::body(14.0), p.muted));
+                let name = app.me.as_ref().map(|me| ui.painter().layout_no_wrap(me.display_name.clone(), theme::body(12.0), p.muted));
                 let ro = read_only.then(|| ui.painter().layout_no_wrap("Read-only".into(), theme::body(12.0), p.muted));
                 if name.is_some() || ro.is_some() {
                     let name_w = name.as_ref().map_or(0.0, |g| g.size().x);
@@ -232,7 +238,7 @@ pub fn sign_in(app: &mut App, ui: &mut Ui) {
     let aside = sign_in_aside(p);
     let aside_w = ui.fonts_mut(|f| f.layout_job(aside.clone())).size().x;
     centred(ui, "sign-in", |ui| {
-        Frame::new().fill(p.surface).stroke(Stroke::new(1.0, p.border)).corner_radius(6).inner_margin(Margin::same(16)).show(ui, |ui| {
+        Frame::new().fill(p.surface).stroke(Stroke::new(1.0, p.border)).corner_radius(theme::RADIUS).inner_margin(Margin::same(16)).show(ui, |ui| {
             let w = sign_in_width(aside_w);
             ui.set_width(w);
             ui.vertical(|ui| {
@@ -347,15 +353,18 @@ pub fn toast(app: &mut App, ctx: &egui::Context) {
     let x = toast_centre_x(window.width(), app.detail_x.filter(|_| app.screen == Screen::Issues));
     let at = egui::pos2(x, window.bottom() - toast_offset(hint_bar_height(app)));
     egui::Area::new(egui::Id::new("toast")).pivot(egui::Align2::CENTER_BOTTOM).fixed_pos(at).show(ctx, |ui| {
-        Frame::new().fill(p.tooltip).stroke(Stroke::new(1.0, toast_stroke(p))).shadow(shadow).corner_radius(6).inner_margin(TOAST_MARGIN).show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 8.0;
-                if let Some(color) = toast_dot(t.kind) {
-                    health_dot(ui, color);
-                }
-                ui.add(egui::Label::new(RichText::new(&t.text).color(p.tooltip_text).size(14.0)).wrap_mode(egui::TextWrapMode::Extend));
-            });
-        });
+        Frame::new().fill(p.tooltip).stroke(Stroke::new(1.0, toast_stroke(p))).shadow(shadow).corner_radius(theme::RADIUS).inner_margin(TOAST_MARGIN).show(
+            ui,
+            |ui| {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 8.0;
+                    if let Some(color) = toast_dot(t.kind) {
+                        health_dot(ui, color);
+                    }
+                    ui.add(egui::Label::new(RichText::new(&t.text).color(p.tooltip_text).size(14.0)).wrap_mode(egui::TextWrapMode::Extend));
+                });
+            },
+        );
     });
 }
 
@@ -463,7 +472,7 @@ pub fn button(text: &str, p: &Palette) -> egui::Button<'static> {
     egui::Button::new(RichText::new(text.to_string()).color(p.text).size(14.0))
         .fill(p.surface_2)
         .stroke(Stroke::new(1.0, p.border))
-        .corner_radius(6)
+        .corner_radius(theme::RADIUS)
         .min_size(vec2(0.0, BUTTON_H))
 }
 
@@ -504,7 +513,7 @@ pub fn toggle_chip(ui: &mut Ui, text: &str, active: bool, p: &Palette) -> egui::
             (false, true) => (p.hover_row, p.border),
             (false, false) => (p.surface_2, p.border),
         };
-        ui.painter().rect(rect, 6.0, fill, Stroke::new(1.0, stroke), egui::StrokeKind::Inside);
+        ui.painter().rect(rect, f32::from(theme::RADIUS), fill, Stroke::new(1.0, stroke), egui::StrokeKind::Inside);
         let y = (rect.center().y - label.size().y / 2.0).round();
         ui.painter().galley(egui::pos2(rect.left() + CHIP_PAD, y), label, fg);
     }
@@ -543,7 +552,7 @@ pub fn primary_button_if(text: &str, enabled: bool, p: &Palette) -> egui::Button
     } else {
         egui::Button::new(RichText::new(text.to_string()).color(p.muted).size(14.0)).fill(p.surface_2).stroke(Stroke::new(1.0, p.border)).sense(Sense::hover())
     };
-    b.corner_radius(6).min_size(vec2(0.0, BUTTON_H))
+    b.corner_radius(theme::RADIUS).min_size(vec2(0.0, BUTTON_H))
 }
 
 /// Pill inner padding (8/2) and radius (10).
@@ -615,7 +624,7 @@ pub fn health_dot(ui: &mut Ui, color: Color32) {
 /// Returns true when Retry is clicked.
 pub fn error_banner(ui: &mut Ui, p: &Palette, title: &str, raw: &str) -> bool {
     let mut retry = false;
-    Frame::new().fill(p.danger_subtle).corner_radius(6).inner_margin(Margin::same(12)).show(ui, |ui| {
+    Frame::new().fill(p.danger_subtle).corner_radius(theme::RADIUS).inner_margin(Margin::same(12)).show(ui, |ui| {
         ui.label(RichText::new(title).font(theme::bold(14.0)).color(p.off_track));
         ui.label(RichText::new(raw).color(p.muted).size(12.0));
         retry = ui.add(button("Retry", p)).clicked();
@@ -676,6 +685,14 @@ mod widget_tests {
     fn sign_in_error_replaces_the_prompt() {
         assert_eq!(sign_in_lead(None), ("Paste an Atlassian API token to connect.", false));
         assert_eq!(sign_in_lead(Some("op read failed")), ("op read failed", true));
+    }
+
+    #[test]
+    fn tab_underline_is_two_points_on_whole_points() {
+        let r = underline_rect(egui::Rect::from_min_max(egui::pos2(10.0, 8.3), egui::pos2(60.0, 40.3)));
+        assert_eq!(r.height(), 2.0);
+        assert_eq!(r.top(), r.top().round());
+        assert_eq!(r.width(), 50.0);
     }
 
     #[test]

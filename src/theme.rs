@@ -6,6 +6,10 @@ use std::sync::Arc;
 
 pub const BOLD: &str = "bold";
 
+/// The one corner radius for buttons, combos, chips, cards, dialogs, popups and the toast (pills are 10,
+/// picker rows 4).
+pub const RADIUS: u8 = 6;
+
 pub fn bold(size: f32) -> FontId {
     FontId::new(size, FontFamily::Name(BOLD.into()))
 }
@@ -227,8 +231,10 @@ fn visuals(p: &Palette) -> Visuals {
     v.widgets.open.weak_bg_fill = p.surface_2;
     v.widgets.active.bg_stroke = Stroke::new(1.0, p.accent);
     v.selection.stroke = Stroke::new(1.0, p.accent);
-    for w in [&mut v.widgets.inactive, &mut v.widgets.hovered, &mut v.widgets.active, &mut v.widgets.open] {
-        w.corner_radius = CornerRadius::same(6);
+    v.window_corner_radius = CornerRadius::same(RADIUS);
+    v.menu_corner_radius = CornerRadius::same(RADIUS);
+    for w in [&mut v.widgets.noninteractive, &mut v.widgets.inactive, &mut v.widgets.hovered, &mut v.widgets.active, &mut v.widgets.open] {
+        w.corner_radius = CornerRadius::same(RADIUS);
         w.expansion = 0.0;
     }
     v.popup_shadow = Shadow::NONE;
@@ -454,6 +460,17 @@ mod tests {
             for fill in [p.bg, p.surface, p.surface_2] {
                 assert!(contrast(p.accent, fill) >= 4.5, "dark={} {fill:?}: {:.2}", p.dark, contrast(p.accent, fill));
             }
+        }
+    }
+
+    #[test]
+    fn one_corner_radius() {
+        for p in [&LIGHT, &DARK] {
+            let v = visuals(p);
+            for w in [v.widgets.noninteractive, v.widgets.inactive, v.widgets.hovered, v.widgets.active, v.widgets.open] {
+                assert_eq!(w.corner_radius, CornerRadius::same(RADIUS));
+            }
+            assert_eq!((v.menu_corner_radius, v.window_corner_radius), (CornerRadius::same(RADIUS), CornerRadius::same(RADIUS)));
         }
     }
 

@@ -29,9 +29,12 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
         };
         let (lk, lw) = measure(&left);
         let (rk, rw) = measure(&right);
-        Frame::new().fill(crate::views::dialog_fill(p)).stroke(crate::views::dialog_stroke(p)).corner_radius(6).inner_margin(Margin::same(PAD as i8)).show(
-            ui,
-            |ui| {
+        Frame::new()
+            .fill(crate::views::dialog_fill(p))
+            .stroke(crate::views::dialog_stroke(p))
+            .corner_radius(theme::RADIUS)
+            .inner_margin(Margin::same(PAD as i8))
+            .show(ui, |ui| {
                 ui.set_width(lw + COL_GAP + rw);
                 ui.spacing_mut().item_spacing.y = 0.0;
                 ui.label(RichText::new("Keyboard").font(theme::bold(15.0)).color(p.text));
@@ -49,8 +52,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                         group(ui, p, Group::Pickers, rk);
                     });
                 });
-            },
-        );
+            });
     });
 }
 

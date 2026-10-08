@@ -29,81 +29,86 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
     // A fixed top edge, so a list that shrinks while filtering never moves the dialog.
     let top = dialog_top(ctx.content_rect().height());
     egui::Area::new(egui::Id::new("picker")).order(egui::Order::Foreground).anchor(egui::Align2::CENTER_TOP, vec2(0.0, top)).show(ctx, |ui| {
-        Frame::new().fill(crate::views::dialog_fill(p)).stroke(crate::views::dialog_stroke(p)).corner_radius(6).inner_margin(Margin::same(16)).show(ui, |ui| {
-            ui.set_width(440.0);
-            // Fields on `bg` with the dialog's own edge, in both themes.
-            crate::views::dialog_fields(ui, p);
-            match picker {
-                Picker::Transition { key, items, cursor } => {
-                    title(ui, p, &format!("Transition {key}"));
-                    let names = items.iter().map(|t| Row::plain(transition_row(t)).current_if(t.to.eq_ignore_ascii_case(&status))).collect();
-                    rows(ui, p, names, &mut confirm, cursor, None);
-                }
-                Picker::Resolution { key, items, cursor, .. } => {
-                    title(ui, p, &format!("Resolution for {key}"));
-                    rows(ui, p, items.iter().map(|r| Row::plain(r.name.clone())).collect(), &mut confirm, cursor, None);
-                }
-                Picker::Assign { key, items, current, cursor, filter } => {
-                    title(ui, p, &format!("Assign {key}"));
-                    let r = ui.add(field(filter).hint_text(crate::views::field_hint("Type a name", theme::body(14.0), p)));
-                    ui.add_space(8.0);
-                    // Not under the help overlay, or typing would land in the filter behind it.
-                    if !help_open {
-                        r.request_focus();
+        Frame::new()
+            .fill(crate::views::dialog_fill(p))
+            .stroke(crate::views::dialog_stroke(p))
+            .corner_radius(theme::RADIUS)
+            .inner_margin(Margin::same(16))
+            .show(ui, |ui| {
+                ui.set_width(440.0);
+                // Fields on `bg` with the dialog's own edge, in both themes.
+                crate::views::dialog_fields(ui, p);
+                match picker {
+                    Picker::Transition { key, items, cursor } => {
+                        title(ui, p, &format!("Transition {key}"));
+                        let names = items.iter().map(|t| Row::plain(transition_row(t)).current_if(t.to.eq_ignore_ascii_case(&status))).collect();
+                        rows(ui, p, names, &mut confirm, cursor, None);
                     }
-                    let (shown, cut) = assign_rows(items, filter, current.as_ref());
-                    if r.changed() {
-                        *cursor = assign_cursor_after_filter(&shown, filter, current.is_some());
+                    Picker::Resolution { key, items, cursor, .. } => {
+                        title(ui, p, &format!("Resolution for {key}"));
+                        rows(ui, p, items.iter().map(|r| Row::plain(r.name.clone())).collect(), &mut confirm, cursor, None);
                     }
-                    let now = assign_current_row(&shown, current.as_ref());
-                    let mut names = vec![Row::muted("Unassigned")];
-                    names.extend(shown.iter().map(|u| Row::plain(u.display_name.clone())));
-                    for (i, n) in names.iter_mut().enumerate() {
-                        n.current = now == Some(i);
+                    Picker::Assign { key, items, current, cursor, filter } => {
+                        title(ui, p, &format!("Assign {key}"));
+                        let r = ui.add(field(filter).hint_text(crate::views::field_hint("Type a name", theme::body(14.0), p)));
+                        ui.add_space(8.0);
+                        // Not under the help overlay, or typing would land in the filter behind it.
+                        if !help_open {
+                            r.request_focus();
+                        }
+                        let (shown, cut) = assign_rows(items, filter, current.as_ref());
+                        if r.changed() {
+                            *cursor = assign_cursor_after_filter(&shown, filter, current.is_some());
+                        }
+                        let now = assign_current_row(&shown, current.as_ref());
+                        let mut names = vec![Row::muted("Unassigned")];
+                        names.extend(shown.iter().map(|u| Row::plain(u.display_name.clone())));
+                        for (i, n) in names.iter_mut().enumerate() {
+                            n.current = now == Some(i);
+                        }
+                        if *cursor >= names.len() {
+                            *cursor = 0;
+                        }
+                        let note = assign_note(filter, shown.len(), cut);
+                        rows(ui, p, names, &mut confirm, cursor, Some(note.as_deref()));
                     }
-                    if *cursor >= names.len() {
-                        *cursor = 0;
+                    Picker::Sprint { key, items, cursor } => {
+                        title(ui, p, &format!("Move {key} to sprint"));
+                        let now = sprint_current_row(items, sprint.as_deref());
+                        let mut names = vec![Row::plain("Backlog".to_string())];
+                        names.extend(items.iter().map(|s| Row::plain(sprint_row_label(&s.name, &s.state))));
+                        for (i, n) in names.iter_mut().enumerate() {
+                            n.current = now == Some(i);
+                        }
+                        rows(ui, p, names, &mut confirm, cursor, None);
                     }
-                    let note = assign_note(filter, shown.len(), cut);
-                    rows(ui, p, names, &mut confirm, cursor, Some(note.as_deref()));
-                }
-                Picker::Sprint { key, items, cursor } => {
-                    title(ui, p, &format!("Move {key} to sprint"));
-                    let now = sprint_current_row(items, sprint.as_deref());
-                    let mut names = vec![Row::plain("Backlog".to_string())];
-                    names.extend(items.iter().map(|s| Row::plain(sprint_row_label(&s.name, &s.state))));
-                    for (i, n) in names.iter_mut().enumerate() {
-                        n.current = now == Some(i);
+                    Picker::Edit { key, labels, priority, points, .. } => {
+                        title(ui, p, &format!("Edit {key}"));
+                        let labels_id = egui::Id::new("edit-labels");
+                        let r = edit_group(ui, p, "Labels, comma separated", field(labels).id(labels_id));
+                        // Labels takes focus on open (and whenever no field holds it); Tab moves on.
+                        if !help_open && ui.memory(|m| m.focused().is_none()) {
+                            r.request_focus();
+                        }
+                        ui.add_space(12.0);
+                        let hint = |t: String| crate::views::field_hint(&t, theme::body(14.0), p);
+                        edit_group(ui, p, "Priority", field(priority).hint_text(hint(crate::app::PRIORITY_HINT.to_string())));
+                        ui.add_space(12.0);
+                        edit_group(ui, p, "Story points", field(points).hint_text(hint(crate::app::POINTS_HINT.to_string())));
                     }
-                    rows(ui, p, names, &mut confirm, cursor, None);
                 }
-                Picker::Edit { key, labels, priority, points, .. } => {
-                    title(ui, p, &format!("Edit {key}"));
-                    let labels_id = egui::Id::new("edit-labels");
-                    let r = edit_group(ui, p, "Labels, comma separated", field(labels).id(labels_id));
-                    // Labels takes focus on open (and whenever no field holds it); Tab moves on.
-                    if !help_open && ui.memory(|m| m.focused().is_none()) {
-                        r.request_focus();
+                ui.add_space(16.0);
+                // The hint bar carries the keys; the dialog carries one primary action.
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 8.0;
+                    if ui.add(primary_button("Confirm", p)).clicked() {
+                        confirm = true;
                     }
-                    ui.add_space(12.0);
-                    let hint = |t: String| crate::views::field_hint(&t, theme::body(14.0), p);
-                    edit_group(ui, p, "Priority", field(priority).hint_text(hint(crate::app::PRIORITY_HINT.to_string())));
-                    ui.add_space(12.0);
-                    edit_group(ui, p, "Story points", field(points).hint_text(hint(crate::app::POINTS_HINT.to_string())));
-                }
-            }
-            ui.add_space(16.0);
-            // The hint bar carries the keys; the dialog carries one primary action.
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 8.0;
-                if ui.add(primary_button("Confirm", p)).clicked() {
-                    confirm = true;
-                }
-                if ui.add(crate::views::dialog_button("Cancel", p)).clicked() {
-                    cancel = true;
-                }
+                    if ui.add(crate::views::dialog_button("Cancel", p)).clicked() {
+                        cancel = true;
+                    }
+                });
             });
-        });
     });
     if confirm {
         app.actions.push(Action::PickerConfirm);
