@@ -82,10 +82,10 @@ pub const DARK: Palette = Palette {
     no_health: hex(0x7d7b76),
     done: hex(0xa3a29d),
     today: hex(0xec6d66),
-    selected_row: hex(0x1f2a3d),
+    selected_row: hex(0x24365a),
     hover_row: hex(0x2a2a28),
     danger_subtle: hex(0x3a2422),
-    tooltip: hex(0x3a3f46),
+    tooltip: hex(0x44494f),
 };
 
 pub fn palette(ctx: &egui::Context) -> &'static Palette {
@@ -112,9 +112,11 @@ const PURPLE: u32 = 0x8250df;
 const RED: u32 = 0xc8403a;
 const GREEN: u32 = 0x2e8b57;
 
-/// Twelve distinct hues for epics, picked by a stable hash of the epic key. None sits in the
-/// status bands (In progress blue, Ready-for-work teal, Done green) or the danger red.
-pub const EPIC_HUES: [u32; 12] = [0x8250df, 0x6b8e23, 0xd1559b, 0xe07b39, 0xa64ca6, 0x9a6700, 0x5c6ac4, 0xc2416b, 0xb8860b, 0x7b5ea7, 0xa0522d, 0x7f7f2a];
+/// Distinct hues for epics, picked by a stable hash of the epic key. Every pair is at least 25° apart in
+/// hue angle and each sits at least 25° from the danger red (0–15°), at-risk amber (35–45°), Done green
+/// (140–150°) and the accent (~218°); two violets at most. Those bands leave about 155° of the wheel,
+/// which holds seven hues at 25° spacing: 72°, 98°, 184°, 244°, 270°, 296°, 322°.
+pub const EPIC_HUES: [u32; 7] = [0x7d9325, 0x4e8e29, 0x1b8f98, 0x7871d6, 0x9961d1, 0xbe53c6, 0xca499b];
 
 /// `#rrggbb` or `rrggbb`.
 pub fn parse_hex(s: &str) -> Option<Color32> {
@@ -137,11 +139,22 @@ fn mix(c: Color32, toward: u8, t: f32) -> Color32 {
     Color32::from_rgb(m(c.r()), m(c.g()), m(c.b()))
 }
 
+/// Light-theme wash alpha: heavy enough that an In Progress pill on a plain row never reads as the
+/// (accent-tinted) selected-row fill.
+const LIGHT_WASH: u8 = 76;
+const DARK_WASH: u8 = 60;
+
 /// A translucent wash of the hue behind text in a darker (light theme) or
-/// lighter (dark theme) shade of it, for at least 4.5:1 contrast.
+/// lighter (dark theme) shade of it, for at least 4.5:1 contrast. The row's edge stripe is the
+/// base hue itself in light (10% toward black) and the text tone in dark.
 pub fn tint_from_hue(base: Color32, p: &Palette) -> Tint {
-    let (alpha, fg) = if p.dark { (60, mix(base, 255, 0.45)) } else { (40, mix(base, 0, 0.45)) };
-    Tint { bg: Color32::from_rgba_unmultiplied(base.r(), base.g(), base.b(), alpha), fg, stripe: fg }
+    let (alpha, fg, stripe) = if p.dark {
+        let fg = mix(base, 255, 0.5);
+        (DARK_WASH, fg, fg)
+    } else {
+        (LIGHT_WASH, mix(base, 0, 0.45), mix(base, 0, 0.1))
+    };
+    Tint { bg: Color32::from_rgba_unmultiplied(base.r(), base.g(), base.b(), alpha), fg, stripe }
 }
 
 /// Override (case-insensitive name) > known status name > status category.
@@ -380,6 +393,75 @@ mod tests {
         for banned in [RED, TEAL, ACCENT, GREEN, BLUE, 0xc8403a, 0x0f9d9a] {
             assert!(!EPIC_HUES.contains(&banned), "{banned:06x}");
         }
+    }
+
+    /// HSV hue angle in degrees (0..360) of an opaque colour.
+    fn hue_angle(v: u32) -> f32 {
+        let c = hex(v);
+        let (r, g, b) = (f32::from(c.r()) / 255.0, f32::from(c.g()) / 255.0, f32::from(c.b()) / 255.0);
+        let (max, min) = (r.max(g).max(b), r.min(g).min(b));
+        let d = max - min;
+        if d == 0.0 {
+            return 0.0;
+        }
+        let h = if max == r {
+            60.0 * ((g - b) / d).rem_euclid(6.0)
+        } else if max == g {
+            60.0 * ((b - r) / d + 2.0)
+        } else {
+            60.0 * ((r - g) / d + 4.0)
+        };
+        h.rem_euclid(360.0)
+    }
+
+    /// Shortest distance around the wheel between two angles.
+    fn hue_dist(a: f32, b: f32) -> f32 {
+        let d = (a - b).abs() % 360.0;
+        d.min(360.0 - d)
+    }
+
+    /// Distance from `h` to the band `lo..=hi` (0 inside it).
+    fn band_dist(h: f32, lo: f32, hi: f32) -> f32 {
+        if (lo..=hi).contains(&h) { 0.0 } else { hue_dist(h, lo).min(hue_dist(h, hi)) }
+    }
+
+    #[test]
+    fn hue_angle_of_primaries() {
+        assert_eq!(hue_angle(0xff0000), 0.0);
+        assert!((hue_angle(0x00ff00) - 120.0).abs() < 1e-3);
+        assert!((hue_angle(0x0000ff) - 240.0).abs() < 1e-3);
+        assert!((hue_dist(350.0, 10.0) - 20.0).abs() < 1e-3);
+        assert_eq!(band_dist(10.0, 0.0, 15.0), 0.0);
+    }
+
+    #[test]
+    fn epic_hues_are_spaced_and_clear_of_meaning_hues() {
+        let hues: Vec<f32> = EPIC_HUES.iter().map(|&h| hue_angle(h)).collect();
+        for (i, a) in hues.iter().enumerate() {
+            for b in &hues[i + 1..] {
+                assert!(hue_dist(*a, *b) >= 25.0, "{a:.0}° vs {b:.0}°");
+            }
+            for (name, lo, hi) in [("red", 0.0, 15.0), ("amber", 35.0, 45.0), ("green", 140.0, 150.0), ("accent", 218.0, 218.0)] {
+                assert!(band_dist(*a, lo, hi) >= 25.0, "{a:.0}° too near {name}");
+            }
+        }
+        assert!((hue_angle(ACCENT) - 218.0).abs() < 2.0, "the accent band tracks the accent");
+        let violets = hues.iter().filter(|h| (255.0..=300.0).contains(*h)).count();
+        assert!(violets <= 2, "{violets} violets");
+    }
+
+    #[test]
+    fn light_in_progress_wash_is_not_the_selection_fill() {
+        let t = status_tint("In Progress", "", &LIGHT, &none());
+        let c = contrast(over(t.bg, LIGHT.surface), LIGHT.selected_row);
+        assert!(c >= 1.2, "{c:.2}");
+    }
+
+    #[test]
+    fn light_stripe_keeps_the_hue() {
+        let base = hex(EPIC_HUES[0]);
+        assert_eq!(tint_from_hue(base, &LIGHT).stripe, mix(base, 0, 0.1));
+        assert_eq!(tint_from_hue(base, &DARK).stripe, tint_from_hue(base, &DARK).fg);
     }
 
     #[test]

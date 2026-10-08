@@ -29,19 +29,19 @@ pub fn current_rows(app: &App) -> Vec<&Issue> {
 
 /// The row's leading pills: under All teams, its team labels in a neutral pill;
 /// under one team, an amber "no <label> label" when it is the team's by membership only.
-pub fn team_pills(ui: &mut Ui, f: &filter::IssueFilter, i: &Issue, p: &Palette, outlined: bool) {
+pub fn team_pills(ui: &mut Ui, f: &filter::IssueFilter, i: &Issue, p: &Palette) {
     match &f.team {
         filter::TeamScope::All => {
             let teams: Vec<&str> = i.labels.iter().filter(|l| f.team_labels.contains(l)).map(String::as_str).collect();
             if !teams.is_empty() {
-                row_pill(ui, &teams.join(" · "), p.surface_2, p.text, outlined, p);
+                pill_outlined(ui, &teams.join(" · "), p.surface_2, p.text);
             }
         }
         filter::TeamScope::Label(l) => {
             let members = f.team_members.get(l.as_str()).map(Vec::as_slice).unwrap_or_default();
             if filter::missing_team_label(i, l, members) {
                 let t = theme::tint_from_hue(p.at_risk, p);
-                row_pill(ui, &format!("no {l} label"), t.bg, t.fg, outlined, p);
+                pill_outlined(ui, &format!("no {l} label"), t.bg, t.fg);
             }
         }
         filter::TeamScope::None => {}
@@ -306,8 +306,6 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
             let epic = i.parent_key.as_deref().map(|k| theme::epic_tint(k, p, epic_colors));
             // The fill goes under the content once we know whether the pointer is over the row.
             let bg = ui.painter().add(egui::Shape::Noop);
-            let hovered_before = ui.ctx().read_response(row_id(&i.key)).is_some_and(|r| r.hovered());
-            let outlined = is_sel || hovered_before;
             let r = Frame::new().stroke(Stroke::new(1.0, p.border)).corner_radius(6).inner_margin(Margin::symmetric(12, ROW_PAD_Y)).show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 ui.spacing_mut().item_spacing.y = 4.0;
@@ -318,7 +316,7 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
                 });
                 ui.horizontal_wrapped(|ui| {
                     ui.spacing_mut().item_spacing = vec2(6.0, 4.0);
-                    team_pills(ui, &app.filter, i, p, outlined);
+                    team_pills(ui, &app.filter, i, p);
                     for c in &columns {
                         let v = filter::column_value(i, c);
                         if v.is_empty() {
@@ -332,7 +330,7 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
                             ("parent.summary" | "parent.key", Some(t)) => (t.bg, t.fg),
                             _ => (p.surface_2, p.muted),
                         };
-                        row_pill(ui, &v, bg, fg, outlined, p);
+                        pill_outlined(ui, &v, bg, fg);
                     }
                 });
             });
@@ -355,9 +353,13 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
                 r.scroll_to_me(None);
             }
         }
+        // Room under the last row, so a toast (anchored above the hint bar) never covers it.
+        ui.add_space(LIST_BOTTOM_PAD);
     });
 }
 
+/// Clearance under the last row: a toast's height (~34) plus its 16 px gap, rounded up.
+const LIST_BOTTOM_PAD: f32 = 56.0;
 /// Space between cards.
 const ROW_GAP: f32 = 4.0;
 /// Card inner vertical padding: 4 keeps the two-line card near a 48 pt pitch (≥14 rows at 900 px).
@@ -373,15 +375,6 @@ pub fn row_fill(selected: bool, hovered: bool, p: &Palette) -> egui::Color32 {
         (true, _) => p.selected_row,
         (false, true) => p.hover_row,
         (false, false) => p.surface,
-    }
-}
-
-/// A row pill: outlined on selected or hovered rows, so its wash stays visible on the row fill.
-fn row_pill(ui: &mut Ui, text: &str, bg: egui::Color32, fg: egui::Color32, outlined: bool, p: &Palette) {
-    if outlined {
-        pill_outlined(ui, text, bg, fg, p);
-    } else {
-        pill(ui, text, bg, fg);
     }
 }
 

@@ -14,9 +14,10 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
         });
     }
     let help_open = app.help_open;
+    let hint_bar = crate::views::hint_bar_height(app);
     let Some(picker) = app.picker.as_mut() else { return };
     // Dim the page behind the dialog and swallow its clicks.
-    crate::views::backdrop(ctx, "picker-backdrop", egui::Order::Middle, p);
+    crate::views::backdrop(ctx, "picker-backdrop", egui::Order::Middle, hint_bar, p);
     let mut confirm = false;
     let mut cancel = false;
     // A fixed top edge, so a list that shrinks while filtering never moves the dialog.

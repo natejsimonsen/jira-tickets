@@ -13,7 +13,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
     let p = theme::palette(ctx);
     // Above the pickers' Foreground dialog: the backdrop at Foreground (shown
     // after the dialog, so on top of it) and the panel at Tooltip.
-    if crate::views::backdrop(ctx, "help-backdrop", egui::Order::Foreground, p).clicked() {
+    if crate::views::backdrop(ctx, "help-backdrop", egui::Order::Foreground, crate::views::hint_bar_height(app), p).clicked() {
         app.actions.push(Action::ToggleHelp);
     }
     egui::Area::new(egui::Id::new("help")).order(egui::Order::Tooltip).anchor(egui::Align2::CENTER_CENTER, vec2(0.0, -20.0)).show(ctx, |ui| {

@@ -195,6 +195,16 @@ pub fn sign_in(app: &mut App, ui: &mut Ui) {
     });
 }
 
+/// The hint bar's height when it shows (signed in, on Issues), else None.
+pub fn hint_bar_height(app: &App) -> Option<f32> {
+    (app.client.is_some() && app.screen == Screen::Issues).then_some(issues::HINT_BAR_H)
+}
+
+/// The toast's edge: `border` in light; in dark a step lighter than the fill so it separates from the page.
+pub fn toast_stroke(p: &Palette) -> Color32 {
+    if p.dark { Color32::from_rgb(0x5a, 0x5f, 0x66) } else { p.border }
+}
+
 /// How far the toast's bottom sits above the window bottom: 16 px above the hint bar when one shows, else 24 px.
 pub fn toast_offset(hint_bar: Option<f32>) -> f32 {
     hint_bar.map_or(24.0, |h| h + 16.0)
@@ -208,16 +218,19 @@ pub fn toast(app: &mut App, ctx: &egui::Context) {
     }
     ctx.request_repaint_after(std::time::Duration::from_millis(250));
     let p = theme::palette(ctx);
-    let hint_bar = (app.client.is_some() && app.screen == Screen::Issues).then_some(issues::HINT_BAR_H);
-    let shadow = egui::Shadow { offset: [0, 4], blur: 12, spread: 0, color: Color32::from_black_alpha(60) };
-    egui::Area::new(egui::Id::new("toast")).anchor(egui::Align2::CENTER_BOTTOM, vec2(0.0, -toast_offset(hint_bar))).show(ctx, |ui| {
-        Frame::new().fill(p.tooltip).stroke(Stroke::new(1.0, p.border)).shadow(shadow).corner_radius(6).inner_margin(Margin::symmetric(16, 8)).show(ui, |ui| {
-            let color = if t.error { Color32::from_rgb(0xff, 0x81, 0x82) } else { Color32::from_rgb(0x4a, 0xc2, 0x6b) };
-            ui.horizontal(|ui| {
-                health_dot(ui, color);
-                ui.label(RichText::new(&t.text).color(Color32::WHITE).size(14.0));
-            });
-        });
+    let shadow = egui::Shadow { offset: [0, 4], blur: 12, spread: 0, color: Color32::from_black_alpha(if p.dark { 120 } else { 60 }) };
+    egui::Area::new(egui::Id::new("toast")).anchor(egui::Align2::CENTER_BOTTOM, vec2(0.0, -toast_offset(hint_bar_height(app)))).show(ctx, |ui| {
+        Frame::new().fill(p.tooltip).stroke(Stroke::new(1.0, toast_stroke(p))).shadow(shadow).corner_radius(6).inner_margin(Margin::symmetric(16, 8)).show(
+            ui,
+            |ui| {
+                let color = if t.error { Color32::from_rgb(0xff, 0x81, 0x82) } else { Color32::from_rgb(0x4a, 0xc2, 0x6b) };
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 8.0;
+                    health_dot(ui, color);
+                    ui.add(egui::Label::new(RichText::new(&t.text).color(Color32::WHITE).size(14.0)).wrap_mode(egui::TextWrapMode::Extend));
+                });
+            },
+        );
     });
 }
 
@@ -228,7 +241,7 @@ pub const BUTTON_H: f32 = 28.0;
 
 /// The page dimming behind a modal: light needs less to read as "behind".
 pub fn backdrop_alpha(p: &Palette) -> u8 {
-    if p.dark { 150 } else { 90 }
+    if p.dark { 150 } else { 70 }
 }
 
 /// A modal dialog's fill: a step above the dimmed page in dark, plain surface in light.
@@ -236,13 +249,20 @@ pub fn dialog_fill(p: &Palette) -> Color32 {
     if p.dark { p.surface_2 } else { p.surface }
 }
 
-/// Paints the modal backdrop over the whole window and swallows its clicks.
-pub fn backdrop(ctx: &egui::Context, id: &str, order: egui::Order, p: &Palette) -> egui::Response {
+/// The dimmed area: the window, less the hint bar at the bottom (it carries the dialog's keys, so it stays lit).
+pub fn backdrop_rect(window: egui::Rect, hint_bar: Option<f32>) -> egui::Rect {
+    let mut r = window;
+    r.max.y -= hint_bar.unwrap_or(0.0);
+    r
+}
+
+/// Paints the modal backdrop over the window above the hint bar and swallows its clicks.
+pub fn backdrop(ctx: &egui::Context, id: &str, order: egui::Order, hint_bar: Option<f32>, p: &Palette) -> egui::Response {
     egui::Area::new(egui::Id::new(id))
         .order(order)
         .fixed_pos(egui::pos2(0.0, 0.0))
         .show(ctx, |ui| {
-            let r = ui.ctx().content_rect();
+            let r = backdrop_rect(ui.ctx().content_rect(), hint_bar);
             ui.painter().rect_filled(r, 0.0, Color32::from_black_alpha(backdrop_alpha(p)));
             ui.allocate_rect(r, Sense::click())
         })
@@ -269,8 +289,14 @@ pub fn toggle_job(text: &str, active: bool, fg: Color32) -> egui::text::LayoutJo
     job
 }
 
+/// An active toggle chip's fill: the accent in light; in dark one step below it, so a lit chip is not
+/// the brightest thing on screen (on_accent still reads on it).
+pub fn active_chip_fill(p: &Palette) -> Color32 {
+    if p.dark { Color32::from_rgb(0x66, 0x8f, 0xd6) } else { p.accent }
+}
+
 pub fn toggle_button(text: &str, active: bool, p: &Palette) -> egui::Button<'static> {
-    let (fill, fg, stroke) = if active { (p.accent, p.on_accent, p.accent) } else { (p.surface_2, p.text, p.border) };
+    let (fill, fg, stroke) = if active { (active_chip_fill(p), p.on_accent, active_chip_fill(p)) } else { (p.surface_2, p.text, p.border) };
     egui::Button::new(toggle_job(text, active, fg)).fill(fill).stroke(Stroke::new(1.0, stroke)).corner_radius(6).min_size(vec2(0.0, BUTTON_H))
 }
 
@@ -278,11 +304,31 @@ pub fn primary_button(text: &str, p: &Palette) -> egui::Button<'static> {
     primary_button_if(text, true, p)
 }
 
+/// The enabled primary button's fill and text: accent with `on_accent`, in both themes.
+pub fn primary_colors(p: &Palette) -> (Color32, Color32) {
+    (p.accent, p.on_accent)
+}
+
+/// A 12 px muted text link (no frame), underlined while hovered: "Clear filters", "Clear search".
+pub fn small_link(ui: &mut Ui, text: &str, p: &Palette) -> egui::Response {
+    let galley = ui.painter().layout_no_wrap(text.to_string(), theme::body(12.0), p.muted);
+    let (rect, resp) = ui.allocate_exact_size(galley.size(), Sense::click());
+    if ui.is_rect_visible(rect) {
+        let color = if resp.hovered() { p.text } else { p.muted };
+        if resp.hovered() {
+            ui.painter().hline(rect.x_range(), rect.bottom() - 1.0, Stroke::new(1.0, color));
+        }
+        ui.painter().galley(rect.min, galley, color);
+    }
+    resp.on_hover_cursor(egui::CursorIcon::PointingHand)
+}
+
 /// A primary button that, when disabled, is drawn quiet (surface_2, muted, border) and ignores clicks,
 /// rather than a faded accent.
 pub fn primary_button_if(text: &str, enabled: bool, p: &Palette) -> egui::Button<'static> {
     let b = if enabled {
-        egui::Button::new(RichText::new(text.to_string()).color(p.on_accent).size(14.0)).fill(p.accent).stroke(Stroke::new(1.0, p.accent))
+        let (fill, fg) = primary_colors(p);
+        egui::Button::new(RichText::new(text.to_string()).color(fg).size(14.0)).fill(fill).stroke(Stroke::new(1.0, fill))
     } else {
         egui::Button::new(RichText::new(text.to_string()).color(p.muted).size(14.0)).fill(p.surface_2).stroke(Stroke::new(1.0, p.border)).sense(Sense::hover())
     };
@@ -298,9 +344,14 @@ pub fn pill(ui: &mut Ui, text: &str, bg: Color32, fg: Color32) -> egui::Response
     pill_sized(ui, text, bg, fg, Stroke::NONE, PILL_MARGIN)
 }
 
-/// A pill with a 1 px `border` edge, for rows whose fill would swallow a translucent wash.
-pub fn pill_outlined(ui: &mut Ui, text: &str, bg: Color32, fg: Color32, p: &Palette) -> egui::Response {
-    pill_sized(ui, text, bg, fg, Stroke::new(1.0, p.border), PILL_MARGIN)
+/// The edge every list-row pill gets: its own text colour at 35%, so a wash stays visible on any row fill.
+pub fn row_pill_stroke(fg: Color32) -> Stroke {
+    Stroke::new(1.0, fg.gamma_multiply(0.35))
+}
+
+/// A list-row pill: one treatment on every row (plain, hovered, selected).
+pub fn pill_outlined(ui: &mut Ui, text: &str, bg: Color32, fg: Color32) -> egui::Response {
+    pill_sized(ui, text, bg, fg, row_pill_stroke(fg), PILL_MARGIN)
 }
 
 /// Small text in an exact `text + 2×margin` rect (radius 10); the stroke is drawn inside, so outlined
@@ -371,6 +422,29 @@ mod widget_tests {
         let sync = [(ListId::Search, Loaded::default()), (ListId::Epics, loading())];
         assert!(header_syncing(sync.iter().map(|(i, l)| (i, l))));
         assert!(!header_syncing(std::iter::empty()));
+    }
+
+    #[test]
+    fn primary_text_is_on_accent_in_both_themes() {
+        for p in [&theme::LIGHT, &theme::DARK] {
+            assert_eq!(primary_colors(p), (p.accent, p.on_accent));
+            assert!(theme::contrast(p.on_accent, active_chip_fill(p)) >= 4.5, "dark={}", p.dark);
+        }
+        assert_ne!(active_chip_fill(&theme::DARK), theme::DARK.accent, "dark chips sit a step below the accent");
+    }
+
+    #[test]
+    fn backdrop_stops_above_the_hint_bar() {
+        let w = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), vec2(1440.0, 900.0));
+        assert_eq!(backdrop_rect(w, Some(24.0)).max.y, 876.0);
+        assert_eq!(backdrop_rect(w, None), w);
+    }
+
+    #[test]
+    fn row_pill_edge_is_the_text_colour_faded() {
+        let s = row_pill_stroke(Color32::from_rgb(200, 100, 0));
+        assert_eq!(s.width, 1.0);
+        assert!(s.color.a() > 80 && s.color.a() < 100, "{}", s.color.a());
     }
 
     #[test]
