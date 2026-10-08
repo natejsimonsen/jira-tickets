@@ -35,11 +35,18 @@ impl From<ureq::Error> for Error {
     }
 }
 
+const READ_ONLY_MSG: &str = "read-only mode, so nothing was sent to Jira";
+
 pub fn check_writable() -> Result<()> {
     if READ_ONLY.load(Ordering::Relaxed) {
-        return Err(Error::Other("read-only mode, so nothing was sent to Jira".into()));
+        return Err(Error::Other(READ_ONLY_MSG.into()));
     }
     Ok(())
+}
+
+/// The error `check_writable` returns in read-only mode.
+pub fn is_read_only(e: &Error) -> bool {
+    matches!(e, Error::Other(m) if m == READ_ONLY_MSG)
 }
 
 pub fn map_status(code: u16, body: &str) -> Error {

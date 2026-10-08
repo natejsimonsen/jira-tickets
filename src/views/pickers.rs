@@ -10,22 +10,18 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
     let p = theme::palette(ctx);
     if app.picker_loading {
         egui::Area::new(egui::Id::new("picker-loading")).order(egui::Order::Foreground).anchor(egui::Align2::CENTER_CENTER, vec2(0.0, 0.0)).show(ctx, |ui| {
-            ui.add(egui::Spinner::new().size(24.0));
+            crate::views::icons::spinner(ui, 24.0, p);
         });
     }
     let help_open = app.help_open;
     let Some(picker) = app.picker.as_mut() else { return };
     // Dim the page behind the dialog and swallow its clicks.
-    egui::Area::new(egui::Id::new("picker-backdrop")).order(egui::Order::Middle).fixed_pos(egui::pos2(0.0, 0.0)).show(ctx, |ui| {
-        let r = ui.ctx().content_rect();
-        ui.painter().rect_filled(r, 0.0, egui::Color32::from_black_alpha(90));
-        ui.allocate_rect(r, egui::Sense::click());
-    });
+    crate::views::backdrop(ctx, "picker-backdrop", egui::Order::Middle, p);
     let mut confirm = false;
     let mut cancel = false;
     let confirm_label = if matches!(picker, Picker::Edit { .. }) { "Save" } else { "Confirm" };
     egui::Area::new(egui::Id::new("picker")).order(egui::Order::Foreground).anchor(egui::Align2::CENTER_CENTER, vec2(0.0, -40.0)).show(ctx, |ui| {
-        Frame::new().fill(p.surface).stroke(Stroke::new(1.0, p.border)).corner_radius(8).inner_margin(Margin::same(14)).show(ui, |ui| {
+        Frame::new().fill(crate::views::dialog_fill(p)).stroke(Stroke::new(1.0, p.border)).corner_radius(6).inner_margin(Margin::same(14)).show(ui, |ui| {
             ui.set_width(440.0);
             match picker {
                 Picker::Transition { key, items, cursor } => {
@@ -105,7 +101,7 @@ fn rows(ui: &mut egui::Ui, p: &Palette, names: Vec<String>, confirm: &mut bool, 
     }
     egui::ScrollArea::vertical().max_height(360.0).show(ui, |ui| {
         for (i, n) in names.iter().enumerate() {
-            let fill = if i == *cursor { p.selected_row } else { p.surface };
+            let fill = if i == *cursor { p.selected_row } else { egui::Color32::TRANSPARENT };
             let r = Frame::new()
                 .fill(fill)
                 .corner_radius(4)

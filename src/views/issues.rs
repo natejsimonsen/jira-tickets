@@ -54,13 +54,16 @@ pub fn missing_label_pill(ui: &mut Ui, f: &filter::IssueFilter, i: &Issue, label
     missing
 }
 
+/// The hint bar's height; the toast anchors above it.
+pub const HINT_BAR_H: f32 = 24.0;
+
 pub fn show(app: &mut App, ui: &mut Ui) {
     let p = theme::palette(ui.ctx());
     let width = ui.available_width();
     let list_w = (width * 0.42).clamp(360.0, 720.0);
     // First, so the strip spans the full width under both panels.
     egui::Panel::bottom("hints")
-        .exact_size(24.0)
+        .exact_size(HINT_BAR_H)
         .frame(Frame::new().fill(p.surface).inner_margin(Margin::symmetric(16, 0)).stroke(Stroke::new(1.0, p.border)))
         .show(ui, |ui| {
             ui.horizontal_centered(|ui| {
@@ -187,7 +190,7 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
     ui.horizontal(|ui| {
         ui.label(RichText::new(format!("{} issues", rows.len())).color(p.muted).size(12.0));
         if app.search_pending.is_some() {
-            ui.add(egui::Spinner::new().size(14.0));
+            crate::views::icons::spinner(ui, crate::views::icons::INLINE_SPINNER, p);
             ui.label(RichText::new("updating…").color(p.muted).size(12.0));
         }
         if app.search_active && ui.add(button("Clear search", p)).clicked() {

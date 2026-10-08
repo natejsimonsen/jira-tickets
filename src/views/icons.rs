@@ -62,8 +62,31 @@ pub fn icon_button(ui: &mut Ui, icon: Icon, tip: &str, p: &Palette) -> Response 
 pub fn spinner_button(ui: &mut Ui, p: &Palette) -> Response {
     let (rect, resp) = ui.allocate_exact_size(Vec2::splat(BUTTON), Sense::hover());
     let glyph = button_frame(ui, rect, false, p);
-    ui.put(glyph, egui::Spinner::new().size(GLYPH).color(p.muted));
+    paint_spinner(ui, glyph, p.muted);
     resp
+}
+
+/// Inline spinner size (count row, detail, composer).
+pub const INLINE_SPINNER: f32 = 14.0;
+
+/// A `size`×`size` spinner in an exact slot, so text after it never shifts.
+pub fn spinner(ui: &mut Ui, size: f32, p: &Palette) -> Response {
+    let (rect, resp) = ui.allocate_exact_size(Vec2::splat(size), Sense::hover());
+    paint_spinner(ui, rect, p.muted);
+    resp
+}
+
+/// A three-quarter ring turning once a second, centred in `rect`, the same in both themes.
+fn paint_spinner(ui: &Ui, rect: Rect, color: Color32) {
+    if !ui.is_rect_visible(rect) {
+        return;
+    }
+    ui.ctx().request_repaint();
+    let t = ui.input(|i| i.time) as f32;
+    let start = t * std::f32::consts::TAU;
+    let r = rect.width().min(rect.height()) / 2.0 - 1.0;
+    let pts = arc_points(rect.center(), r, start, start + std::f32::consts::TAU * 0.75, 24);
+    ui.painter().add(Shape::line(pts, Stroke::new(1.75, color)));
 }
 
 #[cfg(test)]

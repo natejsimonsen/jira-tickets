@@ -1,6 +1,6 @@
 //! Colours from the roadmap mockup tokens, light and dark, and system fonts.
 
-use egui::{Color32, FontData, FontDefinitions, FontFamily, FontId, Stroke, Visuals};
+use egui::{Color32, CornerRadius, FontData, FontDefinitions, FontFamily, FontId, Shadow, Stroke, Visuals};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -26,6 +26,8 @@ pub struct Palette {
     pub text: Color32,
     pub muted: Color32,
     pub accent: Color32,
+    /// Text and glyphs on an `accent` fill (primary buttons, active toggles).
+    pub on_accent: Color32,
     pub on_track: Color32,
     pub at_risk: Color32,
     pub off_track: Color32,
@@ -51,13 +53,14 @@ pub const LIGHT: Palette = Palette {
     text: hex(0x1f1f1d),
     muted: hex(0x6b6a66),
     accent: hex(0x2f6fdb),
+    on_accent: hex(0xffffff),
     on_track: hex(0x2e8b57),
     at_risk: hex(0xc98a12),
-    off_track: hex(0xc8403a),
+    off_track: hex(0xb5352f),
     no_health: hex(0x9a9893),
     done: hex(0x6b6a66),
     today: hex(0xc8403a),
-    selected_row: hex(0xe8eefb),
+    selected_row: hex(0xdde7fa),
     hover_row: hex(0xf0f0ed),
     danger_subtle: hex(0xfbe9e8),
     tooltip: hex(0x25292e),
@@ -72,6 +75,7 @@ pub const DARK: Palette = Palette {
     text: hex(0xecebe8),
     muted: hex(0xa3a29d),
     accent: hex(0x7aa5f0),
+    on_accent: hex(0x171716),
     on_track: hex(0x5cc28a),
     at_risk: hex(0xe6b04a),
     off_track: hex(0xec6d66),
@@ -81,7 +85,7 @@ pub const DARK: Palette = Palette {
     selected_row: hex(0x1f2a3d),
     hover_row: hex(0x2a2a28),
     danger_subtle: hex(0x3a2422),
-    tooltip: hex(0x25292e),
+    tooltip: hex(0x3a3f46),
 };
 
 pub fn palette(ctx: &egui::Context) -> &'static Palette {
@@ -181,7 +185,41 @@ fn visuals(p: &Palette) -> Visuals {
     v.widgets.hovered.weak_bg_fill = p.hover_row;
     v.widgets.active.bg_fill = p.selected_row;
     v.widgets.active.weak_bg_fill = p.selected_row;
+    // Every control gets a 1 px edge in both themes; focus and press are the accent, never near-white.
+    v.widgets.inactive.bg_stroke = Stroke::new(1.0, p.border);
+    v.widgets.hovered.bg_stroke = Stroke::new(1.0, p.border);
+    v.widgets.open.bg_stroke = Stroke::new(1.0, p.border);
+    v.widgets.open.bg_fill = p.surface_2;
+    v.widgets.open.weak_bg_fill = p.surface_2;
+    v.widgets.active.bg_stroke = Stroke::new(1.0, p.accent);
+    v.selection.stroke = Stroke::new(1.0, p.accent);
+    for w in [&mut v.widgets.inactive, &mut v.widgets.hovered, &mut v.widgets.active, &mut v.widgets.open] {
+        w.corner_radius = CornerRadius::same(6);
+        w.expansion = 0.0;
+    }
+    v.popup_shadow = Shadow::NONE;
     v
+}
+
+/// WCAG 2 contrast ratio of two opaque colours (1.0 to 21.0).
+pub fn contrast(a: Color32, b: Color32) -> f32 {
+    let lum = |c: Color32| {
+        let lin = |v: u8| {
+            let v = f32::from(v) / 255.0;
+            if v <= 0.039_28 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) }
+        };
+        0.2126 * lin(c.r()) + 0.7152 * lin(c.g()) + 0.0722 * lin(c.b())
+    };
+    let (x, y) = (lum(a), lum(b));
+    (x.max(y) + 0.05) / (x.min(y) + 0.05)
+}
+
+/// `fg` (possibly translucent) composited over the opaque `bg`.
+pub fn over(fg: Color32, bg: Color32) -> Color32 {
+    let [r, g, b, a] = fg.to_srgba_unmultiplied();
+    let t = f32::from(a) / 255.0;
+    let m = |f: u8, b: u8| (f32::from(f) * t + f32::from(b) * (1.0 - t)).round() as u8;
+    Color32::from_rgb(m(r, bg.r()), m(g, bg.g()), m(b, bg.b()))
 }
 
 pub fn apply(ctx: &egui::Context) {
@@ -189,6 +227,7 @@ pub fn apply(ctx: &egui::Context) {
     ctx.set_visuals_of(egui::Theme::Dark, visuals(&DARK));
     ctx.all_styles_mut(|s| {
         s.spacing.item_spacing = egui::vec2(8.0, 6.0);
+        s.spacing.button_padding = egui::vec2(12.0, 4.0);
         s.text_styles.insert(egui::TextStyle::Body, body(14.0));
         s.text_styles.insert(egui::TextStyle::Button, body(14.0));
         s.text_styles.insert(egui::TextStyle::Small, body(12.0));
@@ -287,6 +326,26 @@ mod tests {
             // An unparsable override is ignored.
             let bad = BTreeMap::from([("Blocked".to_string(), "red".to_string())]);
             assert_eq!(status_tint("Blocked", "new", p, &bad), tint_from_hue(hex(RED), p));
+        }
+    }
+
+    #[test]
+    fn on_accent_reads_on_the_accent() {
+        assert!(contrast(LIGHT.on_accent, LIGHT.accent) >= 4.5, "{}", contrast(LIGHT.on_accent, LIGHT.accent));
+        assert!(contrast(DARK.on_accent, DARK.accent) >= 7.0, "{}", contrast(DARK.on_accent, DARK.accent));
+    }
+
+    #[test]
+    fn contrast_of_black_on_white_is_21() {
+        assert!((contrast(Color32::BLACK, Color32::WHITE) - 21.0).abs() < 0.01);
+        assert!((contrast(Color32::WHITE, Color32::WHITE) - 1.0).abs() < 1e-6);
+        assert_eq!(over(Color32::from_rgba_unmultiplied(0, 0, 0, 0), Color32::WHITE), Color32::WHITE);
+    }
+
+    #[test]
+    fn toast_text_reads_on_the_tooltip_fill() {
+        for p in [&LIGHT, &DARK] {
+            assert!(contrast(Color32::WHITE, p.tooltip) >= 7.0);
         }
     }
 

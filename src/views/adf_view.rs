@@ -147,6 +147,7 @@ mod tests {
             text: c(5),
             muted: c(6),
             accent: c(7),
+            on_accent: c(18),
             on_track: c(8),
             at_risk: c(9),
             off_track: c(10),

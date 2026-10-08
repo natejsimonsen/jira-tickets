@@ -13,16 +13,11 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
     let p = theme::palette(ctx);
     // Above the pickers' Foreground dialog: the backdrop at Foreground (shown
     // after the dialog, so on top of it) and the panel at Tooltip.
-    let backdrop = egui::Area::new(egui::Id::new("help-backdrop")).order(egui::Order::Foreground).fixed_pos(egui::pos2(0.0, 0.0)).show(ctx, |ui| {
-        let r = ui.ctx().content_rect();
-        ui.painter().rect_filled(r, 0.0, egui::Color32::from_black_alpha(90));
-        ui.allocate_rect(r, egui::Sense::click())
-    });
-    if backdrop.inner.clicked() {
+    if crate::views::backdrop(ctx, "help-backdrop", egui::Order::Foreground, p).clicked() {
         app.actions.push(Action::ToggleHelp);
     }
     egui::Area::new(egui::Id::new("help")).order(egui::Order::Tooltip).anchor(egui::Align2::CENTER_CENTER, vec2(0.0, -20.0)).show(ctx, |ui| {
-        Frame::new().fill(p.surface).stroke(Stroke::new(1.0, p.border)).corner_radius(8).inner_margin(Margin::same(18)).show(ui, |ui| {
+        Frame::new().fill(crate::views::dialog_fill(p)).stroke(Stroke::new(1.0, p.border)).corner_radius(6).inner_margin(Margin::same(18)).show(ui, |ui| {
             ui.set_width(520.0);
             ui.label(RichText::new("Keyboard").font(theme::bold(16.0)).color(p.text));
             ui.add_space(8.0);

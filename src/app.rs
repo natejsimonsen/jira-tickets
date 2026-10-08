@@ -593,10 +593,8 @@ impl App {
                         self.drafts.remove(&key);
                     }
                 }
-                match result {
-                    Ok(()) => self.toast(format!("{what} done"), false),
-                    Err(e) => self.toast(format!("{what} failed: {e}"), true),
-                }
+                let (text, error) = done_toast(what, &result);
+                self.toast(text, error);
                 if self.client.is_some() {
                     self.load_detail(&key, true);
                     self.refresh_all();
@@ -1051,6 +1049,15 @@ impl App {
     }
 }
 
+/// The toast for a finished write: done, blocked by read-only mode, or failed.
+pub fn done_toast(what: &str, result: &jira::Result<()>) -> (String, bool) {
+    match result {
+        Ok(()) => (format!("{what} done"), false),
+        Err(e) if jira::is_read_only(e) => (format!("Read-only mode: {} not sent to Jira", what.to_lowercase()), true),
+        Err(e) => (format!("{what} failed: {e}"), true),
+    }
+}
+
 /// Which issue to rank next to, and whether it goes before it.
 pub fn rank_target(rows: &[String], key: &str, delta: i32) -> Option<(String, bool)> {
     let i = rows.iter().position(|k| k == key)?;
@@ -1338,6 +1345,15 @@ mod tests {
         for bad in ["file:///etc/passwd", "javascript:alert(1)", "smb://host/share", "-n", "x-apple.systempreferences:"] {
             assert!(!openable(bad), "{bad}");
         }
+    }
+
+    #[test]
+    fn done_toast_names_read_only_blocks() {
+        assert_eq!(done_toast("Rank", &Ok(())), ("Rank done".to_string(), false));
+        let ro = jira::Error::Other("read-only mode, so nothing was sent to Jira".into());
+        assert_eq!(done_toast("Sprint move", &Err(ro)), ("Read-only mode: sprint move not sent to Jira".to_string(), true));
+        let other = jira::Error::Other("Jira returned 400".into());
+        assert_eq!(done_toast("Assign", &Err(other)), ("Assign failed: Jira returned 400".to_string(), true));
     }
 
     #[test]

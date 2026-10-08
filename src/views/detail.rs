@@ -15,7 +15,7 @@ pub fn show(app: &mut App, ui: &mut Ui) {
         return;
     };
     let Some(issue) = app.store.get(&key).cloned() else {
-        ui.add(egui::Spinner::new());
+        crate::views::icons::spinner(ui, crate::views::icons::INLINE_SPINNER, p);
         return;
     };
     let loading = app.detail_loading.contains(&key);
@@ -37,7 +37,7 @@ pub fn show(app: &mut App, ui: &mut Ui) {
                     app.actions.push(Action::Copy(app.cfg.browse_url(&issue.key)));
                 }
                 if loading {
-                    ui.add(egui::Spinner::new().size(14.0));
+                    crate::views::icons::spinner(ui, crate::views::icons::INLINE_SPINNER, p);
                 }
             });
         });
@@ -69,7 +69,7 @@ pub fn show(app: &mut App, ui: &mut Ui) {
                 match &issue.description {
                     Some(d) => adf_view::show_value(ui, d, p),
                     None if loading => {
-                        ui.add(egui::Spinner::new().size(14.0));
+                        crate::views::icons::spinner(ui, crate::views::icons::INLINE_SPINNER, p);
                     }
                     None => adf_view::show_value(ui, &serde_json::Value::Null, p),
                 }
@@ -96,7 +96,7 @@ pub fn show(app: &mut App, ui: &mut Ui) {
                         app.actions.push(Action::Comment);
                     }
                     if app.posting.is_some() {
-                        ui.add(egui::Spinner::new().size(14.0));
+                        crate::views::icons::spinner(ui, crate::views::icons::INLINE_SPINNER, p);
                     }
                 });
             });
