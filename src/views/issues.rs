@@ -184,7 +184,7 @@ fn text_focus(ui: &Ui, app: &App) -> crate::keys::Focus {
     use crate::keys::Focus;
     let has = |id: egui::Id| ui.memory(|m| m.has_focus(id));
     if has(egui::Id::new("issue-search")) {
-        Focus::Search
+        Focus::Search(search_esc(!app.filter.text.is_empty(), app.search_active) == SearchEsc::Clear)
     } else if app.selected.as_deref().is_some_and(|k| has(super::detail::composer_id(k))) {
         Focus::Composer
     } else if ui.ctx().text_edit_focused() {
@@ -641,7 +641,8 @@ pub fn row_fill(selected: bool, hovered: bool, p: &Palette) -> egui::Color32 {
     }
 }
 
-/// Keys in mono 12.5 `text`, words in 12 `muted`, " · " between hints; elided from the right with "…".
+/// Keys in mono 12.5 `text`, words in 12 `muted`: 4 px from key to word, 12 px either side of the "·"
+/// between hints; elided from the right with "…".
 fn hint_bar(ui: &mut Ui, hs: &[crate::keys::Hint], p: &Palette) {
     use crate::keys::Tok;
     use egui::text::LayoutJob;
@@ -665,22 +666,34 @@ fn hint_bar(ui: &mut Ui, hs: &[crate::keys::Hint], p: &Palette) {
         j
     };
     let widths: Vec<f32> = hs.iter().map(|h| width(hint_job(h))).collect();
-    let (n, elided) = crate::keys::fit_hints(&widths, width(one(" · ")), width(one("…")), ui.available_width());
+    let sep = width(one("·")) + 2.0 * SEP_SPACE;
+    let (n, elided) = crate::keys::fit_hints(&widths, sep, width(one("…")), ui.available_width());
     let mut job = LayoutJob::default();
     for (i, h) in hs.iter().take(n).enumerate() {
         if i > 0 {
-            job.append(" · ", 0.0, muted.clone());
+            job.append("·", SEP_SPACE, muted.clone());
         }
         for (j, t) in h.iter().enumerate() {
             let (Tok::K(s) | Tok::W(s)) = t;
-            job.append(s, if j > 0 { 4.0 } else { 0.0 }, fmt(t));
+            let lead = match (i, j) {
+                (_, j) if j > 0 => 4.0,
+                (0, 0) => 0.0,
+                _ => SEP_SPACE,
+            };
+            job.append(s, lead, fmt(t));
         }
     }
     if elided {
-        job.append(if n > 0 { " · …" } else { "…" }, 0.0, muted);
+        if n > 0 {
+            job.append("·", SEP_SPACE, muted.clone());
+        }
+        job.append("…", if n > 0 { SEP_SPACE } else { 0.0 }, muted);
     }
     ui.add(egui::Label::new(job).selectable(false).wrap_mode(egui::TextWrapMode::Extend));
 }
+
+/// Space either side of the "·" between hints.
+const SEP_SPACE: f32 = 12.0;
 
 fn goto_box(app: &mut App, ctx: &egui::Context, p: &Palette) {
     let Some(text) = app.goto.as_mut() else { return };

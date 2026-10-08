@@ -18,7 +18,8 @@ impl Group {
     }
 }
 
-/// `keys` lists alternatives separated by ", " (each one is a key chip).
+/// `keys` lists alternatives separated by ", " (each one is a key chip); " to " joins the ends of a range
+/// ("⌘1 to ⌘4"), drawn as two chips with a muted "to".
 pub struct KeyBinding {
     pub group: Group,
     pub keys: &'static str,
@@ -30,12 +31,12 @@ const fn b(group: Group, keys: &'static str, what: &'static str) -> KeyBinding {
 }
 
 pub const BINDINGS: &[KeyBinding] = &[
-    b(Group::Global, "⌘1–4", "Issues, Grooming, Team, Roadmap"),
+    b(Group::Global, "⌘1 to ⌘4", "Issues, Grooming, Team, Roadmap"),
     b(Group::Global, "⌘R", "Refresh"),
     b(Group::Global, "⌘W", "Close the window"),
     b(Group::Global, "?", "Show or hide this help"),
     b(Group::Issues, "⌘K", "Go to an issue by key, number, or link"),
-    b(Group::Issues, "Esc", "Close the go-to box or dialog"),
+    b(Group::Issues, "Esc", "Close the go-to box"),
     b(Group::Issues, "⌘F, /", "Focus search (Esc clears, then leaves it)"),
     b(Group::Issues, "j/k, ↑/↓", "Next or previous issue"),
     b(Group::Issues, "t", "Transition"),
@@ -55,9 +56,14 @@ pub const BINDINGS: &[KeyBinding] = &[
     b(Group::Pickers, "Esc", "Cancel"),
 ];
 
-/// The key chips of one binding.
+/// The alternatives of one binding; each is one chip, or a range (see `range`).
 pub fn chips(keys: &str) -> impl Iterator<Item = &str> {
     keys.split(", ")
+}
+
+/// The chips of one alternative: ["⌘1", "⌘4"] for the range "⌘1 to ⌘4", else just the key.
+pub fn range(alt: &str) -> Vec<&str> {
+    alt.split(" to ").collect()
 }
 
 /// The README keyboard table, in `BINDINGS` order, with a bold row per group.
@@ -69,7 +75,7 @@ pub fn readme_table() -> String {
             group = Some(k.group);
             out.push_str(&format!("| **{}** | |\n", k.group.name()));
         }
-        let keys = chips(k.keys).map(|c| format!("`{c}`")).collect::<Vec<_>>().join(" or ");
+        let keys = chips(k.keys).map(|c| range(c).iter().map(|k| format!("`{k}`")).collect::<Vec<_>>().join(" to ")).collect::<Vec<_>>().join(" or ");
         out.push_str(&format!("| {keys} | {} |\n", k.what));
     }
     out
@@ -91,8 +97,10 @@ pub type Hint = &'static [Tok];
 pub enum HintContext {
     Help,
     GoTo,
-    /// The search box has focus.
+    /// The search box has focus and Esc would clear it (text, or a search showing).
     Search,
+    /// The search box has focus with nothing to clear, so Esc leaves it.
+    SearchEmpty,
     /// The comment composer has focus.
     Composer,
     EditPicker,
@@ -107,7 +115,8 @@ pub enum HintContext {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Focus {
     None,
-    Search,
+    /// The search box; true when Esc would clear it rather than leave.
+    Search(bool),
     Composer,
     /// Some other field: plain letters would type into it.
     OtherText,
@@ -129,7 +138,8 @@ pub fn hint_context(help_open: bool, goto_open: bool, picker: Option<PickerHint>
         (_, _, Some(PickerHint::Other)) => HintContext::Picker,
         (_, true, None) => HintContext::GoTo,
         _ => match focus {
-            Focus::Search => HintContext::Search,
+            Focus::Search(true) => HintContext::Search,
+            Focus::Search(false) => HintContext::SearchEmpty,
             Focus::Composer => HintContext::Composer,
             Focus::None if has_selection => HintContext::Selected,
             _ => HintContext::Browse,
@@ -141,9 +151,10 @@ pub fn hint_context(help_open: bool, goto_open: bool, picker: Option<PickerHint>
 pub fn hints(c: HintContext) -> &'static [Hint] {
     match c {
         // Alternatives are separate chips; a slash only joins an up/down pair.
-        HintContext::Help => &[&[K("?"), K("Esc"), W("close")]],
+        HintContext::Help => &[&[K("?"), W("or"), K("Esc"), W("close")]],
         HintContext::GoTo => &[&[K("Enter"), W("open")], &[K("Esc"), W("close")]],
         HintContext::Search => &[&[K("Enter"), W("search JQL")], &[K("Esc"), W("clear")]],
+        HintContext::SearchEmpty => &[&[K("Enter"), W("search JQL")], &[K("Esc"), W("leave")]],
         HintContext::Composer => &[&[K("⌘Enter"), W("post")], &[K("Esc"), W("leave")]],
         HintContext::EditPicker => &[&[K("Tab"), W("next field")], &[K("Enter"), W("confirm")], &[K("Esc"), W("cancel")]],
         HintContext::AssignPicker => &[&[W("Type to filter")], &[K("↑/↓"), W("move")], &[K("Enter"), W("confirm")], &[K("Esc"), W("cancel")]],
@@ -214,7 +225,9 @@ mod tests {
     #[test]
     fn readme_table_groups_and_quotes_keys() {
         let t = readme_table();
-        assert!(t.starts_with("| Keys | Action |\n| --- | --- |\n| **Global** | |\n| `⌘1–4` | Issues, Grooming, Team, Roadmap |\n"));
+        assert!(t.starts_with("| Keys | Action |\n| --- | --- |\n| **Global** | |\n| `⌘1` to `⌘4` | Issues, Grooming, Team, Roadmap |\n"));
+        assert_eq!(range("⌘1 to ⌘4"), ["⌘1", "⌘4"]);
+        assert_eq!(range("j/k"), ["j/k"]);
         assert!(t.contains("| `⌘F` or `/` | Focus search (Esc clears, then leaves it) |\n"));
         assert!(t.contains("| `j/k` or `↑/↓` | Next or previous issue |\n"));
         assert_eq!(t.matches("| **").count(), 3);
@@ -229,13 +242,15 @@ mod tests {
         assert_eq!(hint_context(false, false, Some(PickerHint::Assign), true, Focus::OtherText), AssignPicker);
         assert_eq!(hint_text(hints(AssignPicker)), "Type to filter · ↑/↓ move · Enter confirm · Esc cancel");
         assert_eq!(hint_context(false, true, None, true, Focus::OtherText), GoTo);
-        assert_eq!(hint_context(false, false, None, true, Focus::Search), Search);
+        assert_eq!(hint_context(false, false, None, true, Focus::Search(true)), Search);
+        assert_eq!(hint_context(false, false, None, true, Focus::Search(false)), SearchEmpty);
+        assert_eq!(hint_text(hints(SearchEmpty)), "Enter search JQL · Esc leave");
         assert_eq!(hint_context(false, false, None, true, Focus::Composer), Composer, "the bar follows focus into the composer");
         assert_eq!(hint_context(false, false, None, true, Focus::None), Selected);
         assert_eq!(hint_context(false, false, None, true, Focus::OtherText), Browse, "letters type into the field, so no selection hints");
         assert_eq!(hint_context(false, false, None, false, Focus::None), Browse);
         assert_eq!(hint_text(hints(Composer)), "⌘Enter post · Esc leave");
-        assert_eq!(hint_text(hints(Help)), "? Esc close");
+        assert_eq!(hint_text(hints(Help)), "? or Esc close");
         assert_eq!(hint_text(hints(GoTo)), "Enter open · Esc close");
         assert_eq!(hint_text(hints(Search)), "Enter search JQL · Esc clear");
         assert_eq!(hint_text(hints(EditPicker)), "Tab next field · Enter confirm · Esc cancel");

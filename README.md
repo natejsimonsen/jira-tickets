@@ -42,13 +42,13 @@ Only a token you paste is saved. Signing out deletes that file.
 | Keys | Action |
 | --- | --- |
 | **Global** | |
-| `⌘1–4` | Issues, Grooming, Team, Roadmap |
+| `⌘1` to `⌘4` | Issues, Grooming, Team, Roadmap |
 | `⌘R` | Refresh |
 | `⌘W` | Close the window |
 | `?` | Show or hide this help |
 | **Issues** | |
 | `⌘K` | Go to an issue by key, number, or link |
-| `Esc` | Close the go-to box or dialog |
+| `Esc` | Close the go-to box |
 | `⌘F` or `/` | Focus search (Esc clears, then leaves it) |
 | `j/k` or `↑/↓` | Next or previous issue |
 | `t` | Transition |
