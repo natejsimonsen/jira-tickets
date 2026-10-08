@@ -1,0 +1,35 @@
+# Jira Tickets: design criteria (acceptance bar for UI/UX ratings)
+
+Chosen philosophy: **minimal and clean**, in the spirit of github-rs / GitHub Primer. Light and dark themes
+carry equal weight; a flow scores 10 only when both do.
+
+## What "minimal and clean" means here
+
+1. **One accent.** `accent` is the only saturated UI colour. Every other colour carries meaning: status tint,
+   epic hue, health (on/at-risk/off), danger. Decorative colour is a defect.
+2. **Quiet neutrals.** Backgrounds step `bg` → `surface` → `surface_2`; borders are 1 px `border`; text is
+   `text` with `muted` for secondary. No gradients, no drop shadows except the toast and modal backdrop.
+3. **One spacing scale.** 4 / 8 / 12 / 16 / 24 px. Paddings inside like components are identical
+   (every pill, every card, every panel margin). Rows align to a shared left edge; pills align to a baseline.
+4. **One type scale.** Body 14, small 12, mono 12.5 for keys/ids, bold 13.5 for row titles, 22 for the
+   detail title, 15 for the app title. No other sizes without a reason the rater can see.
+5. **One corner radius family.** 6 px for buttons, cards, dialogs; 10 px for pills; 4 px for picker rows.
+6. **Whitespace does the grouping.** Prefer space over borders; when a border is used it is `border`, 1 px.
+7. **Keyboard-first with visible affordances.** Every key has a visible hint somewhere (hint bar, tooltip,
+   help). Focus and selection states are unmistakable but calm (`selected_row` fill, not a bright outline).
+8. **Text is the UI.** Icons only where github-rs would use one (sync, chevrons). Labels are short,
+   sentence case, no trailing colons, no exclamation marks.
+9. **Nothing jumps.** Loading states hold their slot (spinner replaces control at same size); lists keep
+   previous rows while updating; toasts do not shift layout.
+10. **Density is moderate.** Rows ~44 px two-line; lists breathe but a 1440×900 window shows ≥ 14 rows.
+
+## How raters score (1–10)
+
+- 10: nothing to change; every element follows the rules above in both themes.
+- 8–9: polish only (a padding off by 4 px, a label wording, a colour a shade off).
+- 6–7: one visible inconsistency a user would notice (misaligned columns, inconsistent pill padding,
+  unclear active state).
+- ≤ 5: a usability problem (unclear what to do next, information hidden, contrast below 4.5:1, layout jump).
+
+Raters judge only the chunk they are given. Each finding states: what, where (screenshot + region),
+why it breaks a rule above, and the smallest fix.
