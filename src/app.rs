@@ -388,6 +388,18 @@ impl App {
         }
     }
 
+    /// The search the team picker and quick filter call for: the quick filter
+    /// ANDed with the team clause, or under No team label the no-team query
+    /// alone. None when neither applies (the list shows TeamOpen).
+    fn scoped_search_jql(&self) -> Option<String> {
+        let quick = self.filter.quick.and_then(|i| self.cfg.issues.filters.get(i));
+        match (quick, &self.filter.team) {
+            (Some(f), team) => Some(format!("{} AND ({})", store::quick_scope_jql(team, &self.cfg), f.jql)),
+            (None, crate::filter::TeamScope::None) => Some(store::jql_no_team(&self.cfg)),
+            (None, _) => None,
+        }
+    }
+
     /// `force` refetches even a detail fetched within DETAIL_FRESH.
     pub fn load_detail(&mut self, key: &str, force: bool) {
         if !should_load(self.client.is_some(), self.detail_loading.contains(key)) {
@@ -606,11 +618,15 @@ impl App {
                 self.cursor = 0;
             }
             Action::SetTeam(t) => {
+                let was_none = self.filter.team == crate::filter::TeamScope::None;
                 self.filter.team = t;
                 self.cursor = 0;
-                // A quick filter's search is scoped to the team; rerun it for the new one.
-                if let Some(q) = self.filter.quick {
-                    self.actions.push(Action::SetQuick(Some(q)));
+                // A quick filter's search, and No team label's, is scoped to the team; rerun it
+                // for the new one. Leaving No team label drops its search.
+                match self.scoped_search_jql() {
+                    Some(jql) => self.actions.push(Action::RunSearch(jql)),
+                    None if was_none => self.actions.push(Action::RunSearch(String::new())),
+                    None => {}
                 }
             }
             Action::ApplyTeamLabel => {
@@ -630,13 +646,7 @@ impl App {
             }
             Action::SetQuick(q) => {
                 self.filter.quick = q;
-                match q.and_then(|i| self.cfg.issues.filters.get(i)) {
-                    Some(f) => {
-                        let jql = format!("{} AND ({})", store::quick_scope_jql(&self.filter.team, &self.cfg), f.jql);
-                        self.actions.push(Action::RunSearch(jql));
-                    }
-                    None => self.actions.push(Action::RunSearch(String::new())),
-                }
+                self.actions.push(Action::RunSearch(self.scoped_search_jql().unwrap_or_default()));
             }
             Action::ToggleMine => {
                 self.filter.mine = !self.filter.mine;

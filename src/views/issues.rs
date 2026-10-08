@@ -11,7 +11,7 @@ use egui::{CornerRadius, Frame, Margin, Rect, RichText, Sense, Stroke, Ui, vec2}
 pub fn current_rows(app: &App) -> Vec<&Issue> {
     let src = if app.search_active { ListId::Search } else { ListId::TeamOpen };
     let all = app.store.list(src);
-    filter::visible(&all, &app.filter, app.me.as_ref().map(|m| m.display_name.as_str()))
+    filter::visible(&all, &app.filter, app.search_active, app.me.as_ref().map(|m| m.display_name.as_str()))
 }
 
 /// The row's leading pills: under All teams, its team labels in a neutral pill;
@@ -81,7 +81,7 @@ fn filters(app: &mut App, ui: &mut Ui, p: &Palette) {
         });
         // Epic picker: parents of the scoped team's issues (other filters ignored), by summary.
         let src = if app.search_active { ListId::Search } else { ListId::TeamOpen };
-        let mut epics: Vec<(String, String)> = filter::in_team(&app.store.list(src), &app.filter)
+        let mut epics: Vec<(String, String)> = filter::in_team(&app.store.list(src), &app.filter, app.search_active)
             .iter()
             .filter_map(|i| Some((i.parent_key.clone()?, i.parent_summary.clone().unwrap_or_default())))
             .collect();

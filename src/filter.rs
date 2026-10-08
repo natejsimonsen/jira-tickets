@@ -55,18 +55,20 @@ pub fn missing_team_label(issue: &Issue, label: &str, members: &[String]) -> boo
     !issue.labels.iter().any(|l| l == label) && assigned_to_member(issue, members)
 }
 
-fn in_team_scope(issue: &Issue, f: &IssueFilter) -> bool {
+/// `searched`: the rows are a search's. A No team label search was already
+/// scoped by the server (`store::jql_no_team`), so it keeps every row.
+fn in_team_scope(issue: &Issue, f: &IssueFilter, searched: bool) -> bool {
     let members = |l: &str| f.team_members.get(l).map(Vec::as_slice).unwrap_or_default();
     match &f.team {
         TeamScope::All => true,
         TeamScope::Label(l) => on_team(issue, l, members(l)),
-        TeamScope::None => !f.team_labels.iter().any(|l| on_team(issue, l, members(l))),
+        TeamScope::None => searched || !f.team_labels.iter().any(|l| on_team(issue, l, members(l))),
     }
 }
 
 /// Only the team scope applied, ignoring every other filter (feeds the epic picker).
-pub fn in_team<'a>(issues: &[&'a Issue], f: &IssueFilter) -> Vec<&'a Issue> {
-    issues.iter().copied().filter(|i| in_team_scope(i, f)).collect()
+pub fn in_team<'a>(issues: &[&'a Issue], f: &IssueFilter, searched: bool) -> Vec<&'a Issue> {
+    issues.iter().copied().filter(|i| in_team_scope(i, f, searched)).collect()
 }
 
 /// Picker entries: "All teams", each configured team, then "No team label".
@@ -77,12 +79,13 @@ pub fn team_options(teams: &[TeamEntry]) -> Vec<(TeamScope, String)> {
         .collect()
 }
 
-pub fn visible<'a>(issues: &[&'a Issue], f: &IssueFilter, me: Option<&str>) -> Vec<&'a Issue> {
+/// `searched`: the rows are a search's (see `in_team_scope`).
+pub fn visible<'a>(issues: &[&'a Issue], f: &IssueFilter, searched: bool, me: Option<&str>) -> Vec<&'a Issue> {
     let needle = f.text.trim().to_lowercase();
     issues
         .iter()
         .copied()
-        .filter(|i| in_team_scope(i, f))
+        .filter(|i| in_team_scope(i, f, searched))
         .filter(|i| f.epic.as_deref().is_none_or(|e| i.parent_key.as_deref() == Some(e)))
         .filter(|i| match &f.sprint {
             SprintScope::All => true,
@@ -203,15 +206,15 @@ mod tests {
         let b = issue("CI-2", "Deployer overlays", Some("E-2"), None, &["PLAT", "infra"]);
         let all = vec![&a, &b];
         let mut f = IssueFilter::default();
-        assert_eq!(visible(&all, &f, Some("Ada")).len(), 2);
+        assert_eq!(visible(&all, &f, false, Some("Ada")).len(), 2);
         f.epic = Some("E-1".into());
-        assert_eq!(visible(&all, &f, None)[0].key, "CI-1");
+        assert_eq!(visible(&all, &f, false, None)[0].key, "CI-1");
         f.epic = None;
         f.mine = true;
-        assert_eq!(visible(&all, &f, Some("Ada")).len(), 1);
+        assert_eq!(visible(&all, &f, false, Some("Ada")).len(), 1);
         f.mine = false;
         f.text = "INFRA".into();
-        assert_eq!(visible(&all, &f, None)[0].key, "CI-2");
+        assert_eq!(visible(&all, &f, false, None)[0].key, "CI-2");
     }
 
     fn team_filter() -> IssueFilter {
@@ -232,7 +235,7 @@ mod tests {
         e.assignee.as_mut().unwrap().account_id = "ACCT-9".into();
         let all = vec![&a, &b, &c, &d, &e];
         let mut f = team_filter();
-        let keys = |f: &IssueFilter| visible(&all, f, None).iter().map(|i| i.key.clone()).collect::<Vec<_>>();
+        let keys = |f: &IssueFilter| visible(&all, f, false, None).iter().map(|i| i.key.clone()).collect::<Vec<_>>();
         assert_eq!(f.team, TeamScope::All);
         assert_eq!(keys(&f), ["CI-1", "CI-2", "CI-3", "CI-4", "CI-5"]);
         f.team = TeamScope::Label("PLAT".into());
@@ -241,6 +244,12 @@ mod tests {
         assert_eq!(keys(&f), ["CI-2", "CI-5"], "account id matches case-insensitively");
         f.team = TeamScope::None;
         assert_eq!(keys(&f), ["CI-3"]);
+        let searched = |f: &IssueFilter| visible(&all, f, true, None).iter().map(|i| i.key.clone()).collect::<Vec<_>>();
+        assert_eq!(searched(&f), ["CI-1", "CI-2", "CI-3", "CI-4", "CI-5"], "a No team label search was scoped by the server");
+        assert_eq!(in_team(&all, &f, true).len(), 5);
+        assert_eq!(in_team(&all, &f, false).len(), 1);
+        f.team = TeamScope::Label("PLAT".into());
+        assert_eq!(searched(&f), ["CI-1", "CI-4"], "other scopes still filter a search locally");
     }
 
     #[test]
@@ -301,7 +310,7 @@ mod tests {
         b.sprint = Some("Sprint 93".into());
         let c = issue("CI-3", "c", None, None, &[]);
         let all = vec![&a, &b, &c];
-        let keys = |f: &IssueFilter| visible(&all, f, None).iter().map(|i| i.key.clone()).collect::<Vec<_>>();
+        let keys = |f: &IssueFilter| visible(&all, f, false, None).iter().map(|i| i.key.clone()).collect::<Vec<_>>();
         let mut f = IssueFilter::default();
         assert_eq!(f.sprint, SprintScope::All);
         assert_eq!(keys(&f), ["CI-1", "CI-2", "CI-3"]);
