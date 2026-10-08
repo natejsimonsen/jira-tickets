@@ -35,9 +35,12 @@ fn main() -> eframe::Result {
         }
     };
     #[cfg(feature = "snapshot")]
-    if let Ok(out) = std::env::var("JIRA_TICKETS_SCREENSHOT") {
-        snapshot::run(&out, cfg);
-        return Ok(());
+    {
+        let out = std::env::var("JIRA_TICKETS_SCREENSHOT").ok();
+        if out.is_some() || std::env::var_os("JIRA_TICKETS_SCRIPT").is_some() {
+            snapshot::run(out.as_deref(), cfg);
+            return Ok(());
+        }
     }
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
