@@ -35,7 +35,7 @@ pub const BINDINGS: &[KeyBinding] = &[
     b(Group::Global, "⌘1 to ⌘4", "Issues, Grooming, Team, Roadmap"),
     b(Group::Global, "⌘R", "Refresh"),
     b(Group::Global, "⌘W", "Close the window"),
-    b(Group::Global, "?, Esc", "Show or hide this help"),
+    b(Group::Global, "?, Esc", "Toggle this help (Esc closes)"),
     b(Group::Issues, "⌘K", "Go to an issue by key, number, or link"),
     b(Group::Issues, "⌘F, /", "Focus search; Esc clears, then exits"),
     b(Group::Issues, "j/k, ↑/↓", "Next or previous issue"),
@@ -48,7 +48,7 @@ pub const BINDINGS: &[KeyBinding] = &[
     b(Group::Issues, "J/K", "Move down or up in rank"),
     b(Group::Issues, "c", "Copy the issue link"),
     b(Group::Issues, "⌘O", "Open in Jira"),
-    b(Group::Issues, "⌘Enter", "Post the comment (composer focused)"),
+    b(Group::Issues, "⌘Enter", "Post the comment; Esc keeps the draft"),
     b(Group::Pickers, "↑/↓", "Move"),
     b(Group::Pickers, "j/k", "Move, except in Assign"),
     b(Group::Pickers, "Tab/⇧Tab", "Next or previous field in Edit"),
@@ -274,7 +274,8 @@ mod tests {
         assert_eq!(range("⌘1 to ⌘4"), ["⌘1", "⌘4"]);
         assert_eq!(range("j/k"), ["j/k"]);
         assert!(t.contains("| `⌘F` or `/` | Focus search; Esc clears, then exits |\n"));
-        assert!(t.contains("| `?` or `Esc` | Show or hide this help |\n"));
+        assert!(t.contains("| `?` or `Esc` | Toggle this help (Esc closes) |\n"));
+        assert!(t.contains("| `⌘Enter` | Post the comment; Esc keeps the draft |\n"));
         assert!(!t.contains("Close the go-to box"), "the go-to bar shows its own Esc");
         assert!(t.contains("| `j/k` or `↑/↓` | Next or previous issue |\n"));
         assert_eq!(t.matches("| **").count(), 3);

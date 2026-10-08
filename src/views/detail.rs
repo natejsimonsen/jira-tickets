@@ -8,6 +8,10 @@ use egui::{Frame, Margin, RichText, Stroke, Ui, vec2};
 pub fn show(app: &mut App, ui: &mut Ui) {
     let p = theme::palette(ui.ctx());
     let Some(key) = app.selected.clone() else {
+        // Hidden under the help overlay, where it would poke out beside the panel.
+        if app.help_open {
+            return;
+        }
         ui.vertical_centered(|ui| {
             ui.add_space(120.0);
             ui.label(RichText::new("Select an issue").color(p.muted).size(16.0));

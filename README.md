@@ -45,7 +45,7 @@ Only a token you paste is saved. Signing out deletes that file.
 | `⌘1` to `⌘4` | Issues, Grooming, Team, Roadmap |
 | `⌘R` | Refresh |
 | `⌘W` | Close the window |
-| `?` or `Esc` | Show or hide this help |
+| `?` or `Esc` | Toggle this help (Esc closes) |
 | **Issues** | |
 | `⌘K` | Go to an issue by key, number, or link |
 | `⌘F` or `/` | Focus search; Esc clears, then exits |
@@ -59,7 +59,7 @@ Only a token you paste is saved. Signing out deletes that file.
 | `J/K` | Move down or up in rank |
 | `c` | Copy the issue link |
 | `⌘O` | Open in Jira |
-| `⌘Enter` | Post the comment (composer focused) |
+| `⌘Enter` | Post the comment; Esc keeps the draft |
 | **Pickers** | |
 | `↑/↓` | Move |
 | `j/k` | Move, except in Assign |

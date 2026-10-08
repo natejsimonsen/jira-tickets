@@ -151,11 +151,23 @@ fn chip(ui: &mut egui::Ui, text: &str, p: &Palette) {
     // In dark the chip fill is the dialog edge itself, so its outline is the next step up.
     let edge = if p.dark { crate::views::selected_edge(p) } else { p.border };
     ui.painter().rect(rect, 4.0, fill, Stroke::new(1.0, edge), egui::StrokeKind::Inside);
-    ui.painter().galley(rect.center() - galley.size() / 2.0, galley, p.text);
+    // Centred on the glyphs' ink, not their advance box: "⌘" carries extra advance on its right.
+    let x = ink_left(rect.center().x, galley.mesh_bounds.center().x);
+    ui.painter().galley(egui::pos2(x, rect.center().y - galley.size().y / 2.0), galley, p.text);
+}
+
+/// Where to put a galley so its ink centre (`ink_centre`, from the galley's origin) lands on `centre`.
+pub fn ink_left(centre: f32, ink_centre: f32) -> f32 {
+    centre - ink_centre
 }
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn chips_centre_the_ink() {
+        assert_eq!(super::ink_left(50.0, 6.0), 44.0);
+    }
+
     #[test]
     fn rows_sit_34_apart() {
         assert_eq!(super::row_gap(18.0), 16.0);
