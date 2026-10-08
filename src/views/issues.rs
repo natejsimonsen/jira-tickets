@@ -6,7 +6,7 @@ use crate::jira::Issue;
 use crate::store::ListId;
 use crate::theme::{self, Palette};
 use crate::views::{button, pill};
-use egui::{Frame, Margin, RichText, Sense, Stroke, Ui, vec2};
+use egui::{CornerRadius, Frame, Margin, Rect, RichText, Sense, Stroke, Ui, vec2};
 
 pub fn current_rows(app: &App) -> Vec<&Issue> {
     let src = if app.search_active { ListId::Search } else { ListId::TeamOpen };
@@ -118,6 +118,8 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
         }
     });
     let columns = app.cfg.issues.columns.clone();
+    let cfg = app.cfg.clone();
+    let (status_colors, epic_colors) = (&cfg.issues.status_colors, &cfg.issues.epic_colors);
     let selected = app.selected.clone();
     // Keyboard moves change the cursor; bring its row into view once per change.
     let scroll_cursor = app.cursor != app.last_cursor;
@@ -132,6 +134,7 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
             } else {
                 p.surface
             };
+            let epic = i.parent_key.as_deref().map(|k| theme::epic_tint(k, p, epic_colors));
             let r = Frame::new().fill(fill).stroke(Stroke::new(1.0, p.border)).corner_radius(6).inner_margin(Margin::symmetric(10, 8)).show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 ui.horizontal(|ui| {
@@ -144,11 +147,22 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
                         if v.is_empty() {
                             continue;
                         }
-                        let (bg, fg) = if c == "status" { (p.surface_2, theme::status_color(&i.status.category, p)) } else { (p.surface_2, p.muted) };
+                        let (bg, fg) = match (c.as_str(), epic) {
+                            ("status", _) => {
+                                let t = theme::status_tint(&i.status.name, &i.status.category, p, status_colors);
+                                (t.bg, t.fg)
+                            }
+                            ("parent.summary" | "parent.key", Some(t)) => (t.bg, t.fg),
+                            _ => (p.surface_2, p.muted),
+                        };
                         pill(ui, &v, bg, fg);
                     }
                 });
             });
+            if let Some(t) = epic {
+                let rect = r.response.rect;
+                ui.painter().rect_filled(Rect::from_min_size(rect.min, vec2(3.0, rect.height())), CornerRadius { nw: 6, sw: 6, ne: 0, se: 0 }, t.fg);
+            }
             let r = r.response.interact(Sense::click());
             if r.clicked() {
                 app.cursor = idx;

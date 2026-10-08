@@ -24,7 +24,8 @@ pub fn show(app: &mut App, ui: &mut Ui) {
             ui.label(RichText::new(&issue.key).font(theme::mono(13.0)).color(p.muted));
             if let (Some(pk), Some(ps)) = (&issue.parent_key, &issue.parent_summary) {
                 ui.label(RichText::new("·").color(p.muted));
-                if ui.link(RichText::new(format!("{pk} {ps}")).color(p.muted).size(13.0)).clicked() {
+                let epic = theme::epic_tint(pk, p, &app.cfg.issues.epic_colors);
+                if ui.link(RichText::new(format!("{pk} {ps}")).color(epic.fg).size(13.0)).clicked() {
                     app.actions.push(Action::SetEpic(Some(pk.clone())));
                 }
             }
@@ -43,7 +44,8 @@ pub fn show(app: &mut App, ui: &mut Ui) {
         ui.label(RichText::new(&issue.summary).font(theme::bold(22.0)).color(p.text));
         ui.add_space(6.0);
         ui.horizontal(|ui| {
-            pill(ui, &issue.status.name, p.surface_2, theme::status_color(&issue.status.category, p));
+            let st = theme::status_tint(&issue.status.name, &issue.status.category, p, &app.cfg.issues.status_colors);
+            pill(ui, &issue.status.name, st.bg, st.fg);
             pill(ui, &issue.issue_type, p.surface_2, p.muted);
             if !issue.priority.is_empty() {
                 pill(ui, &issue.priority, p.surface_2, p.muted);

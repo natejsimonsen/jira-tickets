@@ -57,6 +57,10 @@ pub struct Team {
 pub struct Issues {
     pub columns: Vec<String>,
     pub filters: Vec<QuickFilter>,
+    /// Status name (case-insensitive) to "#rrggbb".
+    pub status_colors: BTreeMap<String, String>,
+    /// Epic key to "#rrggbb".
+    pub epic_colors: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -120,6 +124,8 @@ impl Default for Issues {
                 QuickFilter { name: s("Only Opened"), jql: s("status not in (Closed)") },
                 QuickFilter { name: s("To Do"), jql: s("statusCategory = \"To Do\"") },
             ],
+            status_colors: BTreeMap::new(),
+            epic_colors: BTreeMap::new(),
         }
     }
 }
@@ -252,7 +258,7 @@ pub fn write_example(path: &Path) -> Result<(), String> {
     std::fs::write(path, EXAMPLE).map_err(|e| e.to_string())
 }
 
-pub const EXAMPLE: &str = r#"# Jira Tickets configuration
+pub const EXAMPLE: &str = r##"# Jira Tickets configuration
 
 site = "https://yourcompany.atlassian.net"
 email = "you@example.com"
@@ -295,6 +301,11 @@ jql = "status not in (Closed)"
 [[issues.filters]]
 name = "To Do"
 jql = 'statusCategory = "To Do"'
+# Optional colour overrides, "#rrggbb". Status names are matched case-insensitively.
+# [issues.status_colors]
+# "Ready for Work" = "#0f9d9a"
+# [issues.epic_colors]
+# "CI-1860" = "#8250df"
 
 [roadmap]
 # epics = ["CI-1860"]            # optional allowlist
@@ -306,7 +317,7 @@ horizon_by_status = { "In Progress" = "now", "Ready for Work" = "next", "Plannin
 # confidence_field = "customfield_XXXXX"
 # next_milestone_field = "customfield_XXXXX"
 # definition_of_done_field = "customfield_XXXXX"
-"#;
+"##;
 
 #[cfg(test)]
 mod tests {
@@ -349,6 +360,7 @@ email = "me@example.com"
         let text = std::fs::read_to_string(&p).unwrap();
         let parsed: Config = toml::from_str(&text).unwrap();
         assert_eq!(parsed.team.members.len(), 6);
+        assert!(parsed.issues.status_colors.is_empty() && parsed.issues.epic_colors.is_empty());
         assert!(c.is_err());
     }
 
@@ -390,6 +402,15 @@ email = "me@example.com"
         let got = op_read_via(op, shell, "op://Private/Jira/credential", Some("acme.1password.com")).unwrap();
         assert_eq!(got, "-lc op read --account 'acme.1password.com' 'op://Private/Jira/credential'");
         assert!(op_read_via(op, shell, "op://a/b/c", Some("it's")).is_err());
+    }
+
+    #[test]
+    fn colour_override_tables_parse() {
+        let text = format!("{MINIMAL}\n[issues.status_colors]\n\"Ready for Work\" = \"#0f9d9a\"\n[issues.epic_colors]\n\"CI-1860\" = \"#8250df\"\n");
+        let c: Config = toml::from_str(&text).unwrap();
+        assert_eq!(c.issues.status_colors.get("Ready for Work").map(String::as_str), Some("#0f9d9a"));
+        assert_eq!(c.issues.epic_colors.get("CI-1860").map(String::as_str), Some("#8250df"));
+        assert_eq!(c.issues.columns.len(), 4);
     }
 
     #[test]
