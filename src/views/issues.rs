@@ -805,7 +805,8 @@ fn goto_box(app: &mut App, ctx: &egui::Context, p: &Palette) {
                 ui.set_width(GOTO_W - 2.0 * GOTO_PAD);
                 ui.label(RichText::new("Go to issue").font(theme::bold(13.5)).color(p.text));
                 ui.add_space(4.0);
-                let r = ui.add(crate::views::input_field(text, "9001, CI-9001, or a browse link", theme::mono(12.5), p));
+                // Proportional 14 like the search box: mono is for rendered ids, not input.
+                let r = ui.add(crate::views::input_field(text, "9001, CI-9001, or a browse link", theme::body(14.0), p));
                 // The box keeps focus while open, so Enter counts whether or not the field just gave it up.
                 if (r.has_focus() || r.lost_focus()) && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                     go = true;
