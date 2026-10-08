@@ -153,6 +153,10 @@ fn spans(content: Option<&Value>) -> Vec<Span> {
                         _ => {}
                     }
                 }
+                // A smart link's card is followed by " )" or " ," in Jira's ADF: drop that stray space.
+                if after_card(&out) {
+                    s.text = trim_space_before_punctuation(&s.text);
+                }
                 out.push(s);
             }
             "hardBreak" => out.push(Span { text: "\n".into(), ..Default::default() }),
@@ -160,7 +164,8 @@ fn spans(content: Option<&Value>) -> Vec<Span> {
             "emoji" => out.push(Span { text: emoji_text(n), ..Default::default() }),
             "inlineCard" => {
                 let url = n["attrs"]["url"].as_str().unwrap_or("").to_string();
-                out.push(Span { text: url.clone(), link: Some(url), ..Default::default() });
+                let text = browse_key(&url).map_or_else(|| url.clone(), str::to_string);
+                out.push(Span { text, link: Some(url), ..Default::default() });
             }
             "status" => out.push(Span { text: format!("[{}]", n["attrs"]["text"].as_str().unwrap_or("")), code: true, ..Default::default() }),
             "date" => out.push(Span { text: n["attrs"]["timestamp"].as_str().unwrap_or("").to_string(), ..Default::default() }),
@@ -170,6 +175,46 @@ fn spans(content: Option<&Value>) -> Vec<Span> {
                     out.push(Span { text: t, ..Default::default() });
                 }
             }
+        }
+    }
+    out
+}
+
+/// The issue key of a Jira `/browse/<KEY>` URL ("https://x.atlassian.net/browse/CI-1?a=b" → "CI-1").
+pub fn browse_key(url: &str) -> Option<&str> {
+    let rest = &url[url.find("/browse/")? + "/browse/".len()..];
+    let key = rest.split(['/', '?', '#']).next()?;
+    let (project, num) = key.split_once('-')?;
+    let ok = !project.is_empty()
+        && project.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+        && project.starts_with(|c: char| c.is_ascii_uppercase())
+        && !num.is_empty()
+        && num.chars().all(|c| c.is_ascii_digit());
+    ok.then_some(key)
+}
+
+/// The last span pushed came from an inlineCard (a link whose text is its key or URL).
+fn after_card(out: &[Span]) -> bool {
+    out.last().is_some_and(|s| s.link.as_deref().is_some_and(|l| s.text == l || browse_key(l) == Some(s.text.as_str())))
+}
+
+/// " ) and more" → ") and more": leading spaces go when the first other character is punctuation.
+pub fn trim_space_before_punctuation(text: &str) -> String {
+    let t = text.trim_start_matches(' ');
+    if t.starts_with([')', ',', '.', ';', ':', '!', '?', ']']) { t.to_string() } else { text.to_string() }
+}
+
+/// Inline code with trailing whitespace inside the mark ("`foo `") would wrap with a padded fragment of
+/// background; the whitespace moves out of the code span into a plain one.
+pub fn tidy_code_spans(spans: &[Span]) -> Vec<Span> {
+    let mut out = Vec::with_capacity(spans.len());
+    for sp in spans {
+        let trimmed = sp.text.trim_end();
+        if sp.code && trimmed.len() < sp.text.len() && !trimmed.is_empty() {
+            out.push(Span { text: trimmed.to_string(), ..sp.clone() });
+            out.push(Span { text: sp.text[trimmed.len()..].to_string(), code: false, ..sp.clone() });
+        } else {
+            out.push(sp.clone());
         }
     }
     out
@@ -251,6 +296,42 @@ mod tests {
         let code = super::Span { code: true, ..plain("see https://x.y") };
         assert_eq!(super::linkify(std::slice::from_ref(&code)), vec![code], "code stays code");
         assert_eq!(super::linkify(&[plain("no links")]), vec![plain("no links")]);
+    }
+
+    #[test]
+    fn inline_card_shows_the_key_and_drops_the_stray_space() {
+        let v = serde_json::json!({"content": [{"type": "paragraph", "content": [
+            {"type": "text", "text": "(see "},
+            {"type": "inlineCard", "attrs": {"url": "https://x.atlassian.net/browse/CI-3779"}},
+            {"type": "text", "text": " ) and "},
+            {"type": "inlineCard", "attrs": {"url": "https://github.com/a/b/pull/1"}},
+            {"type": "text", "text": " too"}
+        ]}]});
+        let d = super::parse(&v);
+        let super::Block::Paragraph(s) = &d.blocks[0] else { panic!() };
+        let texts: Vec<&str> = s.iter().map(|x| x.text.as_str()).collect();
+        assert_eq!(texts, ["(see ", "CI-3779", ") and ", "https://github.com/a/b/pull/1", " too"]);
+        assert_eq!(s[1].link.as_deref(), Some("https://x.atlassian.net/browse/CI-3779"));
+    }
+
+    #[test]
+    fn browse_keys_and_punctuation() {
+        assert_eq!(super::browse_key("https://x.atlassian.net/browse/CI-1?focus=1"), Some("CI-1"));
+        assert_eq!(super::browse_key("https://x.atlassian.net/browse/CI-12/"), Some("CI-12"));
+        assert_eq!(super::browse_key("https://x.atlassian.net/browse/ci-1"), None);
+        assert_eq!(super::browse_key("https://x.atlassian.net/browse/CI-"), None);
+        assert_eq!(super::browse_key("https://github.com/x"), None);
+        assert_eq!(super::trim_space_before_punctuation(" ),"), "),");
+        assert_eq!(super::trim_space_before_punctuation(" and"), " and");
+        assert_eq!(super::trim_space_before_punctuation(""), "");
+    }
+
+    #[test]
+    fn code_spans_lose_trailing_whitespace() {
+        let code = |t: &str| super::Span { text: t.into(), code: true, ..Default::default() };
+        let out = super::tidy_code_spans(&[code("foo bar  "), code("ok"), code("  ")]);
+        let got: Vec<(&str, bool)> = out.iter().map(|s| (s.text.as_str(), s.code)).collect();
+        assert_eq!(got, [("foo bar", true), ("  ", false), ("ok", true), ("  ", true)]);
     }
 
     #[test]

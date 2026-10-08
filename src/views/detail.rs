@@ -83,7 +83,8 @@ pub fn show(app: &mut App, ui: &mut Ui) {
                 // The comment cards and the composer sit 16 below their label (8 already given).
                 ui.add_space(LABEL_TO_BOX - 8.0 - ui.spacing().item_spacing.y);
                 for c in &issue.comments {
-                    Frame::new().fill(p.bg).stroke(Stroke::new(1.0, p.border)).corner_radius(6).inner_margin(Margin::same(12)).show(ui, |ui| {
+                    // surface_2 with a 1 px border, the same step as code blocks, in both themes.
+                    Frame::new().fill(p.surface_2).stroke(Stroke::new(1.0, p.border)).corner_radius(6).inner_margin(Margin::same(12)).show(ui, |ui| {
                         ui.set_width(ui.available_width());
                         ui.horizontal(|ui| {
                             ui.label(RichText::new(&c.author).font(theme::bold(13.5)));
@@ -92,7 +93,7 @@ pub fn show(app: &mut App, ui: &mut Ui) {
                         ui.add_space(4.0);
                         adf_view::show_value(ui, &c.body, p);
                     });
-                    ui.add_space(8.0);
+                    ui.add_space(COMMENT_GAP - ui.spacing().item_spacing.y);
                 }
                 ui.add_space(4.0);
                 composer(app, ui, p, &key);
@@ -120,6 +121,8 @@ const TITLE_TO_PILLS: f32 = 12.0;
 const SECTION_GAP: f32 = 24.0;
 /// Section label → the comment cards or composer box.
 const LABEL_TO_BOX: f32 = 16.0;
+/// Between comment cards: the cards' own 12 px padding.
+const COMMENT_GAP: f32 = 12.0;
 /// The composer's fixed height.
 const COMPOSER_H: f32 = 72.0;
 
@@ -176,11 +179,16 @@ fn field(ui: &mut Ui, p: &Palette, name: &str, value: &str) {
 /// Gap between the description column and the fields column.
 const FIELDS_GUTTER: f32 = 16.0;
 
-/// (main column, fields column) widths: fields are 220 wide, or 140 below a 1200 px window so the
-/// description keeps its measure; the main column takes the rest (at least 300).
+/// The description column's widest measure (about 75 characters of 14 px text).
+const MAIN_MAX: f32 = 520.0;
+
+/// (main column, fields column) widths: fields are at least 220 wide, or 140 below a 1200 px window so the
+/// description keeps its measure; the main column takes the rest (300 to MAIN_MAX), and any room past
+/// MAIN_MAX goes to the fields column.
 pub fn detail_columns(window_w: f32, available: f32) -> (f32, f32) {
-    let fields = if window_w < 1200.0 { 140.0 } else { 220.0 };
-    ((available - fields - FIELDS_GUTTER).max(300.0), fields)
+    let fields_min = if window_w < 1200.0 { 140.0 } else { 220.0 };
+    let main = (available - fields_min - FIELDS_GUTTER).clamp(300.0, MAIN_MAX);
+    (main, (available - main - FIELDS_GUTTER).max(fields_min))
 }
 
 /// The Comment button and ⌘Enter work when the draft has text and no post is in flight.
@@ -202,9 +210,10 @@ mod tests {
 
     #[test]
     fn fields_column_narrows_below_1200() {
-        assert_eq!(detail_columns(1440.0, 800.0), (564.0, 220.0));
+        assert_eq!(detail_columns(1440.0, 800.0), (520.0, 264.0), "main capped; the rest to the fields");
         assert_eq!(detail_columns(1000.0, 580.0), (424.0, 140.0));
         assert_eq!(detail_columns(1000.0, 300.0).0, 300.0, "floor");
+        assert_eq!(detail_columns(2560.0, 1800.0).0, MAIN_MAX);
     }
 
     #[test]

@@ -169,7 +169,7 @@ pub fn show(app: &mut App, ui: &mut Ui) {
             list(app, ui, p);
         });
     let detail = egui::CentralPanel::default()
-        .frame(Frame::new().fill(p.surface).inner_margin(Margin { left: 24, right: 24, top: 16, bottom: 0 }))
+        .frame(Frame::new().fill(p.surface).inner_margin(Margin { left: 24, right: 16, top: 16, bottom: 0 }))
         .show(ui, |ui| super::detail::show(app, ui));
     let r = detail.response.rect;
     app.detail_x = Some((r.left(), r.right()));

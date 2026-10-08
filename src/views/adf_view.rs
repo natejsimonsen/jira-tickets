@@ -165,7 +165,7 @@ fn span_format(sp: &Span, p: &Palette, size: f32, heading: bool, hovered: bool) 
 }
 
 fn spans(ui: &mut Ui, s: &[Span], p: &Palette, size: f32, heading: bool) {
-    let s = adf::linkify(s);
+    let s = adf::tidy_code_spans(&adf::linkify(s));
     let has_link = s.iter().any(|sp| sp.link.is_some());
     // The label's id is the next auto id; last frame's hover decides the underline.
     let hovered = has_link && ui.ctx().read_response(ui.next_auto_id()).is_some_and(|r| r.hovered());
