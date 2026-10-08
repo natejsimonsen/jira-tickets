@@ -36,6 +36,9 @@ pub enum Msg {
         id: ListId,
         result: jira::Result<Vec<Issue>>,
         stale: bool,
+        /// The query carried the members' assignee clause, so an unresolved
+        /// member may retry it without them (once; the retry carries none).
+        with_members: bool,
         /// Which `RunSearch` a `ListId::Search` result answers; None for other lists.
         seq: Option<u64>,
     },
@@ -367,11 +370,13 @@ impl App {
         self.load_list(ListId::Epics, store::jql_epics(&cfg, &parents), fields);
     }
 
+    /// TeamOpen and TeamInProgress are built with members unless they are disabled.
     pub fn load_list(&mut self, id: ListId, jql: String, fields: Vec<String>) {
-        self.load_list_seq(id, jql, fields, None);
+        let with_members = matches!(id, ListId::TeamOpen | ListId::TeamInProgress) && !self.members_disabled;
+        self.load_list_seq(id, jql, fields, None, with_members);
     }
 
-    fn load_list_seq(&mut self, id: ListId, jql: String, fields: Vec<String>, seq: Option<u64>) {
+    fn load_list_seq(&mut self, id: ListId, jql: String, fields: Vec<String>, seq: Option<u64>, with_members: bool) {
         let client_present = self.client.is_some();
         let entry = self.lists.entry(id).or_default();
         if defer_load(client_present, entry.loading) {
@@ -383,7 +388,7 @@ impl App {
         entry.loading = true;
         self.spawn(move |c, tx| {
             let fields: Vec<&str> = fields.iter().map(String::as_str).collect();
-            let _ = tx.send(Msg::List { id, result: c.search(&jql, &fields), stale: false, seq });
+            let _ = tx.send(Msg::List { id, result: c.search(&jql, &fields), stale: false, seq, with_members });
         });
     }
 
@@ -414,25 +419,18 @@ impl App {
         }
     }
 
-    /// A failed `id` load is one of ours that carries the members' assignee
-    /// group: TeamOpen, TeamInProgress, or the team-scoped search (not a JQL the user typed).
-    fn has_member_clause(&self, id: ListId) -> bool {
-        match id {
-            ListId::TeamOpen | ListId::TeamInProgress => true,
-            ListId::Search => self.scoped_search_jql().is_some_and(|j| self.last_search_jql.as_deref() == Some(j.trim())),
-            ListId::Epics => false,
-        }
-    }
-
     /// Runs `jql` (non-empty) as the Search list under the current `search_seq`,
     /// replacing any search in flight.
     fn search(&mut self, jql: &str) {
+        // Only the team-scoped search, built while members are enabled, carries
+        // them; a JQL the user typed, or one built labels-only, never retries.
+        let with_members = !self.members_disabled && self.scoped_search_jql().is_some_and(|j| j.trim() == jql.trim());
         self.search_active = true;
         self.last_search_jql = Some(jql.trim().to_string());
         let full = format!("project = {} AND ({}) ORDER BY Rank ASC", store::jql_quote(&self.cfg.scope.project), jql.trim());
         let fields: Vec<String> = jira::LIST_FIELDS.iter().map(|s| s.to_string()).collect();
         self.lists.entry(ListId::Search).or_default().loading = false;
-        self.load_list_seq(ListId::Search, full, fields, Some(self.search_seq));
+        self.load_list_seq(ListId::Search, full, fields, Some(self.search_seq), with_members);
     }
 
     /// `force` refetches even a detail fetched within DETAIL_FRESH.
@@ -479,13 +477,14 @@ impl App {
                 self.token_error = Some(m);
             }
             Msg::Me(Err(e)) => self.toast(e.to_string(), true),
-            Msg::List { id, result, stale: _, seq } => {
+            Msg::List { id, result, stale: _, seq, with_members } => {
                 if id == ListId::Search && !accept_search(self.search_seq, seq, self.search_active) {
                     return;
                 }
-                // Not gated on members_disabled: TeamOpen and TeamInProgress can both fail
-                // on the same member, and the second must still retry (or clear) its list.
-                let member_retry = matches!(&result, Err(e) if jira::is_unresolved_assignee(e)) && self.has_member_clause(id);
+                // Gated on what this query carried, not on members_disabled: TeamOpen and
+                // TeamInProgress can both fail on the same member and the second must still
+                // retry (or clear) its list, while a members-free query never retries.
+                let member_retry = should_retry_without_members(matches!(&result, Err(e) if jira::is_unresolved_assignee(e)), with_members);
                 let entry = self.lists.entry(id).or_default();
                 entry.loading = false;
                 let reload = std::mem::take(&mut entry.reload_after);
@@ -1090,6 +1089,12 @@ fn accept_search(current_seq: u64, msg_seq: Option<u64>, active: bool) -> bool {
     active && msg_seq == Some(current_seq)
 }
 
+/// A query fails over to labels only when Jira rejected an assignee and the
+/// query was sent with the members' clause; the retry carries none, so it is bounded.
+fn should_retry_without_members(err_is_unresolved_assignee: bool, sent_with_members: bool) -> bool {
+    err_is_unresolved_assignee && sent_with_members
+}
+
 /// Only a transport failure on a refresh list means we are offline; bad JQL,
 /// rate limits, or a failed search just show on that list.
 fn marks_offline(id: ListId, e: &jira::Error) -> bool {
@@ -1178,6 +1183,14 @@ impl eframe::App for App {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn retry_without_members_only_for_queries_that_carried_them() {
+        assert!(should_retry_without_members(true, true), "unresolved member in a members query: retry on labels");
+        assert!(!should_retry_without_members(true, false), "members-free query (e.g. a quick filter naming the user): no loop");
+        assert!(!should_retry_without_members(false, true), "any other error: no retry");
+        assert!(!should_retry_without_members(false, false));
+    }
 
     #[test]
     fn loads_need_a_client_and_no_load_in_flight() {

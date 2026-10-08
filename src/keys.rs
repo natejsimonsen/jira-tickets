@@ -75,10 +75,12 @@ pub fn readme_table() -> String {
 }
 
 /// The hint bar text for what the keyboard does right now on the Issues screen.
-pub fn hints(picker_open: bool, has_selection: bool) -> &'static str {
+/// `text_focused` (a text field has focus, or the go-to box is open) hides the
+/// selection keys, which would type into the field instead.
+pub fn hints(picker_open: bool, has_selection: bool, text_focused: bool) -> &'static str {
     if picker_open {
         "↑/↓ move · Enter confirm · Esc cancel"
-    } else if has_selection {
+    } else if has_selection && !text_focused {
         "t transition · a assign · s sprint · e edit · l label · J/K rank · c copy · ⌘O open · ? help"
     } else {
         "j/k move · ⌘K go to · / search · ? help"
@@ -107,9 +109,13 @@ mod tests {
 
     #[test]
     fn hints_follow_context() {
-        assert_eq!(hints(true, true), "↑/↓ move · Enter confirm · Esc cancel");
-        assert_eq!(hints(true, false), "↑/↓ move · Enter confirm · Esc cancel");
-        assert_eq!(hints(false, true), "t transition · a assign · s sprint · e edit · l label · J/K rank · c copy · ⌘O open · ? help");
-        assert_eq!(hints(false, false), "j/k move · ⌘K go to · / search · ? help");
+        let picker = "↑/↓ move · Enter confirm · Esc cancel";
+        let selected = "t transition · a assign · s sprint · e edit · l label · J/K rank · c copy · ⌘O open · ? help";
+        let browse = "j/k move · ⌘K go to · / search · ? help";
+        assert_eq!(hints(true, true, false), picker);
+        assert_eq!(hints(true, false, true), picker, "a picker's own text field still means picker keys");
+        assert_eq!(hints(false, true, false), selected);
+        assert_eq!(hints(false, true, true), browse, "letters type into the field, so no selection hints");
+        assert_eq!(hints(false, false, false), browse);
     }
 }

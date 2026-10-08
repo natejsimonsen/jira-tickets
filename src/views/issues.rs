@@ -51,7 +51,7 @@ pub fn show(app: &mut App, ui: &mut Ui) {
         .frame(Frame::new().fill(p.surface).inner_margin(Margin::symmetric(16, 0)).stroke(Stroke::new(1.0, p.border)))
         .show(ui, |ui| {
             ui.horizontal_centered(|ui| {
-                let hint = crate::keys::hints(app.picker.is_some(), app.selected.is_some());
+                let hint = crate::keys::hints(app.picker.is_some(), app.selected.is_some(), app.goto.is_some() || ui.ctx().text_edit_focused());
                 ui.label(RichText::new(hint).font(theme::mono(12.0)).color(p.muted));
             });
         });
