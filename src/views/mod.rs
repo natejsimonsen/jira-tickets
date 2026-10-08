@@ -32,6 +32,19 @@ fn placeholder(ui: &mut Ui, p: &Palette, text: &str) {
     });
 }
 
+/// The tabs, in ⌘1–⌘4 order.
+const TABS: [(Screen, &str); 4] = [(Screen::Issues, "Issues"), (Screen::Grooming, "Grooming"), (Screen::Team, "Team"), (Screen::Roadmap, "Roadmap")];
+
+/// Each tab is as wide as its bold (active) label, so switching tabs never moves its neighbours.
+pub fn tab_width(bold_w: f32, regular_w: f32) -> f32 {
+    bold_w.max(regular_w).ceil()
+}
+
+/// The header spinner is for syncing the refresh lists; a search shows its own spinner in the count row.
+pub fn header_syncing<'a>(lists: impl IntoIterator<Item = (&'a crate::store::ListId, &'a crate::app::Loaded)>) -> bool {
+    lists.into_iter().any(|(id, l)| *id != crate::store::ListId::Search && l.loading)
+}
+
 fn header(app: &mut App, ui: &mut Ui, p: &Palette) {
     egui::Panel::top("header")
         .exact_size(48.0)
@@ -40,43 +53,45 @@ fn header(app: &mut App, ui: &mut Ui, p: &Palette) {
             ui.horizontal_centered(|ui| {
                 ui.label(RichText::new("Jira Tickets").font(theme::bold(15.0)).color(p.text));
                 ui.add_space(16.0);
-                for (i, (s, name)) in
-                    [(Screen::Issues, "Issues"), (Screen::Grooming, "Grooming"), (Screen::Team, "Team"), (Screen::Roadmap, "Roadmap")].into_iter().enumerate()
-                {
+                ui.spacing_mut().item_spacing.x = 16.0;
+                for (i, (s, name)) in TABS.into_iter().enumerate() {
                     let active = app.screen == s;
-                    let text =
-                        RichText::new(name).font(if active { theme::bold(14.0) } else { theme::body(14.0) }).color(if active { p.text } else { p.muted });
-                    let r = ui.add(egui::Label::new(text).sense(Sense::click())).on_hover_text(format!("⌘{}", i + 1));
+                    let bold = ui.painter().layout_no_wrap(name.to_string(), theme::bold(14.0), p.text);
+                    let regular = ui.painter().layout_no_wrap(name.to_string(), theme::body(14.0), p.muted);
+                    let w = tab_width(bold.size().x, regular.size().x);
+                    let (rect, r) = ui.allocate_exact_size(vec2(w, 32.0), Sense::click());
+                    let galley = if active { bold } else { regular };
+                    let pos = rect.center() - galley.size() / 2.0;
+                    ui.painter().galley(pos, galley, p.text);
                     if active {
-                        let rect = r.rect;
-                        ui.painter().hline(rect.x_range(), rect.bottom() + 14.0, Stroke::new(2.0, p.accent));
+                        ui.painter().hline(rect.x_range(), rect.bottom() + 7.0, Stroke::new(2.0, p.accent));
                     }
+                    let r = r.on_hover_text(format!("{name} (⌘{})", i + 1));
                     if r.clicked() {
                         app.actions.push(Action::SetScreen(s));
                     }
-                    ui.add_space(6.0);
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.spacing_mut().item_spacing.x = 8.0;
                     if let Some(me) = &app.me {
-                        let r = ui.label(RichText::new(&me.display_name).color(p.muted).size(13.0)).interact(Sense::click());
-                        r.context_menu(|ui| {
+                        let r = ui.add(egui::Label::new(RichText::new(&me.display_name).color(p.muted).size(14.0)).selectable(false).sense(Sense::click()));
+                        r.on_hover_text("Right-click to sign out").context_menu(|ui| {
                             if ui.button("Sign out").clicked() {
                                 app.actions.push(Action::SignOut);
                             }
                         });
                     }
-                    ui.add_space(8.0);
-                    if app.lists.values().any(|l| l.loading) {
+                    // One fixed 32×32 slot: the spinner replaces the button at the same size.
+                    if header_syncing(&app.lists) {
                         icons::spinner_button(ui, p);
                     } else if icons::icon_button(ui, icons::Icon::Sync, "Refresh (⌘R)", p).clicked() {
                         app.actions.push(Action::Refresh);
                     }
-                    ui.add_space(4.0);
-                    if pill(ui, "? help", p.surface_2, p.muted).interact(Sense::click()).on_hover_text("Keyboard shortcuts (?)").clicked() {
+                    if icons::text_button(ui, "?", "Keyboard help (?)", p).clicked() {
                         app.actions.push(Action::ToggleHelp);
                     }
                     if crate::jira::READ_ONLY.load(std::sync::atomic::Ordering::Relaxed) {
-                        pill(ui, "read-only", p.danger_subtle, p.off_track);
+                        pill_sized(ui, "read-only", p.surface_2, p.muted, Stroke::NONE, HEADER_PILL_MARGIN);
                     }
                 });
             });
@@ -259,27 +274,29 @@ pub fn primary_button_if(text: &str, enabled: bool, p: &Palette) -> egui::Button
 }
 
 /// Pill inner padding (8/2) and radius (10).
-pub const PILL_MARGIN: Margin = Margin::symmetric(8, 2);
+pub const PILL_MARGIN: egui::Vec2 = vec2(8.0, 2.0);
+/// Header pills sit beside 32 px buttons, so they get more height (8/4).
+pub const HEADER_PILL_MARGIN: egui::Vec2 = vec2(8.0, 4.0);
 
 pub fn pill(ui: &mut Ui, text: &str, bg: Color32, fg: Color32) -> egui::Response {
-    pill_framed(ui, text, bg, fg, Stroke::NONE)
+    pill_sized(ui, text, bg, fg, Stroke::NONE, PILL_MARGIN)
 }
 
 /// A pill with a 1 px `border` edge, for rows whose fill would swallow a translucent wash.
 pub fn pill_outlined(ui: &mut Ui, text: &str, bg: Color32, fg: Color32, p: &Palette) -> egui::Response {
-    pill_framed(ui, text, bg, fg, Stroke::new(1.0, p.border))
+    pill_sized(ui, text, bg, fg, Stroke::new(1.0, p.border), PILL_MARGIN)
 }
 
-fn pill_framed(ui: &mut Ui, text: &str, bg: Color32, fg: Color32, stroke: Stroke) -> egui::Response {
-    // The stroke is drawn inside the frame, so take it out of the margin: outlined and plain pills are the same size.
-    let m = if stroke.width > 0.0 { Margin::symmetric(7, 1) } else { PILL_MARGIN };
-    Frame::new()
-        .fill(bg)
-        .stroke(stroke)
-        .corner_radius(10)
-        .inner_margin(m)
-        .show(ui, |ui| ui.add(egui::Label::new(RichText::new(text).color(fg).size(12.0)).selectable(false)))
-        .response
+/// Small text in an exact `text + 2×margin` rect (radius 10); the stroke is drawn inside, so outlined
+/// and plain pills are the same size and share a baseline.
+pub fn pill_sized(ui: &mut Ui, text: &str, bg: Color32, fg: Color32, stroke: Stroke, margin: egui::Vec2) -> egui::Response {
+    let galley = ui.painter().layout_no_wrap(text.to_string(), theme::body(12.0), fg);
+    let (rect, resp) = ui.allocate_exact_size(galley.size() + margin * 2.0, Sense::hover());
+    if ui.is_rect_visible(rect) {
+        ui.painter().rect(rect, 10.0, bg, stroke, egui::StrokeKind::Inside);
+        ui.painter().galley(rect.min + margin, galley, fg);
+    }
+    resp
 }
 
 pub fn health_dot(ui: &mut Ui, color: Color32) {
@@ -309,6 +326,24 @@ mod widget_tests {
         assert_eq!(on.text, "\u{2713} Mine");
         assert_eq!(off.sections[0].format.color, Color32::TRANSPARENT);
         assert_eq!(on.sections[0].format.color, Color32::WHITE);
+    }
+
+    #[test]
+    fn tabs_reserve_their_bold_width() {
+        assert_eq!(tab_width(52.3, 48.0), 53.0);
+        assert_eq!(tab_width(40.0, 41.0), 41.0, "never narrower than either face");
+    }
+
+    #[test]
+    fn header_spinner_ignores_search() {
+        use crate::app::Loaded;
+        use crate::store::ListId;
+        let loading = || Loaded { loading: true, ..Default::default() };
+        let search = [(ListId::Search, loading())];
+        assert!(!header_syncing(search.iter().map(|(i, l)| (i, l))));
+        let sync = [(ListId::Search, Loaded::default()), (ListId::Epics, loading())];
+        assert!(header_syncing(sync.iter().map(|(i, l)| (i, l))));
+        assert!(!header_syncing(std::iter::empty()));
     }
 
     #[test]

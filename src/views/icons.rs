@@ -58,6 +58,14 @@ pub fn icon_button(ui: &mut Ui, icon: Icon, tip: &str, p: &Palette) -> Response 
     resp.on_hover_text(tip)
 }
 
+/// The 32×32 frame with a short text glyph (e.g. "?") in place of an icon.
+pub fn text_button(ui: &mut Ui, text: &str, tip: &str, p: &Palette) -> Response {
+    let (rect, resp) = ui.allocate_exact_size(Vec2::splat(BUTTON), Sense::click());
+    button_frame(ui, rect, resp.hovered(), p);
+    ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, text, crate::theme::bold(14.0), p.text);
+    resp.on_hover_text(tip)
+}
+
 /// The same 32×32 frame with a 16 px spinner, so the slot does not jump while loading.
 pub fn spinner_button(ui: &mut Ui, p: &Palette) -> Response {
     let (rect, resp) = ui.allocate_exact_size(Vec2::splat(BUTTON), Sense::hover());
