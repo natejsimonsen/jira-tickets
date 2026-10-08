@@ -109,7 +109,7 @@ jql = 'statusCategory = "To Do"'
 [roadmap]
 # epics = ["CI-1860", "CI-1569"]   # optional allowlist; default is every epic a team-label ticket points at
 lanes = { PLAT = "Platform" }  # label -> lane name
-horizon_by_status = { "In Progress" = "now", "Ready for Work" = "next", "Planning" = "next", "New" = "later", "Backlog" = "later" }
+horizon_by_status = { "Work in Progress" = "now", "In Progress" = "now", "Ready for Work" = "next", "Planning" = "next", "New" = "later", "Backlog" = "later" }
 # health_field = "customfield_XXXXX"
 # target_field = "customfield_XXXXX"   # default: duedate
 # start_field = "customfield_XXXXX"
@@ -335,7 +335,7 @@ Field mapping:
 
 | Concept | Default source | Override |
 |---|---|---|
-| Horizon | `horizon_by_status`; Done status category → Done | Label `horizon:now`, `horizon:next`, `horizon:later` |
+| Horizon | `horizon_by_status` (the live team's in-progress status is literally `Work in Progress`); Done status category → Done | Label `horizon:now`, `horizon:next`, `horizon:later` |
 | Health | Labels `health:on-track`, `health:at-risk`, `health:off-track`; absent → no health | `health_field` |
 | Priority chip | Priority Highest → P0, High → P1 | Labels `P0`, `P1` |
 | Target date | Epic `duedate` | `target_field` |
