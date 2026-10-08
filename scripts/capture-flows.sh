@@ -111,14 +111,21 @@ flow pickers-edit 'key:j;wait:800;key:e;wait:300;shot:01-open.png;key:escape' \
 flow issues-rank 'key:j;key:j;wait:800;shot:01-before.png;key:shift+j;wait:300;shot:02-after.png' \
     '01-before.png|Row selected before ranking' \
     '02-after.png|After shift+j rank down (read-only: expect a blocked toast)'
-flow help 'key:question;wait:200;shot:01-help.png;key:escape' \
-    '01-help.png|Keyboard help overlay'
+flow help 'key:question;wait:200;shot:01-help.png;shot:02-hintbar.png;key:escape' \
+    '01-help.png|Keyboard help overlay' \
+    '02-hintbar.png|Hint bar while help is open ("? or Esc close")'
 flow placeholders 'key:cmd+2;shot:01-grooming.png;key:cmd+3;shot:02-team.png;key:cmd+4;shot:03-roadmap.png' \
     '01-grooming.png|Grooming screen (cmd+2)' \
     '02-team.png|Team screen (cmd+3)' \
     '03-roadmap.png|Roadmap screen (cmd+4)'
-flow narrow 'width:1000;wait:300;shot:01-narrow-list.png' \
-    '01-narrow-list.png|Issues list at 1000 px wide'
+flow narrow 'width:1000;wait:300;shot:01-narrow-list.png;key:j;wait:1500;shot:02-narrow-detail.png' \
+    '01-narrow-list.png|Issues list at 1000 px wide' \
+    '02-narrow-detail.png|First row selected at 1000 px, detail pane loaded'
+flow issues-selected-hints 'key:j;wait:800;shot:01-selected.png' \
+    '01-selected.png|First row selected; hint bar shows the selection keys'
+# CI-4055 had the most comments (4) in the local cache when this flow was written.
+flow detail-comments 'key:cmd+k;type:CI-4055;wait:300;key:enter;wait:2000;shot:01-comments.png' \
+    '01-comments.png|An issue with several comments, opened via the go-to box'
 
 # Sign-in: a config with site/email but no token reference, no env token, no saved token file.
 signin_cfg="$out/signin-config.toml"
