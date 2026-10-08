@@ -156,9 +156,9 @@ pub fn hints(c: HintContext) -> &'static [Hint] {
         HintContext::Search => &[&[K("Enter"), W("search JQL")], &[K("Esc"), W("clear")]],
         HintContext::SearchEmpty => &[&[K("Enter"), W("search JQL")], &[K("Esc"), W("done")]],
         HintContext::Composer => &[&[K("⌘Enter"), W("post")], &[K("Esc"), W("done")]],
-        HintContext::EditPicker => &[&[K("Tab"), W("next field")], &[K("Enter"), W("confirm")], &[K("Esc"), W("cancel")]],
+        HintContext::EditPicker => &[&[K("Tab/Shift+Tab"), W("field")], &[K("Enter"), W("confirm")], &[K("Esc"), W("cancel")]],
         HintContext::AssignPicker => &[&[W("Type to filter")], &[K("↑/↓"), W("move")], &[K("Enter"), W("confirm")], &[K("Esc"), W("cancel")]],
-        HintContext::Picker => &[&[K("↑/↓"), W("move")], &[K("Enter"), W("confirm")], &[K("Esc"), W("cancel")]],
+        HintContext::Picker => &[&[K("j/k"), W("or"), K("↑/↓"), W("move")], &[K("Enter"), W("confirm")], &[K("Esc"), W("cancel")]],
         HintContext::Selected => &[
             &[K("j/k"), W("move")],
             &[K("t"), W("transition")],
@@ -253,8 +253,8 @@ mod tests {
         assert_eq!(hint_text(hints(Help)), "? or Esc close");
         assert_eq!(hint_text(hints(GoTo)), "Enter open · Esc close");
         assert_eq!(hint_text(hints(Search)), "Enter search JQL · Esc clear");
-        assert_eq!(hint_text(hints(EditPicker)), "Tab next field · Enter confirm · Esc cancel");
-        assert_eq!(hint_text(hints(Picker)), "↑/↓ move · Enter confirm · Esc cancel");
+        assert_eq!(hint_text(hints(EditPicker)), "Tab/Shift+Tab field · Enter confirm · Esc cancel");
+        assert_eq!(hint_text(hints(Picker)), "j/k or ↑/↓ move · Enter confirm · Esc cancel");
         assert_eq!(hint_text(hints(Browse)), "j/k move · ⌘K go to · ⌘F search · ? help");
         assert_eq!(hint_text(hints(Selected)), "j/k move · t transition · a assign · s sprint · e edit · l label · J/K rank · c copy · ⌘O open · ? help");
     }

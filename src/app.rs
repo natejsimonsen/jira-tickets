@@ -1271,17 +1271,16 @@ pub fn sprint_current_row(items: &[Sprint], current: Option<&str>) -> Option<usi
     }
 }
 
-/// The placeholder of an Edit field: the value it opened with (or "—"), then the accepted values if any.
-pub fn edit_hint(orig: &str, accepted: Option<&str>) -> String {
-    let cur = if orig.trim().is_empty() { "—" } else { orig.trim() };
-    match accepted {
-        Some(a) => format!("{cur} · {a}"),
-        None => cur.to_string(),
-    }
-}
+/// The Edit fields' placeholders: what each accepts, in plain words. The fields open filled with the
+/// current value, so the placeholder shows only once cleared (which leaves the value unchanged).
+pub const PRIORITY_HINT: &str = "Highest, High, Medium, Low or Lowest";
+pub const POINTS_HINT: &str = "Number, e.g. 3";
 
-/// Jira's default priority names, for the Edit placeholder.
-pub const PRIORITIES: &str = "Highest, High, Medium, Low, Lowest";
+/// A sprint's row in the Sprint picker: its name, with its state only when that adds something ("(future)");
+/// the active sprint is plain, and the issue's own sprint is marked "current" beside it.
+pub fn sprint_row_label(name: &str, state: &str) -> String {
+    if state.eq_ignore_ascii_case("active") { name.to_string() } else { format!("{name} ({state})") }
+}
 
 /// Moves a picker cursor by `d`, wrapping at both ends.
 fn wrap_cursor(cur: usize, d: i32, len: usize) -> usize {
@@ -1645,8 +1644,10 @@ mod tests {
         assert_eq!(sprint_current_row(&sprints, Some("Sprint 92")), Some(2));
         assert_eq!(sprint_current_row(&sprints, Some("Sprint 80")), None, "a closed sprint is not listed");
         assert_eq!(sprint_current_row(&sprints, None), Some(0));
-        assert_eq!(edit_hint("", Some(PRIORITIES)), "— · Highest, High, Medium, Low, Lowest");
-        assert_eq!(edit_hint(" 3 ", None), "3");
+        assert_eq!(PRIORITY_HINT, "Highest, High, Medium, Low or Lowest");
+        assert_eq!(POINTS_HINT, "Number, e.g. 3");
+        assert_eq!(sprint_row_label("Sprint 91", "active"), "Sprint 91", "no \"(active) current\"");
+        assert_eq!(sprint_row_label("Sprint 92", "future"), "Sprint 92 (future)");
     }
 
     #[test]

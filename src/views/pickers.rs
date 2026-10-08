@@ -2,7 +2,7 @@
 //! Keys (↑/↓/j/k, Enter, Esc) are handled in `App::shortcuts`; this only draws.
 
 use crate::app::{
-    Action, App, Picker, assign_current_row, assign_cursor_after_filter, assign_note, assign_rows, edit_hint, sprint_current_row, transition_row,
+    Action, App, Picker, assign_current_row, assign_cursor_after_filter, assign_note, assign_rows, sprint_current_row, sprint_row_label, transition_row,
 };
 use crate::theme::{self, Palette};
 use crate::views::{button, primary_button};
@@ -31,6 +31,12 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
     egui::Area::new(egui::Id::new("picker")).order(egui::Order::Foreground).anchor(egui::Align2::CENTER_TOP, vec2(0.0, top)).show(ctx, |ui| {
         Frame::new().fill(crate::views::dialog_fill(p)).stroke(crate::views::dialog_stroke(p)).corner_radius(6).inner_margin(Margin::same(16)).show(ui, |ui| {
             ui.set_width(440.0);
+            // Field frames: `border` sinks into the dark dialog (1.15:1), so they take the dialog's lifted edge.
+            if p.dark {
+                let w = &mut ui.visuals_mut().widgets;
+                w.inactive.bg_stroke.color = crate::views::DARK_EDGE;
+                w.hovered.bg_stroke.color = crate::views::DARK_EDGE;
+            }
             match picker {
                 Picker::Transition { key, items, cursor } => {
                     title(ui, p, &format!("Transition {key}"));
@@ -69,13 +75,13 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                     title(ui, p, &format!("Move {key} to sprint"));
                     let now = sprint_current_row(items, sprint.as_deref());
                     let mut names = vec![Row::plain("Backlog".to_string())];
-                    names.extend(items.iter().map(|s| Row::plain(format!("{} ({})", s.name, s.state))));
+                    names.extend(items.iter().map(|s| Row::plain(sprint_row_label(&s.name, &s.state))));
                     for (i, n) in names.iter_mut().enumerate() {
                         n.current = now == Some(i);
                     }
                     rows(ui, p, names, &mut confirm, cursor, None);
                 }
-                Picker::Edit { key, labels, priority, points, orig_priority, orig_points, .. } => {
+                Picker::Edit { key, labels, priority, points, .. } => {
                     title(ui, p, &format!("Edit {key}"));
                     let labels_id = egui::Id::new("edit-labels");
                     let r = edit_group(ui, p, "Labels, comma separated", field(labels).id(labels_id));
@@ -85,9 +91,9 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                     }
                     ui.add_space(12.0);
                     let hint = |t: String| crate::views::field_hint(&t, theme::body(14.0), p);
-                    edit_group(ui, p, "Priority", field(priority).hint_text(hint(edit_hint(orig_priority, Some(crate::app::PRIORITIES)))));
+                    edit_group(ui, p, "Priority", field(priority).hint_text(hint(crate::app::PRIORITY_HINT.to_string())));
                     ui.add_space(12.0);
-                    edit_group(ui, p, "Story points", field(points).hint_text(hint(edit_hint(orig_points, None))));
+                    edit_group(ui, p, "Story points", field(points).hint_text(hint(crate::app::POINTS_HINT.to_string())));
                 }
             }
             ui.add_space(16.0);
