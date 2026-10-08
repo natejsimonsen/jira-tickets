@@ -30,17 +30,27 @@ pub fn rows_without_text_filter(app: &App) -> usize {
     filter::visible(&all, &f, src == ListId::Search, me).len()
 }
 
+/// The rows on screen are the server text search for exactly what the box holds.
+pub fn text_rows_shown(app: &App) -> bool {
+    text_rows_match(app.rows_list() == ListId::Search, app.text_shown.as_deref(), &app.filter.text)
+}
+
+/// The shown Search rows answer a text search for `text` (trimmed): the server matched the term over summary,
+/// description and comments, so the local text filter (key, summary, labels, assignee) must not narrow them.
+/// Rows for an older term still get the local filter until the new term's result lands.
+pub fn text_rows_match(showing_search: bool, text_shown: Option<&str>, text: &str) -> bool {
+    showing_search && text_shown.is_some_and(|t| t == text.trim())
+}
+
 pub fn current_rows(app: &App) -> Vec<&Issue> {
     let src = app.rows_list();
     let searched = src == ListId::Search;
     let all = filter::action_items(&app.store.list(src));
     let me = app.me.as_ref().map(|m| m.display_name.as_str());
-    if app.filter.roadmap {
-        let f = filter::IssueFilter { roadmap_epics: roadmap_epics(app), ..app.filter.clone() };
-        filter::visible(&all, &f, searched, me)
-    } else {
-        filter::visible(&all, &app.filter, searched, me)
-    }
+    let text = if text_rows_shown(app) { String::new() } else { app.filter.text.clone() };
+    let roadmap_epics = if app.filter.roadmap { roadmap_epics(app) } else { Default::default() };
+    let f = filter::IssueFilter { text, roadmap_epics, ..app.filter.clone() };
+    filter::visible(&all, &f, searched, me)
 }
 
 /// How a row pill is drawn: a filled tint (status, epic, warnings) or outline only (neutral values).
@@ -417,6 +427,9 @@ fn filters(app: &mut App, ui: &mut Ui, p: &Palette) {
         }
     }
     let r = ui.add(crate::views::input_field(&mut app.filter.text, "Filter, or type JQL and press Enter (⌘F)", theme::body(14.0), p).id(id));
+    if r.changed() {
+        app.text_edited = Some(std::time::Instant::now());
+    }
     if app.focus_search {
         r.request_focus();
         app.focus_search = false;
@@ -431,8 +444,9 @@ fn filters(app: &mut App, ui: &mut Ui, p: &Palette) {
 }
 
 /// The count row's text: a plain count, "3 of 20 issues" under a local text filter (`total` is the
-/// count before it), "· JQL" for a typed search's rows, or (nothing to show yet) a loading line.
-pub fn count_label(shown: usize, total: Option<usize>, loading_first: bool, jql: bool) -> String {
+/// count before it), "· JQL" for a typed search's rows, "· text" for a text search's, or (nothing to show
+/// yet) a loading line.
+pub fn count_label(shown: usize, total: Option<usize>, loading_first: bool, suffix: CountSuffix) -> String {
     if shown == 0 && loading_first {
         return "Loading issues…".to_string();
     }
@@ -441,14 +455,32 @@ pub fn count_label(shown: usize, total: Option<usize>, loading_first: bool, jql:
         Some(t) if t != shown => format!("{shown} of {t} {}", noun(t)),
         _ => format!("{shown} {}", noun(shown)),
     };
-    if jql { format!("{base} · JQL") } else { base }
+    match suffix {
+        CountSuffix::None => base,
+        CountSuffix::Jql => format!("{base} · JQL"),
+        CountSuffix::Text => format!("{base} · text"),
+    }
 }
 
-/// Whether the count says "· JQL": only when the rows on screen are an accepted typed-JQL result. In flight
-/// the count keeps the label of the rows it counts, verbatim, so a pending JQL search over plain rows adds
-/// no suffix and a pending quick filter over JQL rows keeps it until its own result lands.
-pub fn count_shows_jql(typed_shown: bool, showing_search_result: bool) -> bool {
-    typed_shown && showing_search_result
+/// What the count row says the rows are, after the count.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum CountSuffix {
+    None,
+    Jql,
+    Text,
+}
+
+/// "· JQL" only when the rows on screen are an accepted typed-JQL result, "· text" when they are an accepted
+/// text search's. In flight the count keeps the label of the rows it counts, verbatim, so a pending search
+/// over plain rows adds no suffix and a pending quick filter over JQL or text rows keeps it until its own
+/// result lands.
+pub fn count_suffix(typed_shown: bool, text_shown: bool, showing_search_result: bool) -> CountSuffix {
+    match (showing_search_result, typed_shown, text_shown) {
+        (false, _, _) => CountSuffix::None,
+        (true, true, _) => CountSuffix::Jql,
+        (true, false, true) => CountSuffix::Text,
+        (true, false, false) => CountSuffix::None,
+    }
 }
 
 /// Nothing on screen yet while the list (or a search) loads: the count row shows "⟳ Loading issues…".
@@ -484,6 +516,7 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
     {
         let retry = match (&app.last_search_jql, app.search_active) {
             (Some(jql), true) if app.typed_search => Action::RunTypedSearch(jql.clone()),
+            (Some(_), true) if app.text_search.is_some() => Action::RunTextSearch(app.text_search.clone().unwrap_or_default()),
             (Some(jql), true) => Action::RunSearch(jql.clone()),
             _ => Action::Refresh,
         };
@@ -497,10 +530,10 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
     // a search started here.
     let syncing = crate::views::header_syncing(&app.lists);
     let row_spinner = crate::views::spinner_slots(syncing, pending, app.search_from_refresh, loading_first).1;
-    let text_filter = !app.filter.text.trim().is_empty() && !filter::looks_like_jql(&app.filter.text);
+    let text_filter = !app.filter.text.trim().is_empty() && !filter::looks_like_jql(&app.filter.text) && !text_rows_shown(app);
     let total = text_filter.then(|| rows_without_text_filter(app));
     let showing_search = src == ListId::Search && app.store.lists.contains_key(&ListId::Search);
-    let label = count_label(rows.len(), total, loading_first, count_shows_jql(app.typed_shown, showing_search));
+    let label = count_label(rows.len(), total, loading_first, count_suffix(app.typed_shown, app.text_shown.is_some(), showing_search));
     let box_text = !app.filter.text.trim().is_empty() || (app.typed_search && app.search_active);
     let show_clear = clear_visible(app.filter.quick.is_some(), app.filter.mine, app.filter.roadmap, box_text);
     ui.allocate_ui_with_layout(vec2(ui.available_width(), crate::views::BUTTON_H), egui::Layout::left_to_right(egui::Align::Center), |ui| {
@@ -844,16 +877,17 @@ mod tests {
 
     #[test]
     fn count_row_label_follows_state() {
-        assert_eq!(count_label(0, None, true, false), "Loading issues…", "nothing yet: no count");
-        assert_eq!(count_label(0, None, true, true), "Loading issues…");
-        assert_eq!(count_label(0, None, false, false), "0 issues");
-        assert_eq!(count_label(1, None, false, false), "1 issue");
-        assert_eq!(count_label(20, None, true, false), "20 issues", "previous rows stay with their count while updating");
-        assert_eq!(count_label(2, None, false, true), "2 issues · JQL");
-        assert_eq!(count_label(3, Some(20), false, false), "3 of 20 issues", "local text filter");
-        assert_eq!(count_label(20, Some(20), false, false), "20 issues", "a filter that hides nothing");
-        assert_eq!(count_label(0, Some(1), false, false), "0 of 1 issue");
-        assert_eq!(count_label(3, Some(20), false, true), "3 of 20 issues · JQL");
+        assert_eq!(count_label(0, None, true, CountSuffix::None), "Loading issues…", "nothing yet: no count");
+        assert_eq!(count_label(0, None, true, CountSuffix::Jql), "Loading issues…");
+        assert_eq!(count_label(0, None, false, CountSuffix::None), "0 issues");
+        assert_eq!(count_label(1, None, false, CountSuffix::None), "1 issue");
+        assert_eq!(count_label(20, None, true, CountSuffix::None), "20 issues", "previous rows stay with their count while updating");
+        assert_eq!(count_label(2, None, false, CountSuffix::Jql), "2 issues · JQL");
+        assert_eq!(count_label(3, Some(20), false, CountSuffix::None), "3 of 20 issues", "local text filter");
+        assert_eq!(count_label(20, Some(20), false, CountSuffix::None), "20 issues", "a filter that hides nothing");
+        assert_eq!(count_label(0, Some(1), false, CountSuffix::None), "0 of 1 issue");
+        assert_eq!(count_label(3, Some(20), false, CountSuffix::Jql), "3 of 20 issues · JQL");
+        assert_eq!(count_label(14, None, false, CountSuffix::Text), "14 issues · text", "a text search's rows");
     }
 
     #[test]
@@ -863,12 +897,22 @@ mod tests {
     }
 
     #[test]
-    fn jql_suffix_waits_for_the_result() {
-        assert!(!count_shows_jql(false, false), "a typed search pending over plain rows: the old label, verbatim");
-        assert!(count_shows_jql(true, true), "a pending quick filter over JQL rows: still JQL rows");
-        assert!(count_shows_jql(true, true), "landed");
-        assert!(!count_shows_jql(false, true), "a quick filter's result");
-        assert!(!count_shows_jql(true, false), "the search failed and its rows are gone");
+    fn count_suffix_waits_for_the_result() {
+        use CountSuffix::*;
+        assert_eq!(count_suffix(false, false, false), None, "a typed search pending over plain rows: the old label, verbatim");
+        assert_eq!(count_suffix(true, false, true), Jql, "a pending quick filter over JQL rows: still JQL rows, and landed");
+        assert_eq!(count_suffix(false, false, true), None, "a quick filter's result");
+        assert_eq!(count_suffix(true, false, false), None, "the search failed and its rows are gone");
+        assert_eq!(count_suffix(false, true, true), Text, "a text search's result");
+        assert_eq!(count_suffix(false, true, false), None, "a text search pending over the team list");
+    }
+
+    #[test]
+    fn the_local_filter_steps_aside_only_for_its_own_terms_rows() {
+        assert!(text_rows_match(true, Some("f1"), " f1 "));
+        assert!(!text_rows_match(true, Some("f1"), "f12"), "f12 pending over f1's rows: filter them locally");
+        assert!(!text_rows_match(false, Some("f1"), "f1"), "the team list while the first search runs");
+        assert!(!text_rows_match(true, None, "f1"), "a quick filter's rows");
     }
 
     #[test]

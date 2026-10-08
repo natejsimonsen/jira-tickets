@@ -100,6 +100,21 @@ pub fn looks_like_jql(text: &str) -> bool {
     t.contains('=') || t.contains(" in ") || t.contains('~') || t.contains('!')
 }
 
+/// How long the search box must sit still before plain text also searches the server.
+pub const TEXT_SEARCH_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(350);
+
+/// The search box text as a server text search term: plain text (not JQL) of at least 2 characters, trimmed.
+pub fn text_search_term(text: &str) -> Option<&str> {
+    let t = text.trim();
+    (!looks_like_jql(t) && t.chars().count() >= 2).then_some(t)
+}
+
+/// Plain text in the search box searches the server (like Jira's board text box) once it is a term and
+/// has not changed for `TEXT_SEARCH_DEBOUNCE`; the local filter answers until then.
+pub fn should_text_search(text: &str, since_edit: std::time::Duration) -> bool {
+    text_search_term(text).is_some() && since_edit >= TEXT_SEARCH_DEBOUNCE
+}
+
 /// `searched`: the rows are a search's (see `in_team_scope`).
 /// JQL left in the search box (it stays visible while its search runs) is not a local text filter.
 pub fn visible<'a>(issues: &[&'a Issue], f: &IssueFilter, searched: bool, me: Option<&str>) -> Vec<&'a Issue> {
@@ -214,6 +229,19 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn plain_text_searches_the_server_after_the_debounce() {
+        let later = TEXT_SEARCH_DEBOUNCE;
+        assert!(should_text_search("f1", later));
+        assert!(should_text_search("  alpha cd ", later + later));
+        assert!(!should_text_search("status = Blocked", later), "JQL runs on Enter instead");
+        assert!(!should_text_search("f", later), "one character stays local");
+        assert!(!should_text_search("  ", later));
+        assert!(!should_text_search("f1", TEXT_SEARCH_DEBOUNCE - std::time::Duration::from_millis(1)), "still typing");
+        assert_eq!(text_search_term(" f1 "), Some("f1"));
+        assert_eq!(text_search_term("labels in (PLAT)"), None);
+    }
     use crate::jira::{Issue, Sprint, Status, User};
 
     fn sprint(id: u64, name: &str, state: &str) -> Sprint {

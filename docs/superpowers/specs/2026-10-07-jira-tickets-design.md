@@ -224,7 +224,25 @@ label"; defaults to the user's own team), an epic picker, a sprint scope (All, t
 board's active sprint, each future sprint, or Backlog; defaults to the
 active sprint, as jira-cli did), quick filters from config, a "Mine"
 toggle, a "Roadmap" toggle (`m`) that keeps only tickets whose parent epic
-carries `initiative_label`, and a search box (`/` or `⌘F`) that takes JQL.
+carries `initiative_label`, and a search box (`/` or `⌘F`).
+
+The search box works three ways. Plain text filters the rows on screen
+locally at once (key, summary, labels, assignee; substring), and the
+count reads "3 of 20 issues". Once the text is at least 2 characters and
+has not changed for 350 ms, it also runs a server search the way Jira's
+board text box does: the current scope's query (the picked team's open
+work, or the quick filter's or No team label's query), narrowed by the
+sprint scope and epic, `AND text ~ "<term>*"` (summary, description,
+comments, environment; `"` and `\` escaped). It goes through the same
+sequenced search path as every other search, so a newer term or scope drops
+an older reply, and the previous rows stay on screen with a muted count and
+"⟳ Updating…" while it runs. When it lands the rows are the server's set in
+Rank order (Mine and Roadmap still apply locally) and the count reads
+"N issues · text". Changing team, quick filter, sprint or epic reruns it in
+the new scope. Clearing the box (or Esc) returns to the scope's rows; the
+team list needs no refetch, a quick filter's search is rerun. Text with a
+JQL operator (`=`, ` in `, `~`, `!`) is never text-searched: Enter runs it
+as a JQL search and the count reads "· JQL".
 Epics never appear in the Issues list: they are containers, not action
 items, and stay in the store for the epic picker, grooming, and the
 roadmap. `⌘K` jumps to a key or pasted browse link. A ticket assigned to a team member counts as that

@@ -209,6 +209,24 @@ pub fn sprint_jql(scope: &SprintScope) -> Option<String> {
     }
 }
 
+/// Jira's board text box: `text ~ "<term>*"` over summary, description, comments and environment.
+/// The term goes as typed, quoted (`"` and `\` escaped), with a trailing `*` for prefixes.
+pub fn text_clause(term: &str) -> String {
+    let t = term.trim();
+    let t = if t.ends_with('*') { t.to_string() } else { format!("{t}*") };
+    format!("text ~ {}", jql_quote(&t))
+}
+
+/// The search-box text search: the scope the list shows (`scope`, the team or quick-filter query), narrowed
+/// by the sprint scope and epic, AND the text clause, so its rows are a subset of what the user is looking at.
+pub fn scope_text_jql(scope: &str, sprint: &SprintScope, epic: Option<&str>, term: &str) -> String {
+    let mut clauses = vec![format!("({scope})")];
+    clauses.extend(sprint_jql(sprint));
+    clauses.extend(epic.map(|e| format!("parent = {}", jql_quote(e))));
+    clauses.push(text_clause(term));
+    clauses.join(" AND ")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -252,6 +270,22 @@ mod tests {
         assert_eq!(sprint_jql(&SprintScope::All), None);
         assert_eq!(sprint_jql(&SprintScope::Backlog).as_deref(), Some("(sprint is EMPTY OR sprint not in (openSprints(), futureSprints()))"));
         assert_eq!(sprint_jql(&SprintScope::Named("Sprint 91".into())).as_deref(), Some(r#"sprint = "Sprint 91""#));
+    }
+
+    #[test]
+    fn text_search_is_the_scope_and_the_term() {
+        let scope = r#"labels = "PLAT" AND statusCategory != Done"#;
+        assert_eq!(
+            scope_text_jql(scope, &SprintScope::Backlog, None, "f1"),
+            r#"(labels = "PLAT" AND statusCategory != Done) AND (sprint is EMPTY OR sprint not in (openSprints(), futureSprints())) AND text ~ "f1*""#
+        );
+        assert_eq!(
+            scope_text_jql(scope, &SprintScope::Named("Sprint 91".into()), Some("CI-79"), "alpha"),
+            r#"(labels = "PLAT" AND statusCategory != Done) AND sprint = "Sprint 91" AND parent = "CI-79" AND text ~ "alpha*""#
+        );
+        assert_eq!(scope_text_jql("x", &SprintScope::All, None, " say \"hi\" "), r#"(x) AND text ~ "say \"hi\"*""#);
+        assert_eq!(text_clause("a\\b"), r#"text ~ "a\\b*""#);
+        assert_eq!(text_clause("kube*"), r#"text ~ "kube*""#, "no doubled wildcard");
     }
 
     #[test]

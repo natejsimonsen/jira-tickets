@@ -93,6 +93,11 @@ pub enum Action {
     RunSearch(String),
     /// A JQL search typed into the search box (it stays there while active).
     RunTypedSearch(String),
+    /// Plain search-box text searched on the server within the current scope (`store::scope_text_jql`).
+    RunTextSearch(String),
+    /// The box no longer holds a term: back to the scope's rows (the quick filter's or No team label's search
+    /// is rerun, the team list needs no fetch). A no-op when something earlier this frame already ended it.
+    EndTextSearch,
     ToggleGoTo,
     GoTo,
     Move(i32),
@@ -219,6 +224,15 @@ pub struct App {
     /// The search rows on screen came from a typed JQL search (set when its result is accepted),
     /// so the count row says "· JQL" only once those rows are showing.
     pub typed_shown: bool,
+    /// When the search box text last changed, for the text search's debounce.
+    pub text_edited: Option<Instant>,
+    /// The term of the active text search (in flight or shown); None when the Search list is not one.
+    pub text_search: Option<String>,
+    /// The full scope + text JQL that search ran, so a scope change (or members dropping out) reruns it.
+    pub text_search_jql: Option<String>,
+    /// The term whose server rows are on screen (set when its result is accepted). While these rows
+    /// match the box, the local text filter steps aside: the server already matched more than summary.
+    pub text_shown: Option<String>,
     /// Jira rejected a configured member, so team queries match labels only until restart.
     pub members_disabled: bool,
     /// Unposted comment text, keyed by issue key.
@@ -313,6 +327,10 @@ impl App {
             last_search_jql: None,
             typed_search: false,
             typed_shown: false,
+            text_edited: None,
+            text_search: None,
+            text_search_jql: None,
+            text_shown: None,
             members_disabled: false,
             drafts: HashMap::new(),
             posting: None,
@@ -472,12 +490,43 @@ impl App {
         }
     }
 
+    /// The query behind the rows the list shows before any text: the quick filter or No team label search,
+    /// else the picked team's open work (TeamOpen narrowed to the team, as `filter::visible` narrows it).
+    fn scope_jql(&self) -> String {
+        self.scoped_search_jql()
+            .unwrap_or_else(|| format!("{} AND statusCategory != Done", store::quick_scope_jql(&self.filter.team, &self.cfg, !self.members_disabled)))
+    }
+
+    /// The server text search for `term` within the current team, quick filter, sprint and epic scope.
+    fn text_search_jql(&self, term: &str) -> String {
+        store::scope_text_jql(&self.scope_jql(), &self.filter.sprint, self.filter.epic.as_deref(), term)
+    }
+
+    /// Each frame: once the box holds a plain term that has sat still for the debounce, search the server
+    /// for it in the current scope (again whenever that scope changes). When the box no longer holds a term,
+    /// the text search goes and the list returns to its scope's rows.
+    fn text_search_tick(&mut self, ctx: &egui::Context) {
+        let since = self.text_edited.map_or(Duration::MAX, |t| t.elapsed());
+        match crate::filter::text_search_term(&self.filter.text).map(String::from) {
+            Some(term) if crate::filter::should_text_search(&term, since) => {
+                if self.text_search_jql.as_deref() != Some(self.text_search_jql(&term).as_str()) {
+                    self.actions.push(Action::RunTextSearch(term));
+                }
+            }
+            Some(_) => ctx.request_repaint_after(crate::filter::TEXT_SEARCH_DEBOUNCE.saturating_sub(since)),
+            None if self.text_search.is_some() => self.actions.push(Action::EndTextSearch),
+            None => {}
+        }
+    }
+
     /// Runs `jql` (non-empty) as the Search list under the current `search_seq`,
     /// replacing any search in flight.
     fn search(&mut self, jql: &str) {
-        // Only the team-scoped search, built while members are enabled, carries
+        // Only the searches built from the team scope while members are enabled carry
         // them; a JQL the user typed, or one built labels-only, never retries.
-        let with_members = !self.members_disabled && self.scoped_search_jql().is_some_and(|j| j.trim() == jql.trim());
+        let built = |j: Option<String>| j.is_some_and(|j| j.trim() == jql.trim());
+        let text = crate::filter::text_search_term(&self.filter.text).map(|t| self.text_search_jql(t));
+        let with_members = !self.members_disabled && (built(self.scoped_search_jql()) || built(text));
         self.search_active = true;
         self.last_search_jql = Some(jql.trim().to_string());
         let full = format!("project = {} AND ({}) ORDER BY Rank ASC", store::jql_quote(&self.cfg.scope.project), jql.trim());
@@ -543,6 +592,7 @@ impl App {
                     }
                     self.search_pending = None;
                     self.typed_shown = self.typed_search;
+                    self.text_shown = self.text_search.clone();
                 }
                 // Gated on what this query carried, not on members_disabled: TeamOpen and
                 // TeamInProgress can both fail on the same member and the second must still
@@ -576,6 +626,8 @@ impl App {
                             self.toast("A team member in the config did not resolve; showing labelled tickets only", true);
                         }
                         match id {
+                            // A text search is rerun by `text_search_tick`: its JQL changed with the members.
+                            ListId::Search if self.text_search.is_some() => {}
                             ListId::Search => {
                                 if let Some(jql) = self.scoped_search_jql() {
                                     self.actions.push(Action::RunSearch(jql));
@@ -720,9 +772,13 @@ impl App {
             Action::SetScreen(s) => self.screen = s,
             Action::Refresh => {
                 self.refresh_all();
-                // A quick filter's or No team label's search is part of what's shown; rerun it
+                // A quick filter's, No team label's or the text search is part of what's shown; rerun it
                 // too, keeping the cursor. The seq bump drops the older run's reply.
-                if let Some(jql) = self.scoped_search_jql() {
+                let jql = match self.text_search.clone() {
+                    Some(term) => Some(self.text_search_jql(&term)),
+                    None => self.scoped_search_jql(),
+                };
+                if let Some(jql) = jql {
                     self.search_seq += 1;
                     self.search(&jql);
                     self.search_from_refresh = true;
@@ -774,8 +830,10 @@ impl App {
                 self.filter.team = t;
                 self.cursor = 0;
                 // A quick filter's search, and No team label's, is scoped to the team; rerun it
-                // for the new one. Leaving No team label drops its search.
+                // for the new one. Leaving No team label drops its search. A text search
+                // is rerun in the new scope by `text_search_tick` instead.
                 match self.scoped_search_jql() {
+                    _ if self.text_search.is_some() => {}
                     Some(jql) => self.actions.push(Action::RunSearch(jql)),
                     None if was_none => self.actions.push(Action::RunSearch(String::new())),
                     None => {}
@@ -798,7 +856,10 @@ impl App {
             }
             Action::SetQuick(q) => {
                 self.filter.quick = q;
-                self.actions.push(Action::RunSearch(self.scoped_search_jql().unwrap_or_default()));
+                // Under a text search `text_search_tick` reruns it with the quick filter in its scope.
+                if self.text_search.is_none() {
+                    self.actions.push(Action::RunSearch(self.scoped_search_jql().unwrap_or_default()));
+                }
             }
             Action::ToggleMine => {
                 self.filter.mine = !self.filter.mine;
@@ -828,10 +889,23 @@ impl App {
                 self.apply(Action::RunSearch(jql.clone()), ctx);
                 self.typed_search = !jql.trim().is_empty();
             }
+            Action::EndTextSearch => {
+                if self.text_search.is_some() {
+                    self.apply(Action::RunSearch(self.scoped_search_jql().unwrap_or_default()), ctx);
+                }
+            }
+            Action::RunTextSearch(term) => {
+                let jql = self.text_search_jql(&term);
+                self.apply(Action::RunSearch(jql.clone()), ctx);
+                self.text_search = Some(term);
+                self.text_search_jql = Some(jql);
+            }
             Action::RunSearch(jql) => {
                 self.cursor = 0;
                 self.search_from_refresh = false;
                 self.typed_search = false;
+                self.text_search = None;
+                self.text_search_jql = None;
                 self.search_seq += 1;
                 if jql.trim().is_empty() {
                     self.search_active = false;
@@ -842,6 +916,7 @@ impl App {
                     self.last_search_jql = None;
                     self.search_pending = None;
                     self.typed_shown = false;
+                    self.text_shown = None;
                     self.store.lists.remove(&ListId::Search);
                     // Drops the error and any in-flight flag; late results are ignored by seq.
                     self.lists.remove(&ListId::Search);
@@ -1407,6 +1482,7 @@ impl eframe::App for App {
         if self.client.is_some() {
             self.shortcuts(&ctx);
             views::main(self, ui);
+            self.text_search_tick(&ctx);
             views::pickers::show(self, &ctx);
             views::help::show(self, &ctx);
         } else {

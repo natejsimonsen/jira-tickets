@@ -89,6 +89,8 @@ flow issues-search 'key:cmd+f;type:alpha;wait:200;shot:01-local-filter.png;key:e
     '01-local-filter.png|Search box focused, "alpha" filtering rows locally' \
     '02-updating.png|JQL search submitted, in flight' \
     '03-results.png|JQL search results'
+flow issues-backlog-text 'click:(active);wait:200;click:Backlog;wait:200;key:cmd+f;type:f1;wait:3000;shot:01-results.png' \
+    '01-results.png|Backlog scope, "f1" in the search box: server text search results ("N issues · text")'
 flow issues-goto 'key:cmd+k;shot:01-box.png;type:CI-1860;shot:02-typed.png;key:escape' \
     '01-box.png|Go-to box (cmd+k) open' \
     '02-typed.png|Go-to box with an issue key typed'
