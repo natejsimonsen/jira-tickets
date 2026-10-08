@@ -2,6 +2,7 @@
 
 pub mod adf_view;
 pub mod detail;
+pub mod icons;
 pub mod issues;
 pub mod pickers;
 
@@ -65,8 +66,8 @@ fn header(app: &mut App, ui: &mut Ui, p: &Palette) {
                     }
                     ui.add_space(8.0);
                     if app.lists.values().any(|l| l.loading) {
-                        ui.add(egui::Spinner::new().size(16.0).color(p.muted));
-                    } else if ui.add(button("Refresh", p)).on_hover_text("⌘R").clicked() {
+                        icons::spinner_button(ui, p);
+                    } else if icons::icon_button(ui, icons::Icon::Sync, "Refresh (⌘R)", p).clicked() {
                         app.actions.push(Action::Refresh);
                     }
                     if crate::jira::READ_ONLY.load(std::sync::atomic::Ordering::Relaxed) {
