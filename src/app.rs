@@ -608,6 +608,10 @@ impl App {
             Action::SetTeam(t) => {
                 self.filter.team = t;
                 self.cursor = 0;
+                // A quick filter's search is scoped to the team; rerun it for the new one.
+                if let Some(q) = self.filter.quick {
+                    self.actions.push(Action::SetQuick(Some(q)));
+                }
             }
             Action::ApplyTeamLabel => {
                 let crate::filter::TeamScope::Label(label) = &self.filter.team else {
@@ -628,7 +632,7 @@ impl App {
                 self.filter.quick = q;
                 match q.and_then(|i| self.cfg.issues.filters.get(i)) {
                     Some(f) => {
-                        let jql = format!("labels = {} AND ({})", store::jql_quote(&self.cfg.scope.team_label), f.jql);
+                        let jql = format!("{} AND ({})", store::quick_scope_jql(&self.filter.team, &self.cfg), f.jql);
                         self.actions.push(Action::RunSearch(jql));
                     }
                     None => self.actions.push(Action::RunSearch(String::new())),

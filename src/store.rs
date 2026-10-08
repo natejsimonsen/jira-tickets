@@ -1,6 +1,7 @@
 //! One cached store of issues. Views are projections over it.
 
 use crate::config::Config;
+use crate::filter::TeamScope;
 use crate::jira::Issue;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
@@ -100,10 +101,19 @@ pub fn jql_quote(s: &str) -> String {
     format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
 }
 
-/// Every configured team's open work: tickets carrying a team label, or
-/// assigned to any team's members (the own team falls back to `[team].members`).
-pub fn jql_team_open(cfg: &Config) -> String {
-    let labels: Vec<String> = cfg.scope.team_labels().iter().map(|l| jql_quote(l)).collect();
+/// `labels in (...)`, OR'd with `assignee in (...)` in parentheses when there are members.
+fn team_clause(labels: &[String], members: &[String]) -> String {
+    let quoted: Vec<String> = labels.iter().map(|l| jql_quote(l)).collect();
+    let labels = format!("labels in ({})", quoted.join(", "));
+    if members.is_empty() {
+        return labels;
+    }
+    let members: Vec<String> = members.iter().map(|m| jql_quote(m)).collect();
+    format!("({labels} OR assignee in ({}))", members.join(", "))
+}
+
+/// Every team's members, de-duplicated, in team order (own team falls back to `[team].members`).
+fn all_members(cfg: &Config) -> Vec<String> {
     let mut members: Vec<String> = Vec::new();
     for l in cfg.scope.team_labels() {
         for m in cfg.scope.members_of(&l, &cfg.team.members) {
@@ -112,14 +122,27 @@ pub fn jql_team_open(cfg: &Config) -> String {
             }
         }
     }
-    let labels = format!("labels in ({})", labels.join(", "));
-    let team = if members.is_empty() {
-        labels
-    } else {
-        let members: Vec<String> = members.iter().map(|m| jql_quote(m)).collect();
-        format!("({labels} OR assignee in ({}))", members.join(", "))
-    };
+    members
+}
+
+/// Every configured team's open work: tickets carrying a team label, or
+/// assigned to any team's members.
+pub fn jql_team_open(cfg: &Config) -> String {
+    let team = team_clause(&cfg.scope.team_labels(), &all_members(cfg));
     format!("project = {} AND {team} AND statusCategory != Done ORDER BY Rank ASC", jql_quote(&cfg.scope.project))
+}
+
+/// The team clause a quick filter is ANDed with: the picked team's label or
+/// members, or every team's under All teams and No team label.
+pub fn quick_scope_jql(scope: &TeamScope, cfg: &Config) -> String {
+    match scope {
+        TeamScope::Label(l) => {
+            let label = format!("labels = {}", jql_quote(l));
+            let members: Vec<String> = cfg.scope.members_of(l, &cfg.team.members).iter().map(|m| jql_quote(m)).collect();
+            if members.is_empty() { label } else { format!("({label} OR assignee in ({}))", members.join(", ")) }
+        }
+        TeamScope::All | TeamScope::None => team_clause(&cfg.scope.team_labels(), &all_members(cfg)),
+    }
 }
 
 pub fn jql_epics(cfg: &Config, parent_keys: &[String]) -> String {
@@ -192,6 +215,21 @@ mod tests {
         c.scope.teams.clear();
         c.team.members = vec!["Ann".into()];
         assert_eq!(jql_team_open(&c), r#"project = "CI" AND (labels in ("PLAT") OR assignee in ("Ann")) AND statusCategory != Done ORDER BY Rank ASC"#);
+    }
+
+    #[test]
+    fn quick_filters_follow_the_team_scope() {
+        let mut c = cfg();
+        c.scope.teams[1].members = vec!["acct-1".into()];
+        assert_eq!(quick_scope_jql(&TeamScope::Label("PLAT".into()), &c), r#"(labels = "PLAT" OR assignee in ("Ada Lovelace", "Shawn Sorichetti"))"#);
+        assert_eq!(quick_scope_jql(&TeamScope::Label("TOOLS".into()), &c), r#"(labels = "TOOLS" OR assignee in ("acct-1"))"#);
+        let all = r#"(labels in ("PLAT", "TOOLS") OR assignee in ("Ada Lovelace", "Shawn Sorichetti", "acct-1"))"#;
+        assert_eq!(quick_scope_jql(&TeamScope::All, &c), all);
+        assert_eq!(quick_scope_jql(&TeamScope::None, &c), all);
+        c.scope.teams[1].members.clear();
+        assert_eq!(quick_scope_jql(&TeamScope::Label("TOOLS".into()), &c), r#"labels = "TOOLS""#, "no members, no assignee part");
+        c.team.members.clear();
+        assert_eq!(quick_scope_jql(&TeamScope::All, &c), r#"labels in ("PLAT", "TOOLS")"#);
     }
 
     #[test]
