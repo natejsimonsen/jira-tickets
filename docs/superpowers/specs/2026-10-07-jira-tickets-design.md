@@ -72,6 +72,7 @@ board_id = 101
 label = "TOOLS"
 name = "Developer Tools"
 board_id = 102
+# members = ["<account id>", ...]  # team members; a ticket assigned to one counts as team work even without the label
 
 [grooming]
 status_new = "New"
@@ -183,7 +184,7 @@ Three queries populate it on launch and `⌘R`:
 
 | List | JQL | Fields |
 |---|---|---|
-| `team_open` | `project = {project} AND labels in ({team labels}) AND statusCategory != Done ORDER BY Rank ASC` | summary, status, assignee, reporter, parent, labels, priority, issuetype, created, updated, duedate, rank (customfield_10019), statuscategorychangedate, sprint, story points |
+| `team_open` | `project = {project} AND (labels in ({team labels}) OR assignee in ({all teams' members})) AND statusCategory != Done ORDER BY Rank ASC` | summary, status, assignee, reporter, parent, labels, priority, issuetype, created, updated, duedate, rank (customfield_10019), statuscategorychangedate, sprint, story points |
 | `epics` | `project = {project} AND issuetype = Epic AND (labels in ({lane labels}) OR key in ({parents of team_open}))` plus the optional allowlist | summary, status, assignee, labels, priority, duedate, created, updated, description, comments (last 5), configured roadmap custom fields |
 | `team_in_progress` | `project in ({projects}) AND assignee in ({team}) AND statusCategory = "In Progress" ORDER BY updated DESC` | same as `team_open` |
 
@@ -221,7 +222,9 @@ label"; defaults to the user's own team), an epic picker, a sprint scope (All, t
 board's active sprint, each future sprint, or Backlog; defaults to the
 active sprint, as jira-cli did), quick filters from config, a "Mine"
 toggle, and a search box (`/` or `⌘F`) that takes JQL. `⌘K` jumps to a key
-or pasted browse link. The sprint list comes from board 101's active and
+or pasted browse link. A ticket assigned to a team member counts as that
+team's work even without the team label; such rows carry an amber "no
+PLAT label" pill and `l` applies the label (a write, never automatic). The sprint list comes from board 101's active and
 future sprints, refreshed with the lists; filtering is local on each
 issue's latest non-closed sprint.
 
