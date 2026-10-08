@@ -59,8 +59,10 @@ const PAD: f32 = 24.0;
 const COL_GAP: f32 = 24.0;
 /// Key cell → action: 16 px, never more.
 const KEY_TO_ACTION: f32 = 16.0;
-/// Between the chips of one binding.
+/// Between a chip and the "or" / "to" beside it.
 const CHIP_GAP: f32 = 4.0;
+/// One row's pitch: the row (chip height) plus the gap to the next.
+const ROW_PITCH: f32 = 34.0;
 
 /// A help column's width: its widest key cell, 16, its widest action.
 pub fn column_width(keys: &[f32], actions: &[f32]) -> f32 {
@@ -73,20 +75,21 @@ fn chip_size(ui: &egui::Ui, text: &str, p: &Palette) -> egui::Vec2 {
     vec2((g.size().x + 12.0).max(20.0), g.size().y + 4.0)
 }
 
-fn to_width(ui: &egui::Ui, p: &Palette) -> f32 {
-    ui.painter().layout_no_wrap("to".into(), theme::body(12.0), p.muted).size().x
+fn word_width(ui: &egui::Ui, word: &str, p: &Palette) -> f32 {
+    ui.painter().layout_no_wrap(word.into(), theme::body(12.0), p.muted).size().x
 }
 
-/// The width of one binding's key cell: its chips, 4 px apart, with " to " between a range's ends.
+/// The width of one binding's key cell: its chips, with a muted "or" between alternatives and "to" between
+/// a range's ends, each 4 px from its chips.
 fn keys_width(ui: &egui::Ui, keys: &str, p: &Palette) -> f32 {
     let mut w = 0.0;
     for (i, alt) in keys::chips(keys).enumerate() {
         if i > 0 {
-            w += CHIP_GAP;
+            w += 2.0 * CHIP_GAP + word_width(ui, "or", p);
         }
         for (j, k) in keys::range(alt).into_iter().enumerate() {
             if j > 0 {
-                w += 2.0 * CHIP_GAP + to_width(ui, p);
+                w += 2.0 * CHIP_GAP + word_width(ui, "to", p);
             }
             w += chip_size(ui, k, p).x;
         }
@@ -94,22 +97,37 @@ fn keys_width(ui: &egui::Ui, keys: &str, p: &Palette) -> f32 {
     w
 }
 
+/// The space under a help row so rows sit ROW_PITCH apart whatever the row's own height.
+pub fn row_gap(row_h: f32) -> f32 {
+    (ROW_PITCH - row_h).max(0.0)
+}
+
 fn group(ui: &mut egui::Ui, p: &Palette, g: Group, key_w: f32) {
     ui.label(RichText::new(g.name()).font(theme::bold(12.0)).color(p.muted));
     ui.add_space(8.0);
+    // Every row is as tall as its tallest part (a chip or the action), and chips, words and the action are
+    // all centred on that row.
+    let row_h = chip_size(ui, "⌘", p).y.max(ui.fonts_mut(|f| f.row_height(&theme::body(14.0))));
     for (i, k) in BINDINGS.iter().filter(|k| k.group == g).enumerate() {
         if i > 0 {
-            ui.add_space(8.0);
+            ui.add_space(row_gap(row_h));
         }
-        ui.horizontal(|ui| {
+        let centred = egui::Layout::left_to_right(egui::Align::Center);
+        ui.allocate_ui_with_layout(vec2(ui.available_width(), row_h), centred, |ui| {
+            ui.set_min_height(row_h);
             ui.spacing_mut().item_spacing.x = 0.0;
-            ui.allocate_ui_with_layout(vec2(key_w, 0.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+            ui.allocate_ui_with_layout(vec2(key_w, row_h), centred, |ui| {
                 ui.set_width(key_w);
+                ui.set_min_height(row_h);
                 ui.spacing_mut().item_spacing.x = CHIP_GAP;
-                for alt in keys::chips(k.keys) {
+                let word = |ui: &mut egui::Ui, w: &str| ui.label(RichText::new(w).font(theme::body(12.0)).color(p.muted));
+                for (i, alt) in keys::chips(k.keys).enumerate() {
+                    if i > 0 {
+                        word(ui, "or");
+                    }
                     for (j, c) in keys::range(alt).into_iter().enumerate() {
                         if j > 0 {
-                            ui.label(RichText::new("to").font(theme::body(12.0)).color(p.muted));
+                            word(ui, "to");
                         }
                         chip(ui, c, p);
                     }
@@ -135,6 +153,12 @@ fn chip(ui: &mut egui::Ui, text: &str, p: &Palette) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn rows_sit_34_apart() {
+        assert_eq!(super::row_gap(18.0), 16.0);
+        assert_eq!(super::row_gap(20.0), 14.0);
+    }
+
     #[test]
     fn columns_hug_their_content() {
         assert_eq!(super::column_width(&[20.0, 72.5], &[100.0, 180.2]), 269.0);

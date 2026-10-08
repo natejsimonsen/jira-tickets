@@ -139,14 +139,22 @@ pub fn missing_label_pill(ui: &mut Ui, f: &filter::IssueFilter, i: &Issue, label
 
 /// The hint bar's height; the toast anchors above it.
 pub const HINT_BAR_H: f32 = 24.0;
+/// The hint bar's inner margin: 15, so the first glyph's ink (its side bearing adds ~1) sits 16 in.
+const HINT_INSET: f32 = 15.0;
+
+/// The hint bar's fill: `surface` in dark; in light a step off white, so the undimmed bar under a modal does
+/// not glow next to the grey backdrop.
+pub fn hint_bar_fill(p: &Palette) -> egui::Color32 {
+    if p.dark { p.surface } else { p.surface_2 }
+}
 
 pub fn show(app: &mut App, ui: &mut Ui) {
     let p = theme::palette(ui.ctx());
     let (list_w, list_range) = list_pane_width(ui.available_width());
     // First, so the strip spans the full width under both panels.
-    egui::Panel::bottom("hints")
+    let bar = egui::Panel::bottom("hints")
         .exact_size(HINT_BAR_H)
-        .frame(Frame::new().fill(p.surface).inner_margin(Margin::symmetric(16, 0)).stroke(Stroke::new(1.0, p.border)))
+        .frame(Frame::new().fill(hint_bar_fill(p)).inner_margin(Margin::symmetric(HINT_INSET as i8, 0)))
         .show(ui, |ui| {
             ui.horizontal_centered(|ui| {
                 let edit = app.picker.as_ref().map(|pk| match pk {
@@ -159,6 +167,9 @@ pub fn show(app: &mut App, ui: &mut Ui) {
                 hint_bar(ui, crate::keys::hints(c), p);
             });
         });
+    // A top rule only, like the header's bottom rule.
+    let r = bar.response.rect;
+    ui.painter().hline(r.x_range(), r.top() + 0.5, Stroke::new(1.0, p.border));
     egui::Panel::left("issue-list")
         .resizable(true)
         .default_size(list_w)
@@ -867,6 +878,12 @@ mod tests {
         }
         assert_eq!(clear_label(true), "Clear search");
         assert_eq!(clear_label(false), "Clear filters");
+    }
+
+    #[test]
+    fn light_hint_bar_is_not_pure_white() {
+        assert_ne!(hint_bar_fill(&theme::LIGHT), egui::Color32::WHITE);
+        assert_eq!(hint_bar_fill(&theme::DARK), theme::DARK.surface);
     }
 
     #[test]

@@ -45,16 +45,15 @@ Only a token you paste is saved. Signing out deletes that file.
 | `⌘1` to `⌘4` | Issues, Grooming, Team, Roadmap |
 | `⌘R` | Refresh |
 | `⌘W` | Close the window |
-| `?` | Show or hide this help |
+| `?` or `Esc` | Show or hide this help |
 | **Issues** | |
 | `⌘K` | Go to an issue by key, number, or link |
-| `Esc` | Close the go-to box |
-| `⌘F` or `/` | Focus search (Esc clears, then leaves it) |
+| `⌘F` or `/` | Focus search; Esc clears, then exits |
 | `j/k` or `↑/↓` | Next or previous issue |
 | `t` | Transition |
 | `a` | Assign |
 | `s` | Sprint |
-| `e` | Edit labels, priority, points |
+| `e` | Edit labels, priority, story points |
 | `l` | Add the picked team's label |
 | `m` | Toggle Roadmap filter |
 | `J/K` | Move down or up in rank |
@@ -63,8 +62,8 @@ Only a token you paste is saved. Signing out deletes that file.
 | `⌘Enter` | Post the comment (composer focused) |
 | **Pickers** | |
 | `↑/↓` | Move |
-| `j/k` | Move (not in Assign) |
-| `Tab` | Next field (Edit) |
+| `j/k` | Move, except in Assign |
+| `Tab` | Next field in Edit |
 | `Enter` | Confirm |
 | `Esc` | Cancel |
 <!-- keys:end -->

@@ -18,8 +18,9 @@ impl Group {
     }
 }
 
-/// `keys` lists alternatives separated by ", " (each one is a key chip); " to " joins the ends of a range
-/// ("⌘1 to ⌘4"), drawn as two chips with a muted "to".
+/// `keys` lists alternatives separated by ", ", drawn as chips joined by a muted "or" ("⌘F or /"); " to "
+/// joins the ends of a range ("⌘1 to ⌘4"), drawn as two chips with a muted "to"; "/" inside one chip is a
+/// pair ("j/k").
 pub struct KeyBinding {
     pub group: Group,
     pub keys: &'static str,
@@ -34,15 +35,14 @@ pub const BINDINGS: &[KeyBinding] = &[
     b(Group::Global, "⌘1 to ⌘4", "Issues, Grooming, Team, Roadmap"),
     b(Group::Global, "⌘R", "Refresh"),
     b(Group::Global, "⌘W", "Close the window"),
-    b(Group::Global, "?", "Show or hide this help"),
+    b(Group::Global, "?, Esc", "Show or hide this help"),
     b(Group::Issues, "⌘K", "Go to an issue by key, number, or link"),
-    b(Group::Issues, "Esc", "Close the go-to box"),
-    b(Group::Issues, "⌘F, /", "Focus search (Esc clears, then leaves it)"),
+    b(Group::Issues, "⌘F, /", "Focus search; Esc clears, then exits"),
     b(Group::Issues, "j/k, ↑/↓", "Next or previous issue"),
     b(Group::Issues, "t", "Transition"),
     b(Group::Issues, "a", "Assign"),
     b(Group::Issues, "s", "Sprint"),
-    b(Group::Issues, "e", "Edit labels, priority, points"),
+    b(Group::Issues, "e", "Edit labels, priority, story points"),
     b(Group::Issues, "l", "Add the picked team's label"),
     b(Group::Issues, "m", "Toggle Roadmap filter"),
     b(Group::Issues, "J/K", "Move down or up in rank"),
@@ -50,8 +50,8 @@ pub const BINDINGS: &[KeyBinding] = &[
     b(Group::Issues, "⌘O", "Open in Jira"),
     b(Group::Issues, "⌘Enter", "Post the comment (composer focused)"),
     b(Group::Pickers, "↑/↓", "Move"),
-    b(Group::Pickers, "j/k", "Move (not in Assign)"),
-    b(Group::Pickers, "Tab", "Next field (Edit)"),
+    b(Group::Pickers, "j/k", "Move, except in Assign"),
+    b(Group::Pickers, "Tab", "Next field in Edit"),
     b(Group::Pickers, "Enter", "Confirm"),
     b(Group::Pickers, "Esc", "Cancel"),
 ];
@@ -228,7 +228,9 @@ mod tests {
         assert!(t.starts_with("| Keys | Action |\n| --- | --- |\n| **Global** | |\n| `⌘1` to `⌘4` | Issues, Grooming, Team, Roadmap |\n"));
         assert_eq!(range("⌘1 to ⌘4"), ["⌘1", "⌘4"]);
         assert_eq!(range("j/k"), ["j/k"]);
-        assert!(t.contains("| `⌘F` or `/` | Focus search (Esc clears, then leaves it) |\n"));
+        assert!(t.contains("| `⌘F` or `/` | Focus search; Esc clears, then exits |\n"));
+        assert!(t.contains("| `?` or `Esc` | Show or hide this help |\n"));
+        assert!(!t.contains("Close the go-to box"), "the go-to bar shows its own Esc");
         assert!(t.contains("| `j/k` or `↑/↓` | Next or previous issue |\n"));
         assert_eq!(t.matches("| **").count(), 3);
     }
