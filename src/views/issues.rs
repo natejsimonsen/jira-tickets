@@ -194,14 +194,18 @@ fn text_focus(ui: &Ui, app: &App) -> crate::keys::Focus {
     }
 }
 
-/// Below this window width the list pane is fixed near 370 px and the detail pane gets the rest.
+/// Below this window width the list pane takes a 45% share, held back so the description keeps 400 px.
 const NARROW: f32 = 1200.0;
+/// What the detail pane needs beside the list below NARROW: its 24 + 16 margins, a 400 px description
+/// column, the 16 px gutter and the 140 px fields column (`detail::detail_columns`).
+const NARROW_DETAIL_MIN: f32 = 40.0 + 400.0 + 16.0 + 140.0;
 
 /// The list pane's default width and the range it may be dragged in: 42% of the window (360–720) when
-/// wide; a fixed 360–380 band below NARROW, so the description keeps a readable measure.
+/// wide; below NARROW 45% of the window, but never so wide that the description column drops under 400.
 pub fn list_pane_width(window_w: f32) -> (f32, std::ops::RangeInclusive<f32>) {
     if window_w < NARROW {
-        (370.0, 360.0..=380.0)
+        let w = (window_w * 0.45).min(window_w - NARROW_DETAIL_MIN).max(320.0).floor();
+        (w, 320.0..=w)
     } else {
         let w = (window_w * 0.42).clamp(360.0, 720.0);
         (w, 320.0..=w)
@@ -513,9 +517,10 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
     app.last_cursor = app.cursor;
     // Row width less the 12 px card padding either side; one assignee decision for every row.
     let show_assignee = rows_show_assignee(ui.available_width() - 24.0);
-    // The same fade under the last visible row at every width: a full row's height.
-    ui.spacing_mut().scroll.fade = egui::style::ScrollFadeStyle { strength: 0.5, size: ROW_PITCH };
-    egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+    // egui's own fade dims whatever sits near an edge; the list fades only a row that is really cut (`fade_strip`).
+    ui.spacing_mut().scroll.fade = egui::style::ScrollFadeStyle { strength: 0.0, size: 0.0 };
+    let mut row_spans: Vec<(f32, f32)> = Vec::with_capacity(rows.len());
+    let out = egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
         ui.spacing_mut().item_spacing.y = ROW_GAP;
         // The selected row's dividers, drawn over its neighbours once every row is down.
         let mut sel_dividers: Option<(Rect, bool, bool, bool)> = None;
@@ -591,6 +596,7 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
                     });
                 });
             let rect = r.response.rect;
+            row_spans.push((rect.top(), rect.bottom()));
             let r = ui.interact(rect, row_id(&i.key), Sense::click());
             let fill = row_fill(is_sel, r.hovered(), p);
             ui.painter().set(bg, egui::epaint::RectShape::filled(rect, corners, fill));
@@ -628,6 +634,32 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
         // Room under the last row, so a toast (anchored above the hint bar) never covers it.
         ui.add_space(LIST_BOTTOM_PAD);
     });
+    let view = out.inner_rect;
+    let fade = p.bg.gamma_multiply(FADE_STRENGTH);
+    for (strip, dir, colors) in [
+        (fade_strip(&row_spans, view.bottom(), true), egui::epaint::Direction::BottomUp, [fade, egui::Color32::TRANSPARENT]),
+        (fade_strip(&row_spans, view.top(), false), egui::epaint::Direction::TopDown, [fade, egui::Color32::TRANSPARENT]),
+    ] {
+        if let Some((top, bottom)) = strip {
+            let r = Rect::from_x_y_ranges(view.x_range(), top..=bottom);
+            ui.painter().add(egui::Shape::gradient_rect(r, dir, colors));
+        }
+    }
+}
+
+/// A row cut by more than this at a viewport edge fades; less, and it reads as whole.
+const CLIP_MIN: f32 = 8.0;
+/// The fade's height at most: a short gradient over the cut row's visible strip only.
+const FADE_MAX: f32 = 24.0;
+/// The fade's strongest alpha, the same in both themes.
+const FADE_STRENGTH: f32 = 0.5;
+
+/// The strip to fade at a viewport edge (`edge`, the bottom when `bottom`, else the top), as (top, bottom):
+/// the visible part of the row the edge cuts, at most FADE_MAX tall at the edge, and only when the row is cut
+/// by more than CLIP_MIN. `rows` are the rows' (top, bottom) in screen space.
+pub fn fade_strip(rows: &[(f32, f32)], edge: f32, bottom: bool) -> Option<(f32, f32)> {
+    let &(top, bot) = rows.iter().find(|(t, b)| *t < edge && edge < *b)?;
+    if bottom { (bot - edge > CLIP_MIN).then(|| (top.max(edge - FADE_MAX), edge)) } else { (edge - top > CLIP_MIN).then(|| (edge, bot.min(edge + FADE_MAX))) }
 }
 
 /// Count row → first card.
@@ -639,14 +671,14 @@ const LIST_BOTTOM_PAD: f32 = 56.0;
 /// Rows stack as one list: −1 overlaps neighbouring borders, so a single 1 px divider separates rows, and
 /// only the list's outer corners are rounded (no doubled lines or notches at the seams).
 const ROW_GAP: f32 = -1.0;
-/// Row inner vertical padding. The title's line box carries ~4 px of leading above the caps, so 3 above reads
-/// as ~7–8 and 5 under the pills as ~6–7; with 2 px between the lines the pitch is 47 px, which keeps 14 full
-/// rows at 1440×900 (a 4 px gap or 8/4/8 code padding would drop it to 12–13).
-const ROW_PAD_TOP: i8 = 3;
-const ROW_PAD_BOTTOM: i8 = 5;
+/// Row inner vertical padding. The title's line box carries ~4 px of leading above the caps, so 1 above reads
+/// as ~5–6, as do the 4 under the pills; with 2 px between the lines (pills stay 16 tall) the pitch is 44 px,
+/// rule 10's two-line row, and 15 full rows fit at 1440×900.
+const ROW_PAD_TOP: i8 = 1;
+const ROW_PAD_BOTTOM: i8 = 4;
 const ROW_LINE_GAP: f32 = 2.0;
-/// One row's pitch, for the scroll fade.
-const ROW_PITCH: f32 = 47.0;
+/// One row's pitch (rows overlap by ROW_GAP's 1 px), for the density check.
+pub const ROW_PITCH: f32 = 44.0;
 
 /// The list's outer corners are rounded (6); the seams between rows are square.
 pub fn row_corners(idx: usize, n: usize) -> CornerRadius {
@@ -910,9 +942,28 @@ mod tests {
     }
 
     #[test]
-    fn narrow_windows_fix_the_list_pane() {
-        assert_eq!(list_pane_width(1000.0), (370.0, 360.0..=380.0));
-        assert_eq!(list_pane_width(1199.0).0, 370.0);
+    fn only_a_really_cut_row_fades() {
+        let rows = [(0.0, 44.0), (43.0, 87.0), (86.0, 130.0)];
+        assert_eq!(fade_strip(&rows, 125.0, true), None, "cut by 5: reads whole, no fade");
+        assert_eq!(fade_strip(&rows, 100.0, true), Some((86.0, 100.0)), "cut by 30: its 14 px strip fades");
+        assert_eq!(fade_strip(&rows, 120.0, true), Some((96.0, 120.0)), "a short gradient, at most 24");
+        assert_eq!(fade_strip(&rows, 200.0, true), None, "nothing at the edge");
+        assert_eq!(fade_strip(&rows, 20.0, false), Some((20.0, 44.0)), "the same rule at the top");
+        assert_eq!(fade_strip(&rows, 5.0, false), None);
+    }
+
+    #[test]
+    fn fifteen_rows_fit_at_1440_by_900() {
+        // 900 less the header (48), the filter block (12 + 28 + 12 + 28 + 12 + 32 + 12 + 28 + 4) and the hint bar.
+        let list_h = 900.0 - 48.0 - (12.0 + 28.0 + 12.0 + 28.0 + 12.0 + 32.0 + 12.0 + 28.0 + 4.0) - HINT_BAR_H;
+        assert!((list_h / ROW_PITCH).floor() >= 15.0, "{}", list_h / ROW_PITCH);
+    }
+
+    #[test]
+    fn narrow_windows_share_the_list_pane() {
+        assert_eq!(list_pane_width(1000.0), (404.0, 320.0..=404.0), "45% held back so the description keeps 400");
+        assert_eq!(list_pane_width(1199.0).0, (1199.0f32 * 0.45).floor());
+        assert!(list_pane_width(700.0).0 >= 320.0);
         let (w, r) = list_pane_width(1440.0);
         assert_eq!(w, (1440.0f32 * 0.42).clamp(360.0, 720.0));
         assert_eq!(r, 320.0..=w);
