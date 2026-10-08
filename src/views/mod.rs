@@ -50,56 +50,58 @@ pub fn header_syncing<'a>(lists: impl IntoIterator<Item = (&'a crate::store::Lis
 }
 
 fn header(app: &mut App, ui: &mut Ui, p: &Palette) {
-    egui::Panel::top("header")
-        .exact_size(48.0)
-        .frame(Frame::new().fill(p.surface).inner_margin(Margin::symmetric(16, 0)).stroke(Stroke::new(1.0, p.border)))
-        .show(ui, |ui| {
-            ui.horizontal_centered(|ui| {
-                ui.label(RichText::new("Jira Tickets").font(theme::bold(15.0)).color(p.text));
-                ui.add_space(16.0);
-                ui.spacing_mut().item_spacing.x = 16.0;
-                for (i, (s, name)) in TABS.into_iter().enumerate() {
-                    let active = app.screen == s;
-                    let bold = ui.painter().layout_no_wrap(name.to_string(), theme::bold(14.0), p.text);
-                    let regular = ui.painter().layout_no_wrap(name.to_string(), theme::body(14.0), p.muted);
-                    let w = tab_width(bold.size().x, regular.size().x);
-                    let (rect, r) = ui.allocate_exact_size(vec2(w, 32.0), Sense::click());
-                    let galley = if active { bold } else { regular };
-                    let pos = rect.center() - galley.size() / 2.0;
-                    ui.painter().galley(pos, galley, p.text);
-                    if active {
-                        ui.painter().hline(rect.x_range(), rect.bottom() + 7.0, Stroke::new(2.0, p.accent));
-                    }
-                    let r = r.on_hover_text(format!("{name} (⌘{})", i + 1));
-                    if r.clicked() {
-                        app.actions.push(Action::SetScreen(s));
-                    }
+    let panel = egui::Panel::top("header").exact_size(48.0).frame(Frame::new().fill(p.surface).inner_margin(Margin::symmetric(16, 0))).show(ui, |ui| {
+        ui.horizontal_centered(|ui| {
+            ui.label(RichText::new("Jira Tickets").font(theme::bold(15.0)).color(p.text));
+            ui.add_space(16.0);
+            ui.spacing_mut().item_spacing.x = 16.0;
+            for (i, (s, name)) in TABS.into_iter().enumerate() {
+                let active = app.screen == s;
+                let bold = ui.painter().layout_no_wrap(name.to_string(), theme::bold(14.0), p.text);
+                let regular = ui.painter().layout_no_wrap(name.to_string(), theme::body(14.0), p.muted);
+                let w = tab_width(bold.size().x, regular.size().x);
+                let (rect, r) = ui.allocate_exact_size(vec2(w, 32.0), Sense::click());
+                let galley = if active { bold } else { regular };
+                let pos = rect.center() - galley.size() / 2.0;
+                ui.painter().galley(pos, galley, p.text);
+                if active {
+                    ui.painter().hline(rect.x_range(), rect.bottom() + 7.0, Stroke::new(2.0, p.accent));
                 }
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.spacing_mut().item_spacing.x = 8.0;
-                    if let Some(me) = &app.me {
-                        let r = ui.add(egui::Label::new(RichText::new(&me.display_name).color(p.muted).size(14.0)).selectable(false).sense(Sense::click()));
-                        r.on_hover_text("Right-click to sign out").context_menu(|ui| {
-                            if ui.button("Sign out").clicked() {
-                                app.actions.push(Action::SignOut);
-                            }
-                        });
-                    }
-                    // One fixed 32×32 slot: the spinner replaces the button at the same size.
-                    if header_syncing(&app.lists) {
-                        icons::spinner_button(ui, p);
-                    } else if icons::icon_button(ui, icons::Icon::Sync, "Refresh (⌘R)", p).clicked() {
-                        app.actions.push(Action::Refresh);
-                    }
-                    if icons::text_button(ui, "?", "Keyboard help (?)", p).clicked() {
-                        app.actions.push(Action::ToggleHelp);
-                    }
-                    if crate::jira::READ_ONLY.load(std::sync::atomic::Ordering::Relaxed) {
-                        pill_sized(ui, "read-only", p.surface_2, p.muted, Stroke::NONE, HEADER_PILL_MARGIN);
-                    }
-                });
+                let r = r.on_hover_text(format!("{name} (⌘{})", i + 1));
+                if r.clicked() {
+                    app.actions.push(Action::SetScreen(s));
+                }
+            }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.spacing_mut().item_spacing.x = 8.0;
+                // Right to left: "Read-only" sits after (right of) the signed-in name.
+                if crate::jira::READ_ONLY.load(std::sync::atomic::Ordering::Relaxed) {
+                    ui.add(egui::Label::new(RichText::new("Read-only").color(p.muted).size(12.0)).selectable(false))
+                        .on_hover_text("Writes are blocked (JIRA_TICKETS_READONLY)");
+                }
+                if let Some(me) = &app.me {
+                    let r = ui.add(egui::Label::new(RichText::new(&me.display_name).color(p.muted).size(14.0)).selectable(false).sense(Sense::click()));
+                    r.on_hover_text("Right-click to sign out").context_menu(|ui| {
+                        if ui.button("Sign out").clicked() {
+                            app.actions.push(Action::SignOut);
+                        }
+                    });
+                }
+                // One fixed 32×32 slot: the spinner replaces the button at the same size.
+                if header_syncing(&app.lists) {
+                    icons::spinner_button(ui, p);
+                } else if icons::icon_button(ui, icons::Icon::Sync, "Refresh (⌘R)", p).clicked() {
+                    app.actions.push(Action::Refresh);
+                }
+                if icons::text_button(ui, "?", "Keyboard help (?)", p).clicked() {
+                    app.actions.push(Action::ToggleHelp);
+                }
             });
         });
+    });
+    // One 1 px rule under the header; no box around it.
+    let r = panel.response.rect;
+    ui.painter().hline(r.x_range(), r.bottom() - 0.5, Stroke::new(1.0, p.border));
 }
 
 fn offline_banner(app: &mut App, ui: &mut Ui, p: &Palette) {
@@ -342,8 +344,6 @@ pub fn primary_button_if(text: &str, enabled: bool, p: &Palette) -> egui::Button
 
 /// Pill inner padding (8/2) and radius (10).
 pub const PILL_MARGIN: egui::Vec2 = vec2(8.0, 2.0);
-/// Header pills sit beside 32 px buttons, so they get more height (8/4).
-pub const HEADER_PILL_MARGIN: egui::Vec2 = vec2(8.0, 4.0);
 
 pub fn pill(ui: &mut Ui, text: &str, bg: Color32, fg: Color32) -> egui::Response {
     pill_sized(ui, text, bg, fg, Stroke::NONE, PILL_MARGIN)
