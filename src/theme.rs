@@ -51,7 +51,7 @@ pub const LIGHT: Palette = Palette {
     surface_2: hex(0xf0f0ed),
     border: hex(0xe3e2de),
     text: hex(0x1f1f1d),
-    muted: hex(0x6b6a66),
+    muted: hex(0x62615d),
     accent: hex(0x2f6fdb),
     on_accent: hex(0xffffff),
     on_track: hex(0x2e8b57),
@@ -100,6 +100,8 @@ pub fn palette(ctx: &egui::Context) -> &'static Palette {
 pub struct Tint {
     pub bg: Color32,
     pub fg: Color32,
+    /// The row's left edge: the hue at the pill text's tone, so stripe and pill read as one colour.
+    pub stripe: Color32,
 }
 
 const GREY: u32 = 0x8a8984;
@@ -110,8 +112,9 @@ const PURPLE: u32 = 0x8250df;
 const RED: u32 = 0xc8403a;
 const GREEN: u32 = 0x2e8b57;
 
-/// Twelve distinct hues for epics, picked by a stable hash of the epic key.
-pub const EPIC_HUES: [u32; 12] = [0x2f6fdb, 0x2e8b57, 0xc98a12, 0x8250df, 0xc8403a, 0x0f9d9a, 0xd1559b, 0x6b8e23, 0xe07b39, 0x3d7ea6, 0x9a6700, 0x5c6ac4];
+/// Twelve distinct hues for epics, picked by a stable hash of the epic key. None sits in the
+/// status bands (In progress blue, Ready-for-work teal, Done green) or the danger red.
+pub const EPIC_HUES: [u32; 12] = [0x8250df, 0x6b8e23, 0xd1559b, 0xe07b39, 0xa64ca6, 0x9a6700, 0x5c6ac4, 0xc2416b, 0xb8860b, 0x7b5ea7, 0xa0522d, 0x7f7f2a];
 
 /// `#rrggbb` or `rrggbb`.
 pub fn parse_hex(s: &str) -> Option<Color32> {
@@ -137,8 +140,8 @@ fn mix(c: Color32, toward: u8, t: f32) -> Color32 {
 /// A translucent wash of the hue behind text in a darker (light theme) or
 /// lighter (dark theme) shade of it, for at least 4.5:1 contrast.
 pub fn tint_from_hue(base: Color32, p: &Palette) -> Tint {
-    let (alpha, fg) = if p.dark { (60, mix(base, 255, 0.45)) } else { (40, mix(base, 0, 0.35)) };
-    Tint { bg: Color32::from_rgba_unmultiplied(base.r(), base.g(), base.b(), alpha), fg }
+    let (alpha, fg) = if p.dark { (60, mix(base, 255, 0.45)) } else { (40, mix(base, 0, 0.45)) };
+    Tint { bg: Color32::from_rgba_unmultiplied(base.r(), base.g(), base.b(), alpha), fg, stripe: fg }
 }
 
 /// Override (case-insensitive name) > known status name > status category.
@@ -346,6 +349,36 @@ mod tests {
     fn toast_text_reads_on_the_tooltip_fill() {
         for p in [&LIGHT, &DARK] {
             assert!(contrast(Color32::WHITE, p.tooltip) >= 7.0);
+        }
+    }
+
+    #[test]
+    fn every_tint_reads_on_its_wash_on_every_row_fill() {
+        let statuses = ["New", "Planning", "Ready for Work", "In Progress", "In Review", "Blocked", "Done"];
+        for p in [&LIGHT, &DARK] {
+            let tints = EPIC_HUES.iter().map(|&h| tint_from_hue(hex(h), p)).chain(statuses.iter().map(|s| status_tint(s, "", p, &none())));
+            for t in tints {
+                for row in [p.surface, p.selected_row, p.hover_row, p.bg] {
+                    let c = contrast(t.fg, over(t.bg, row));
+                    assert!(c >= 4.5, "dark={} fg={:?} on {:?}: {c:.2}", p.dark, t.fg, row);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn muted_text_reads_on_every_row_fill() {
+        for p in [&LIGHT, &DARK] {
+            for row in [p.surface, p.selected_row, p.hover_row, p.bg] {
+                assert!(contrast(p.muted, row) >= 4.5, "dark={} {:?}: {:.2}", p.dark, row, contrast(p.muted, row));
+            }
+        }
+    }
+
+    #[test]
+    fn epic_hues_stay_out_of_the_status_and_danger_bands() {
+        for banned in [RED, TEAL, ACCENT, GREEN, BLUE, 0xc8403a, 0x0f9d9a] {
+            assert!(!EPIC_HUES.contains(&banned), "{banned:06x}");
         }
     }
 

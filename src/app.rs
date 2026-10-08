@@ -215,6 +215,8 @@ pub struct App {
     /// (issue key, transition id) of the transition in flight, so a
     /// "resolution required" error can retry it with a resolution.
     pending_transition: Option<(String, String)>,
+    /// Optimistic rank swaps awaiting their Done: (list, issue, neighbour), oldest first.
+    pending_ranks: Vec<(ListId, String, String)>,
     pub(crate) client: Option<Arc<Client>>,
     tx: Sender<Msg>,
     rx: Receiver<Msg>,
@@ -295,6 +297,7 @@ impl App {
             help_open: false,
             picker_loading: false,
             pending_transition: None,
+            pending_ranks: Vec::new(),
             client: None,
             tx,
             rx,
@@ -592,6 +595,16 @@ impl App {
                         return;
                     }
                 }
+                if what == "Rank"
+                    && let Some(i) = self.pending_ranks.iter().position(|(_, k, _)| *k == key)
+                {
+                    let (list, a, b) = self.pending_ranks.remove(i);
+                    if result.is_err()
+                        && let Some(rows) = self.store.lists.get_mut(&list)
+                    {
+                        undo_swap(rows, &a, &b);
+                    }
+                }
                 if what == "Comment" {
                     self.posting = None;
                     if result.is_ok() {
@@ -778,6 +791,9 @@ impl App {
                 if let Some(text) = self.goto.take()
                     && let Some(key) = crate::filter::parse_goto(&text, &self.cfg.scope.project)
                 {
+                    if let Some(i) = views::issues::current_rows(self).iter().position(|i| i.key == key) {
+                        self.cursor = i;
+                    }
                     self.selected = Some(key.clone());
                     self.load_detail(&key, false);
                 }
@@ -787,8 +803,10 @@ impl App {
                 if n == 0 {
                     return;
                 }
-                self.cursor = (self.cursor as i32 + delta).clamp(0, n as i32 - 1) as usize;
-                if let Some(key) = views::issues::current_rows(self).get(self.cursor).map(|i| i.key.clone()) {
+                let rows: Vec<String> = views::issues::current_rows(self).iter().map(|i| i.key.clone()).collect();
+                let at = self.selected.as_ref().and_then(|k| rows.iter().position(|r| r == k));
+                self.cursor = move_target(at, delta, n);
+                if let Some(key) = rows.get(self.cursor).cloned() {
                     self.actions.push(Action::Select(key));
                 }
             }
@@ -882,11 +900,18 @@ impl App {
                 let src = self.rows_list();
                 let rows: Vec<String> = views::issues::current_rows(self).iter().map(|i| i.key.clone()).collect();
                 let Some((neighbour, before)) = rank_target(&rows, &key, delta) else { return };
-                // Move the row now; a failed rank snaps back on the refresh that follows Done.
+                // Read-only: say so and leave the row where it is.
+                if let Err(e) = jira::check_writable() {
+                    let (text, error) = done_toast("Rank", &Err(e));
+                    self.toast(text, error);
+                    return;
+                }
+                // Move the row now; a failed rank swaps it back as soon as its Done lands.
                 if let Some(list) = self.store.lists.get_mut(&src)
                     && let (Some(a), Some(b)) = (list.iter().position(|k| *k == key), list.iter().position(|k| *k == neighbour))
                 {
                     list.swap(a, b);
+                    self.pending_ranks.push((src, key.clone(), neighbour.clone()));
                     // The selected row's new index, not the old cursor, which can disagree with it.
                     if let Some(i) = rows.iter().position(|k| *k == key) {
                         self.cursor = (i as i32 + delta).clamp(0, rows.len() as i32 - 1) as usize;
@@ -1070,6 +1095,22 @@ pub fn done_toast(what: &str, result: &jira::Result<()>) -> (String, bool) {
         Ok(()) => (format!("{what} done"), false),
         Err(e) if jira::is_read_only(e) => (format!("Read-only mode: {} not sent to Jira", what.to_lowercase()), true),
         Err(e) => (format!("{what} failed: {e}"), true),
+    }
+}
+
+/// The row a j/k move lands on: from the selected row when it is in the list, else from the top
+/// (the first move with nothing selected selects the first row).
+pub fn move_target(selected_at: Option<usize>, delta: i32, n: usize) -> usize {
+    match selected_at {
+        Some(i) => (i as i32 + delta).clamp(0, n as i32 - 1) as usize,
+        None => 0,
+    }
+}
+
+/// Swaps `a` and `b` back in a list's key order (a failed optimistic rank).
+fn undo_swap(rows: &mut [String], a: &str, b: &str) {
+    if let (Some(x), Some(y)) = (rows.iter().position(|k| k == a), rows.iter().position(|k| k == b)) {
+        rows.swap(x, y);
     }
 }
 
@@ -1369,6 +1410,24 @@ mod tests {
         assert_eq!(done_toast("Sprint move", &Err(ro)), ("Read-only mode: sprint move not sent to Jira".to_string(), true));
         let other = jira::Error::Other("Jira returned 400".into());
         assert_eq!(done_toast("Assign", &Err(other)), ("Assign failed: Jira returned 400".to_string(), true));
+    }
+
+    #[test]
+    fn moves_start_from_the_selected_row() {
+        assert_eq!(move_target(None, 1, 5), 0, "nothing selected: first row");
+        assert_eq!(move_target(Some(2), 1, 5), 3);
+        assert_eq!(move_target(Some(0), -1, 5), 0);
+        assert_eq!(move_target(Some(4), 1, 5), 4);
+    }
+
+    #[test]
+    fn failed_rank_swaps_back() {
+        let mut rows = ["A", "B", "C"].map(String::from).to_vec();
+        rows.swap(0, 1);
+        undo_swap(&mut rows, "A", "B");
+        assert_eq!(rows, ["A", "B", "C"]);
+        undo_swap(&mut rows, "A", "Z");
+        assert_eq!(rows, ["A", "B", "C"], "a missing key leaves the order alone");
     }
 
     #[test]

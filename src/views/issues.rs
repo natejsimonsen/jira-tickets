@@ -5,7 +5,7 @@ use crate::filter;
 use crate::jira::Issue;
 use crate::store::ListId;
 use crate::theme::{self, Palette};
-use crate::views::{button, pill, toggle_button};
+use crate::views::{button, pill, pill_outlined, toggle_button};
 use egui::{CornerRadius, Frame, Margin, Rect, RichText, Sense, Stroke, Ui, vec2};
 use std::collections::BTreeSet;
 
@@ -29,16 +29,20 @@ pub fn current_rows(app: &App) -> Vec<&Issue> {
 
 /// The row's leading pills: under All teams, its team labels in a neutral pill;
 /// under one team, an amber "no <label> label" when it is the team's by membership only.
-pub fn team_pills(ui: &mut Ui, f: &filter::IssueFilter, i: &Issue, p: &Palette) {
+pub fn team_pills(ui: &mut Ui, f: &filter::IssueFilter, i: &Issue, p: &Palette, outlined: bool) {
     match &f.team {
         filter::TeamScope::All => {
             let teams: Vec<&str> = i.labels.iter().filter(|l| f.team_labels.contains(l)).map(String::as_str).collect();
             if !teams.is_empty() {
-                pill(ui, &teams.join(" · "), p.surface_2, p.text);
+                row_pill(ui, &teams.join(" · "), p.surface_2, p.text, outlined, p);
             }
         }
         filter::TeamScope::Label(l) => {
-            missing_label_pill(ui, f, i, l, p);
+            let members = f.team_members.get(l.as_str()).map(Vec::as_slice).unwrap_or_default();
+            if filter::missing_team_label(i, l, members) {
+                let t = theme::tint_from_hue(p.at_risk, p);
+                row_pill(ui, &format!("no {l} label"), t.bg, t.fg, outlined, p);
+            }
         }
         filter::TeamScope::None => {}
     }
@@ -49,7 +53,8 @@ pub fn missing_label_pill(ui: &mut Ui, f: &filter::IssueFilter, i: &Issue, label
     let members = f.team_members.get(label).map(Vec::as_slice).unwrap_or_default();
     let missing = filter::missing_team_label(i, label, members);
     if missing {
-        pill(ui, &format!("no {label} label"), p.at_risk.gamma_multiply(0.15), p.at_risk);
+        let t = theme::tint_from_hue(p.at_risk, p);
+        pill(ui, &format!("no {label} label"), t.bg, t.fg);
     }
     missing
 }
@@ -294,24 +299,25 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
     let scroll_cursor = app.cursor != app.last_cursor;
     app.last_cursor = app.cursor;
     egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+        ui.spacing_mut().item_spacing.y = ROW_GAP;
         for (idx, i) in rows.iter().enumerate() {
             let is_sel = selected.as_deref() == Some(&i.key);
-            let fill = if is_sel {
-                p.selected_row
-            } else if idx == app.cursor {
-                p.hover_row
-            } else {
-                p.surface
-            };
             let epic = i.parent_key.as_deref().map(|k| theme::epic_tint(k, p, epic_colors));
-            let r = Frame::new().fill(fill).stroke(Stroke::new(1.0, p.border)).corner_radius(6).inner_margin(Margin::symmetric(10, 8)).show(ui, |ui| {
+            // The fill goes under the content once we know whether the pointer is over the row.
+            let bg = ui.painter().add(egui::Shape::Noop);
+            let hovered_before = ui.ctx().read_response(row_id(&i.key)).is_some_and(|r| r.hovered());
+            let outlined = is_sel || hovered_before;
+            let r = Frame::new().stroke(Stroke::new(1.0, p.border)).corner_radius(6).inner_margin(Margin::symmetric(12, 8)).show(ui, |ui| {
                 ui.set_width(ui.available_width());
+                ui.spacing_mut().item_spacing.y = 4.0;
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new(&i.key).font(theme::mono(12.0)).color(p.muted));
-                    ui.label(RichText::new(&i.summary).font(theme::bold(13.5)).color(p.text));
+                    ui.add(egui::Label::new(RichText::new(&i.key).font(theme::mono(12.5)).color(p.muted)).selectable(false));
+                    ui.add(egui::Label::new(RichText::new(&i.summary).font(theme::bold(13.5)).color(p.text)).truncate().selectable(false))
+                        .on_hover_text(&i.summary);
                 });
                 ui.horizontal_wrapped(|ui| {
-                    team_pills(ui, &app.filter, i, p);
+                    ui.spacing_mut().item_spacing = vec2(6.0, 4.0);
+                    team_pills(ui, &app.filter, i, p, outlined);
                     for c in &columns {
                         let v = filter::column_value(i, c);
                         if v.is_empty() {
@@ -325,15 +331,17 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
                             ("parent.summary" | "parent.key", Some(t)) => (t.bg, t.fg),
                             _ => (p.surface_2, p.muted),
                         };
-                        pill(ui, &v, bg, fg);
+                        row_pill(ui, &v, bg, fg, outlined, p);
                     }
                 });
             });
+            let rect = r.response.rect;
+            let r = ui.interact(rect, row_id(&i.key), Sense::click());
+            let fill = row_fill(is_sel, r.hovered(), p);
+            ui.painter().set(bg, egui::epaint::RectShape::filled(rect, 6, fill));
             if let Some(t) = epic {
-                let rect = r.response.rect;
-                ui.painter().rect_filled(Rect::from_min_size(rect.min, vec2(3.0, rect.height())), CornerRadius { nw: 6, sw: 6, ne: 0, se: 0 }, t.fg);
+                ui.painter().rect_filled(Rect::from_min_size(rect.min, vec2(3.0, rect.height())), CornerRadius { nw: 6, sw: 6, ne: 0, se: 0 }, t.stripe);
             }
-            let r = r.response.interact(Sense::click());
             if r.clicked() {
                 app.cursor = idx;
                 app.last_cursor = idx;
@@ -342,12 +350,36 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
             if r.double_clicked() {
                 app.actions.push(Action::OpenUrl(app.cfg.browse_url(&i.key)));
             }
-            if scroll_cursor && idx == app.cursor {
+            if scroll_cursor && is_sel {
                 r.scroll_to_me(None);
             }
-            ui.add_space(4.0);
         }
     });
+}
+
+/// Space between cards.
+const ROW_GAP: f32 = 4.0;
+
+fn row_id(key: &str) -> egui::Id {
+    egui::Id::new(("issue-row", key))
+}
+
+/// One selection state: the selected row is filled; any other row fills only under the pointer.
+pub fn row_fill(selected: bool, hovered: bool, p: &Palette) -> egui::Color32 {
+    match (selected, hovered) {
+        (true, _) => p.selected_row,
+        (false, true) => p.hover_row,
+        (false, false) => p.surface,
+    }
+}
+
+/// A row pill: outlined on selected or hovered rows, so its wash stays visible on the row fill.
+fn row_pill(ui: &mut Ui, text: &str, bg: egui::Color32, fg: egui::Color32, outlined: bool, p: &Palette) {
+    if outlined {
+        pill_outlined(ui, text, bg, fg, p);
+    } else {
+        pill(ui, text, bg, fg);
+    }
 }
 
 fn goto_box(app: &mut App, ctx: &egui::Context, p: &Palette) {
@@ -372,6 +404,15 @@ fn goto_box(app: &mut App, ctx: &egui::Context, p: &Palette) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_the_selected_or_pointed_row_is_filled() {
+        let p = &theme::LIGHT;
+        assert_eq!(row_fill(true, false, p), p.selected_row);
+        assert_eq!(row_fill(true, true, p), p.selected_row, "selection wins over hover");
+        assert_eq!(row_fill(false, true, p), p.hover_row);
+        assert_eq!(row_fill(false, false, p), p.surface, "no sticky cursor fill");
+    }
 
     #[test]
     fn count_row_label_follows_state() {
