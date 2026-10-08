@@ -60,9 +60,18 @@ api_token = "op://Private/Jira API Token/credential"
 [scope]
 projects = ["CI", "OPS"]      # projects searched for team members' work
 project = "CI"                 # project the team label lives in
-team_label = "PLAT"
-board_id = 101
+team_label = "PLAT"             # the user's own sub-team (grooming scope, default filter)
+board_id = 101                # board whose sprints drive the sprint scope
 filter_id = 201
+parent_board_id = 100         # parent board
+[[scope.teams]]                # sub-teams whose tickets the Issues view loads
+label = "PLAT"
+name = "Platform"
+board_id = 101
+[[scope.teams]]
+label = "TOOLS"
+name = "Developer Tools"
+board_id = 102
 
 [grooming]
 status_new = "New"
@@ -174,7 +183,7 @@ Three queries populate it on launch and `⌘R`:
 
 | List | JQL | Fields |
 |---|---|---|
-| `team_open` | `project = {project} AND labels = {team_label} AND statusCategory != Done ORDER BY Rank ASC` | summary, status, assignee, reporter, parent, labels, priority, issuetype, created, updated, duedate, rank (customfield_10019), statuscategorychangedate, sprint, story points |
+| `team_open` | `project = {project} AND labels in ({team labels}) AND statusCategory != Done ORDER BY Rank ASC` | summary, status, assignee, reporter, parent, labels, priority, issuetype, created, updated, duedate, rank (customfield_10019), statuscategorychangedate, sprint, story points |
 | `epics` | `project = {project} AND issuetype = Epic AND (labels in ({lane labels}) OR key in ({parents of team_open}))` plus the optional allowlist | summary, status, assignee, labels, priority, duedate, created, updated, description, comments (last 5), configured roadmap custom fields |
 | `team_in_progress` | `project in ({projects}) AND assignee in ({team}) AND statusCategory = "In Progress" ORDER BY updated DESC` | same as `team_open` |
 
@@ -206,7 +215,9 @@ back to the status category). Each epic has a stable colour from a
 12-hue palette chosen by hashing its key; it tints the epic pill, the
 detail view's parent line, and a 3 px left edge on each row. Labels stay
 neutral. Both maps can be overridden in config under
-`[issues.status_colors]` and `[issues.epic_colors]` (`"#rrggbb"`). Filters above the list: epic picker, a sprint scope (All, the
+`[issues.status_colors]` and `[issues.epic_colors]` (`"#rrggbb"`). Filters above the list: a team picker (All teams, each
+configured the parent team sub-team label such as PLAT or TOOLS, or "No team
+label"; defaults to the user's own team), an epic picker, a sprint scope (All, the
 board's active sprint, each future sprint, or Backlog; defaults to the
 active sprint, as jira-cli did), quick filters from config, a "Mine"
 toggle, and a search box (`/` or `⌘F`) that takes JQL. `⌘K` jumps to a key
