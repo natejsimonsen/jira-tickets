@@ -231,7 +231,10 @@ and the same for assignees) because the base list never holds such
 tickets. If a configured member fails to resolve, the open-issues query
 is retried without the assignee clause and a toast says so. The header's
 refresh control is a painted sync icon that becomes a spinner while
-loading. The sprint list comes from board 101's active and
+loading. `?` opens a keyboard help overlay on every screen, generated from
+one binding table that also produces the README's keyboard table (a test
+keeps them equal); the header shows a "? help" pill and the Issues screen
+a bottom hint bar listing the keys that apply right now. The sprint list comes from board 101's active and
 future sprints, refreshed with the lists; filtering is local on each
 issue's latest non-closed sprint.
 
