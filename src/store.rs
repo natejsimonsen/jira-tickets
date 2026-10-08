@@ -1,7 +1,7 @@
 //! One cached store of issues. Views are projections over it.
 
 use crate::config::Config;
-use crate::filter::TeamScope;
+use crate::filter::{SprintScope, TeamScope};
 use crate::jira::Issue;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
@@ -198,6 +198,17 @@ pub fn jql_team_in_progress(cfg: &Config, include_members: bool) -> Option<Strin
     Some(format!("project in ({}) AND assignee in ({}) AND statusCategory = \"In Progress\" ORDER BY updated DESC", projects.join(", "), members.join(", ")))
 }
 
+/// The sprint scope as JQL, the same rule `filter::visible` applies to each issue's parsed sprint. Backlog
+/// is what Jira's board backlog holds: never in a sprint, or in none that is still active or future
+/// (`sprint not in` alone drops issues with no sprint, hence the `is EMPTY`). None under All sprints.
+pub fn sprint_jql(scope: &SprintScope) -> Option<String> {
+    match scope {
+        SprintScope::All => None,
+        SprintScope::Backlog => Some("(sprint is EMPTY OR sprint not in (openSprints(), futureSprints()))".to_string()),
+        SprintScope::Named(n) => Some(format!("sprint = {}", jql_quote(n))),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -234,6 +245,13 @@ mod tests {
             Some(r#"project in ("CI", "OPS") AND assignee in ("Ada Lovelace", "Shawn Sorichetti") AND statusCategory = "In Progress" ORDER BY updated DESC"#)
         );
         assert_eq!(jql_quote(r#"a"b"#), r#""a\"b""#);
+    }
+
+    #[test]
+    fn sprint_scope_jql() {
+        assert_eq!(sprint_jql(&SprintScope::All), None);
+        assert_eq!(sprint_jql(&SprintScope::Backlog).as_deref(), Some("(sprint is EMPTY OR sprint not in (openSprints(), futureSprints()))"));
+        assert_eq!(sprint_jql(&SprintScope::Named("Sprint 91".into())).as_deref(), Some(r#"sprint = "Sprint 91""#));
     }
 
     #[test]

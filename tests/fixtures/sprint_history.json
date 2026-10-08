@@ -1,0 +1,47 @@
+{
+  "issues": [
+    {
+      "id": "200001",
+      "key": "CI-9239",
+      "fields": {
+        "summary": "Only ever in closed sprints",
+        "issuetype": { "name": "Story" },
+        "status": { "name": "New", "statusCategory": { "key": "new" } },
+        "labels": ["PLAT"],
+        "customfield_10020": [
+          { "id": 88, "name": "Sprint 88", "state": "closed" },
+          { "id": 89, "name": "Sprint 89", "state": "closed" },
+          { "id": 90, "name": "Sprint 90", "state": "closed" }
+        ]
+      }
+    },
+    {
+      "id": "200002",
+      "key": "CI-9300",
+      "fields": {
+        "summary": "Carried from a closed sprint into the active one",
+        "issuetype": { "name": "Story" },
+        "status": { "name": "In Progress", "statusCategory": { "key": "indeterminate" } },
+        "labels": ["PLAT"],
+        "customfield_10020": [
+          { "id": 90, "name": "Sprint 90", "state": "closed" },
+          { "id": 91, "name": "Sprint 91", "state": "active" }
+        ]
+      }
+    },
+    {
+      "id": "200003",
+      "key": "CI-9301",
+      "fields": {
+        "summary": "Planned into a future sprint",
+        "issuetype": { "name": "Story" },
+        "status": { "name": "New", "statusCategory": { "key": "new" } },
+        "labels": ["PLAT"],
+        "customfield_10020": [
+          { "id": 90, "name": "Sprint 90", "state": "closed" },
+          { "id": 92, "name": "Sprint 92", "state": "future" }
+        ]
+      }
+    }
+  ]
+}

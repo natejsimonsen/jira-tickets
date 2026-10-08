@@ -15,7 +15,8 @@ pub enum TeamScope {
     None,
 }
 
-/// Which sprint the Issues list is scoped to, matched against each issue's latest non-closed sprint.
+/// Which sprint the Issues list is scoped to, matched against each issue's last active or future sprint;
+/// Backlog is every issue with none (never sprinted, or only in closed sprints), as Jira's board has it.
 #[derive(Clone, Debug, PartialEq, Default)]
 pub enum SprintScope {
     #[default]

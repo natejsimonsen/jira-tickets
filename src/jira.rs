@@ -193,6 +193,12 @@ fn user_at(v: &Value) -> Option<User> {
     Some(User { account_id: str_at(v, &["accountId"]).unwrap_or_default(), display_name })
 }
 
+/// The issue's sprint as Jira's board sees it: the last one still `active` or `future`. An issue whose
+/// sprints are all closed is back in the backlog, so it has none (matching `store::sprint_jql`'s Backlog).
+fn open_sprint(sprints: &Value) -> Option<String> {
+    sprints.as_array()?.iter().rfind(|s| matches!(s["state"].as_str(), Some("active" | "future"))).and_then(|s| s["name"].as_str().map(String::from))
+}
+
 pub fn parse_issue(v: &Value) -> Issue {
     let f = &v["fields"];
     let mut custom = BTreeMap::new();
@@ -203,9 +209,7 @@ pub fn parse_issue(v: &Value) -> Issue {
             }
         }
     }
-    let sprint = f[SPRINT_FIELD]
-        .as_array()
-        .and_then(|a| a.iter().rfind(|s| s["state"].as_str() != Some("closed")).or(a.last()).and_then(|s| s["name"].as_str().map(String::from)));
+    let sprint = open_sprint(&f[SPRINT_FIELD]);
     let comments = f["comment"]["comments"]
         .as_array()
         .map(|a| {
@@ -618,6 +622,19 @@ pub mod tests {
         assert_eq!(b.assignee.as_ref().unwrap().display_name, "Ada Lovelace");
         assert_eq!(b.due_date.as_deref(), Some("2026-12-31"));
         assert!(b.sprint.is_none());
+    }
+
+    #[test]
+    fn sprint_is_the_open_one_and_closed_only_is_backlog() {
+        let page = fixture("sprint_history.json");
+        let issues: Vec<Issue> = page["issues"].as_array().unwrap().iter().map(parse_issue).collect();
+        assert_eq!(issues[0].key, "CI-9239");
+        assert!(issues[0].sprint.is_none(), "only closed sprints: back in the backlog");
+        assert_eq!(issues[1].sprint.as_deref(), Some("Sprint 91"), "a closed sprint and the active one");
+        assert_eq!(issues[2].sprint.as_deref(), Some("Sprint 92"), "carried into a future sprint");
+        let f = crate::filter::IssueFilter { sprint: crate::filter::SprintScope::Backlog, ..Default::default() };
+        let keys: Vec<&str> = crate::filter::visible(&issues.iter().collect::<Vec<_>>(), &f, false, None).iter().map(|i| i.key.as_str()).collect();
+        assert_eq!(keys, ["CI-9239"]);
     }
 
     #[test]

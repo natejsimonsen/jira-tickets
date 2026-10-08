@@ -241,7 +241,13 @@ one binding table that also produces the README's keyboard table (a test
 keeps them equal); the header shows a "? help" pill and the Issues screen
 a bottom hint bar listing the keys that apply right now. The sprint list comes from board 101's active and
 future sprints, refreshed with the lists; filtering is local on each
-issue's latest non-closed sprint.
+issue's sprint, which is its last `active` or `future` sprint. Backlog means
+what Jira's board backlog means: not in an active or future sprint, so an
+issue whose sprints are all closed (carried out of Sprint 88–90, say) is in the
+backlog. Where the scope goes to the server (the text search below) it is
+`(sprint is EMPTY OR sprint not in (openSprints(), futureSprints()))`; the
+`is EMPTY` is needed because `not in` alone never matches an issue with no
+sprint.
 
 Keys: `j`/`k` move, `Enter` opens detail, `t` transition, `a` assign, `s`
 sprint move, `e` edit labels/priority/points, `J`/`K` rank the selected
