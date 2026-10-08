@@ -97,6 +97,8 @@ pub enum Action {
     PickerConfirm,
     PickerCancel,
     Rank(i32),
+    /// Shows or hides the keyboard help overlay (`?`).
+    ToggleHelp,
 }
 
 /// The open modal picker. `cursor` indexes the rows the picker draws; Assign
@@ -196,6 +198,8 @@ pub struct App {
     /// The issue key of the comment post in flight.
     pub posting: Option<String>,
     pub picker: Option<Picker>,
+    /// The keyboard help overlay is showing; it owns the keyboard while open.
+    pub help_open: bool,
     /// A picker's items are being fetched; a spinner shows meanwhile.
     pub picker_loading: bool,
     /// (issue key, transition id) of the transition in flight, so a
@@ -276,6 +280,7 @@ impl App {
             drafts: HashMap::new(),
             posting: None,
             picker: None,
+            help_open: false,
             picker_loading: false,
             pending_transition: None,
             client: None,
@@ -797,6 +802,7 @@ impl App {
                     *cur = wrap_cursor(*cur, d, len);
                 }
             }
+            Action::ToggleHelp => self.help_open = !self.help_open,
             Action::PickerCancel => self.picker = None,
             Action::PickerConfirm => self.confirm_picker(),
             Action::Rank(delta) => {
@@ -893,6 +899,18 @@ impl App {
             self.actions.push(Action::Refresh);
         }
         let shortcut = |m: Modifiers, k: Key| ctx.input_mut(|i| i.consume_shortcut(&KeyboardShortcut::new(m, k)));
+        // Help owns the keyboard while open, ahead of pickers and the Issues keys.
+        if self.help_open {
+            if shortcut(Modifiers::NONE, Key::Escape) || shortcut(Modifiers::NONE, Key::Questionmark) {
+                self.actions.push(Action::ToggleHelp);
+            }
+            return;
+        }
+        // `?` is Shift+/; its logical key is Questionmark, so it never reads as `/`.
+        if !ctx.text_edit_focused() && shortcut(Modifiers::NONE, Key::Questionmark) {
+            self.actions.push(Action::ToggleHelp);
+            return;
+        }
         // An open picker owns the keyboard. Assign's filter box has focus, so
         // j/k type there; Edit has text fields, so only Esc applies (Enter in a
         // field does not save; use the Save button).
@@ -1100,6 +1118,7 @@ impl eframe::App for App {
             self.shortcuts(&ctx);
             views::main(self, ui);
             views::pickers::show(self, &ctx);
+            views::help::show(self, &ctx);
         } else {
             views::sign_in(self, ui);
         }

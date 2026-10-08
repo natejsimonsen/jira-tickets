@@ -45,6 +45,16 @@ pub fn show(app: &mut App, ui: &mut Ui) {
     let p = theme::palette(ui.ctx());
     let width = ui.available_width();
     let list_w = (width * 0.42).clamp(360.0, 720.0);
+    // First, so the strip spans the full width under both panels.
+    egui::Panel::bottom("hints")
+        .exact_size(24.0)
+        .frame(Frame::new().fill(p.surface).inner_margin(Margin::symmetric(16, 0)).stroke(Stroke::new(1.0, p.border)))
+        .show(ui, |ui| {
+            ui.horizontal_centered(|ui| {
+                let hint = crate::keys::hints(app.picker.is_some(), app.selected.is_some());
+                ui.label(RichText::new(hint).font(theme::mono(12.0)).color(p.muted));
+            });
+        });
     egui::Panel::left("issue-list")
         .resizable(true)
         .default_size(list_w)

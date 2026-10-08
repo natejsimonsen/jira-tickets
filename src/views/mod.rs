@@ -2,6 +2,7 @@
 
 pub mod adf_view;
 pub mod detail;
+pub mod help;
 pub mod icons;
 pub mod issues;
 pub mod pickers;
@@ -69,6 +70,10 @@ fn header(app: &mut App, ui: &mut Ui, p: &Palette) {
                         icons::spinner_button(ui, p);
                     } else if icons::icon_button(ui, icons::Icon::Sync, "Refresh (⌘R)", p).clicked() {
                         app.actions.push(Action::Refresh);
+                    }
+                    ui.add_space(4.0);
+                    if pill(ui, "? help", p.surface_2, p.muted).interact(Sense::click()).on_hover_text("Keyboard shortcuts (?)").clicked() {
+                        app.actions.push(Action::ToggleHelp);
                     }
                     if crate::jira::READ_ONLY.load(std::sync::atomic::Ordering::Relaxed) {
                         pill(ui, "read-only", p.danger_subtle, p.off_track);

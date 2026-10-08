@@ -44,7 +44,8 @@ const GLYPH: f32 = 16.0;
 
 /// The 32×32 button frame (hover fill when `hovered`); returns the centred 16×16 glyph rect.
 fn button_frame(ui: &Ui, rect: Rect, hovered: bool, p: &Palette) -> Rect {
-    let fill = if hovered { p.hover_row } else { p.surface_2 };
+    // hover_row equals surface_2 in the light palette; selected_row shows in both.
+    let fill = if hovered { p.selected_row } else { p.surface_2 };
     ui.painter().rect(rect, 6.0, fill, Stroke::new(1.0, p.border), egui::StrokeKind::Inside);
     Rect::from_center_size(rect.center(), Vec2::splat(GLYPH))
 }

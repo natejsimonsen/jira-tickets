@@ -13,6 +13,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
             ui.add(egui::Spinner::new().size(24.0));
         });
     }
+    let help_open = app.help_open;
     let Some(picker) = app.picker.as_mut() else { return };
     // Dim the page behind the dialog and swallow its clicks.
     egui::Area::new(egui::Id::new("picker-backdrop")).order(egui::Order::Middle).fixed_pos(egui::pos2(0.0, 0.0)).show(ctx, |ui| {
@@ -38,7 +39,10 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                 Picker::Assign { key, items, cursor, filter } => {
                     title(ui, p, &format!("Assign {key}"));
                     let r = ui.add(egui::TextEdit::singleline(filter).hint_text("Type a name").desired_width(f32::INFINITY));
-                    r.request_focus();
+                    // Not under the help overlay, or typing would land in the filter behind it.
+                    if !help_open {
+                        r.request_focus();
+                    }
                     let shown = filtered_users(items, filter);
                     if r.changed() {
                         *cursor = assign_cursor_after_filter(shown.len(), filter.trim().is_empty());

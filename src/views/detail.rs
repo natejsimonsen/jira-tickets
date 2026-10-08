@@ -110,8 +110,6 @@ pub fn show(app: &mut App, ui: &mut Ui) {
                 field(ui, p, "Due", issue.due_date.as_deref().unwrap_or("—"));
                 field(ui, p, "Created", &short_date(&issue.created));
                 field(ui, p, "Updated", &short_date(&issue.updated));
-                ui.add_space(8.0);
-                ui.label(RichText::new("t transition · a assign · s sprint · e edit · l team label · J/K rank").color(p.muted).size(11.0));
             });
         });
         ui.add_space(24.0);
