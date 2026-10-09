@@ -175,8 +175,9 @@ pub fn empty_detail_x(pane_left: f32, pane_right: f32, ink_centre: f32) -> f32 {
 /// E2: from the key's baseline it read 20.5 under a link and 23.5 under a bare key).
 const KEY_TO_TITLE: f32 = 24.0;
 /// The title's last line's ink → the pills' edge, the same with or without descenders (round 15 E7: 12 from the
-/// line box read 19.5 and 23).
-const TITLE_TO_PILLS: f32 = 16.0;
+/// line box read 19.5 and 23). 24, not 16: a picker's dialog sits 8 over the pills and must stay 12 under the
+/// title's descenders (16 left it 8).
+const TITLE_TO_PILLS: f32 = 24.0;
 
 /// `v` on the device-pixel grid, as the tessellator places a galley.
 fn snap(ui: &Ui, v: f32) -> f32 {
@@ -595,9 +596,9 @@ mod tests {
     }
 
     #[test]
-    fn the_title_sits_24_under_the_key_row_and_16_over_the_pills() {
+    fn the_title_sits_24_under_the_key_row_and_24_over_the_pills() {
         // Round 15 E2 / E7: the key row's lowest ink (the link's descenders, else the key) → the title's ink 24;
-        // the title's last line's ink → the pills 16, with or without descenders. Real fonts, 2x.
+        // the title's last line's ink → the pills 24, with or without descenders. Real fonts, 2x.
         let p = crate::theme::LIGHT;
         let marker = egui::Color32::from_rgb(1, 2, 3);
         for (link, title) in [(None, "Dashboards"), (Some("CI-404 Build System (ongoing)"), "Verify the MM/DD x-axis label on the autoscaler daily spend bar chart")]
