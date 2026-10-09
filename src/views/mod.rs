@@ -1075,8 +1075,9 @@ pub const THUMB_INSET: f32 = 2.0;
 /// The thumb's corner radius: round ends at THUMB_W.
 pub const THUMB_RADIUS: u8 = 2;
 /// The thumb's track stops this far short of its viewport's top and bottom, so its round ends never sit on a
-/// card's border (round 13 K1, C3).
-pub const THUMB_TRACK_INSET: f32 = 2.0;
+/// card's border (round 13 K1, C3): 2 pt inside the 1 pt border's inner edge (round 15 C3/K2: 2 from the
+/// viewport read 1–1.5 ink to ink).
+pub const THUMB_TRACK_INSET: f32 = 3.0;
 
 /// The thumb style for the floating bars (the list and the detail pane): THUMB_W wide at rest, THUMB_INSET in
 /// from the edge, shown whenever the area overflows, opaque (the rest tone is in `scroll_thumb`). Call before the

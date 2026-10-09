@@ -1168,6 +1168,16 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
             for (y, inset) in selected_dividers(rect, idx, rows.len()) {
                 ui.painter().hline(egui::Rangef::new(rect.left() + inset, rect.right()), y, Stroke::new(1.0, edge));
             }
+            // At the list's outer edge the rule carries on round the card's corner in the same tone, so no plain
+            // border shows in the arc (round 15 C2).
+            let radius = f32::from(theme::RADIUS);
+            for (outer, y) in [(idx == 0, rect.top()), (idx + 1 == rows.len(), rect.bottom() - radius)] {
+                if outer {
+                    let corner = Rect::from_min_size(egui::pos2(rect.left(), y), vec2(radius, radius));
+                    let arc = egui::epaint::RectShape::stroke(rect, row_corners(idx, rows.len()), Stroke::new(1.0, edge), egui::StrokeKind::Inside);
+                    ui.painter().with_clip_rect(corner.intersect(ui.clip_rect())).add(arc);
+                }
+            }
         }
         // Stripes last, in both themes; a row hidden as a bottom sliver shows none (it peeked 1 pt over the seam).
         let hidden = sliver_row(&row_spans, ui.clip_rect().bottom());
@@ -1262,7 +1272,13 @@ pub fn detail_fade(edge: f32, below: f32, ppp: f32) -> Option<(f32, f32)> {
 /// by more than CLIP_MIN. `rows` are the rows' (top, bottom) in screen space.
 pub fn fade_strip(rows: &[(f32, f32)], edge: f32, bottom: bool) -> Option<(f32, f32)> {
     let &(top, bot) = rows.iter().find(|(t, b)| *t < edge && edge < *b)?;
-    if bottom { (bot - edge > CLIP_MIN).then(|| (top.max(edge - FADE_MAX), edge)) } else { (edge - top > CLIP_MIN).then(|| (edge, bot.min(edge + FADE_MAX))) }
+    // The cut row's top border is the seam it shares with the last whole row: the fade starts under it, so that
+    // row's separator keeps its tone (round 15 K1).
+    if bottom {
+        (bot - edge > CLIP_MIN).then(|| ((top - ROW_GAP).max(edge - FADE_MAX), edge))
+    } else {
+        (edge - top > CLIP_MIN).then(|| (edge, bot.min(edge + FADE_MAX)))
+    }
 }
 
 /// The strip to hide at the viewport's bottom: a row showing less than CLIP_MIN there, from just under the
@@ -1353,8 +1369,9 @@ const ROW_PAD_LEFT: i8 = 11;
 const ROW_PAD_TOP: i8 = 0;
 const ROW_PAD_TOP_EXTRA: f32 = 0.5;
 const ROW_PAD_BOTTOM: i8 = 4;
-const ROW_PAD_BOTTOM_EXTRA: f32 = 3.5;
-const ROW_LINE_GAP: f32 = -1.5;
+const ROW_PAD_BOTTOM_EXTRA: f32 = 1.5;
+/// Round 15 C1: the pill line 1 lower (−0.5, was −1.5) and 1 less under it, so the row reads 2 / 4 / 5.
+const ROW_LINE_GAP: f32 = -0.5;
 /// The row frame's border width (egui 0.36 frames draw the stroke inside, ahead of the margin).
 const ROW_STROKE: f32 = 1.0;
 /// Row top edge → the title's cap ink (the border, the 0.5 pad and the title's ~4.5 leading).
@@ -1362,13 +1379,13 @@ const ROW_INK_TOP: f32 = 6.0;
 /// The title line as the row grid counts it: its 18 slot less the 4.5 leading over the caps, the 1.5 the pills
 /// moved up in round 10, and the 4 gap.
 const TITLE_LINE: f32 = 8.0;
-/// Title line → pill line.
-const TITLE_TO_PILLS: f32 = 4.0;
+/// Title line → pill line (round 15 C1: 4 read 2 from the descenders to the pills).
+const TITLE_TO_PILLS: f32 = 5.0;
 /// How far the key and summary are painted above their slot, so the summary's descenders clear the pills (round 13
-/// C1: they touched the pill line); the slot and the pill line (PILL_LINE_TOP) do not move.
-const TITLE_RAISE: f32 = 2.0;
-/// The pill line's top below the row's top edge: 6 + title line + 4 (round 11 C1), where it measured in every
-/// round-11 capture (row top + 36 px at 2×).
+/// C1: they touched the pill line; round 15 C1: 3 above the caps → 2); the slot and the pill line (PILL_LINE_TOP)
+/// do not move.
+const TITLE_RAISE: f32 = 3.0;
+/// The pill line's top below the row's top edge: 6 + title line + 5 (round 15 C1: row top + 19, 38 px at 2×).
 pub const PILL_LINE_TOP: f32 = ROW_INK_TOP + TITLE_LINE + TITLE_TO_PILLS;
 
 /// The pill line's y for a row whose outer top edge is `row_top`: PILL_LINE_TOP below it, on a whole physical
@@ -2104,6 +2121,7 @@ mod tests {
         assert_eq!(fade_strip(&rows, 200.0, true), None, "nothing at the edge");
         assert_eq!(fade_strip(&rows, 20.0, false), Some((20.0, 28.0)), "the same rule at the top");
         assert_eq!(fade_strip(&rows, 5.0, false), None);
+        assert_eq!(fade_strip(&rows, 94.5, true), Some((87.0, 94.5)), "K1: never over the seam above the cut row");
     }
 
     #[test]
@@ -2317,14 +2335,14 @@ mod tests {
 
     #[test]
     fn the_pill_line_sits_at_one_fixed_y() {
-        assert_eq!(PILL_LINE_TOP, 6.0 + 8.0 + 4.0, "row top + 6 + title line + 4");
-        // It is where the old flow put it: border 1 + pad 0.5 + the 18 title slot + the −1.5 line gap.
+        assert_eq!(PILL_LINE_TOP, 19.0, "row top + 19 (round 15 C1)");
+        // It is where the flow puts it: border 1 + pad 0.5 + the 18 title slot + the −0.5 line gap.
         assert_eq!(ROW_STROKE + f32::from(ROW_PAD_TOP) + ROW_PAD_TOP_EXTRA + 18.0 + ROW_LINE_GAP, PILL_LINE_TOP);
         // Whole physical pixels at 1× and 2×, from fractional row tops (a scroll offset) too.
-        assert_eq!(pill_line_y(100.0, 2.0), 118.0);
-        assert_eq!(pill_line_y(100.3, 2.0), 118.5);
-        assert_eq!(pill_line_y(100.2, 2.0), 118.0);
-        assert_eq!(pill_line_y(100.6, 1.0), 119.0);
+        assert_eq!(pill_line_y(100.0, 2.0), 119.0);
+        assert_eq!(pill_line_y(100.3, 2.0), 119.5);
+        assert_eq!(pill_line_y(100.2, 2.0), 119.0);
+        assert_eq!(pill_line_y(100.6, 1.0), 120.0);
         // Every row index and either scroll fraction: the same offset from the row's (pixel-rounded) top.
         for idx in 0..20 {
             let top = 197.0 + idx as f32 * ROW_PITCH;
@@ -2370,8 +2388,8 @@ mod tests {
         // Round 10: the bottom measured 4.5 at a 4 + 0.5 pad (the pills' edge is their ink). The pill row moves up
         // 1.5; the item spacing also follows the pill row, so the space under it nets ROW_LINE_GAP + EXTRA.
         let under_pills = f32::from(ROW_PAD_BOTTOM) + ROW_PAD_BOTTOM_EXTRA + ROW_LINE_GAP;
-        assert_eq!(under_pills, 6.0, "6 below the pills");
-        assert_eq!(ROW_LINE_GAP, -1.5, "the pill row up 1.5");
+        assert_eq!(under_pills, 5.0, "5 below the pills (round 15 C1)");
+        assert_eq!(ROW_LINE_GAP, -0.5, "the pill row 1 lower than round 10's −1.5");
         // Inside the frame: 0.5 + title + gap + pills + gap + extra; it was 0.5 + title + pills + 0.5.
         assert_eq!(ROW_PAD_TOP_EXTRA + 2.0 * ROW_LINE_GAP + ROW_PAD_BOTTOM_EXTRA, 1.0, "the row keeps its height (pitch unchanged)");
     }
