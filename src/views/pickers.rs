@@ -52,7 +52,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                     Picker::Assign { key, items, current, cursor, filter } => {
                         title(ui, p, &format!("Assign {key}"));
                         let r = ui.add(field(filter, "Type a name", p));
-                        ui.add_space(ASSIGN_FIELD_GAP);
+                        ui.add_space(gap_space(ASSIGN_FIELD_GAP, ui.spacing().item_spacing.y));
                         // Not under the help overlay, or typing would land in the filter behind it.
                         if !help_open {
                             r.request_focus();
@@ -129,17 +129,24 @@ fn picker_key(p: &Picker) -> &str {
     }
 }
 
-/// The dialog's top edge: 20% down the window less 6, so at 900 (174) it sits above the detail pane's pill row
-/// under a two-line title (175–192.5) instead of cutting across it (188 did; round 11 G1).
+/// The dialog's top edge: 20% down the window less 10, so at 900 (170) it covers the detail pane's pill row under
+/// a two-line title (ink 175–192.5) with 4 of margin above it; 174 put its edge on the pills' first pixel row and
+/// 188 cut across them (round 11 G1, round 12 G2: up, not down, since lower would show the pills' tops).
 pub fn dialog_top(window_h: f32) -> f32 {
     ((window_h * 0.2).round() - DIALOG_LIFT).max(0.0)
 }
 
 /// How far the dialog sits above the window's 20% line.
-const DIALOG_LIFT: f32 = 6.0;
+const DIALOG_LIFT: f32 = 10.0;
 
 /// The Assign filter field → the first row (round 11 G2: 8 left the field and the cursor row reading as one).
 const ASSIGN_FIELD_GAP: f32 = 12.0;
+
+/// The space to add for a `gap` between two widgets: the layout's item spacing already lands after the first
+/// (the Assign gap measured 18 = 12 + 6; round 12 G1).
+pub fn gap_space(gap: f32, item_spacing_y: f32) -> f32 {
+    (gap - item_spacing_y).max(0.0)
+}
 
 /// Rows the Assign list holds: Unassigned, up to ASSIGN_USERS users, and the "9 of N · type to see more" line.
 const ASSIGN_ROWS: f32 = (crate::app::ASSIGN_USERS + 2) as f32;
@@ -277,8 +284,18 @@ mod tests {
 
     #[test]
     fn dialog_sits_a_fifth_down() {
-        assert_eq!(super::dialog_top(900.0), 174.0, "above the two-line-title pill row (175)");
+        assert_eq!(super::dialog_top(900.0), 170.0, "4 over the edge pixel row above the two-line-title pills (175)");
+        assert!(super::dialog_top(900.0) + 4.0 < 175.0, "the dialog covers the pill row with margin");
         assert_eq!(super::dialog_top(0.0), 0.0);
         assert_eq!(super::ASSIGN_FIELD_GAP, 12.0);
+    }
+
+    #[test]
+    fn the_assign_field_sits_12_over_its_list() {
+        // G1: the space plus the theme's item spacing is the 12 gap (it was 12 + 6).
+        let spacing = 6.0;
+        assert_eq!(super::gap_space(super::ASSIGN_FIELD_GAP, spacing) + spacing, 12.0);
+        assert_eq!(super::gap_space(4.0, 6.0), 0.0, "never negative");
+        crate::testutil::with_ui(|ui| assert_eq!(ui.spacing().item_spacing.y, spacing, "the theme's spacing"));
     }
 }
