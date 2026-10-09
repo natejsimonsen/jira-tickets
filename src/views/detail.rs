@@ -25,6 +25,8 @@ pub fn show(app: &mut App, ui: &mut Ui) {
     };
     let loading = app.detail_loading.contains(&key);
     let saved = crate::views::set_thumb_fills(ui, p);
+    // No edge fade: the pane ends flush on the hint bar's rule (the fade dimmed its last ~19 px).
+    crate::views::no_scroll_fade(ui);
     egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
         crate::views::restore_fills(ui, saved);
         // The pane has no right margin: the bar sits in this inset, clear of the content.

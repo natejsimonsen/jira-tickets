@@ -763,6 +763,14 @@ pub fn dialog_muted(p: &Palette) -> Color32 {
     theme::muted_on(dialog_fill(p), p)
 }
 
+/// Turns off egui's scroll-edge fade for the scroll areas `ui` starts (the list and the detail pane), so they end
+/// flush on the hint bar.
+pub fn no_scroll_fade(ui: &mut Ui) {
+    ui.spacing_mut().scroll.fade = NO_FADE;
+}
+
+pub const NO_FADE: egui::style::ScrollFadeStyle = egui::style::ScrollFadeStyle { strength: 0.0, size: 0.0 };
+
 /// Muted text on a dialog's cursor row (the picker's "current" marker and muted names there): `muted` lifted
 /// on `dialog_cursor_fill` where it would fall under 5.0:1 (dark #cccbc6; light `muted`, which needs no lift).
 pub fn muted_on_selected(p: &Palette) -> Color32 {
@@ -801,20 +809,43 @@ pub fn pill_sized(ui: &mut Ui, text: &str, bg: Color32, fg: Color32, stroke: Str
 
 /// `text` cut to fit `max_w` (as `measure` lays it out) with "…"; trailing whitespace is trimmed before the
 /// ellipsis. Unchanged when it already fits.
-/// `truncate_text` for titles: a cut inside a word (a run of letters, digits and `/-_`) always backs up to the
-/// last whitespace ("…reusable workflo…" → "…reusable…"); only a single word that fills the column is cut
-/// mid-word. Trailing `,;:` go before the "…" ("sign-ins,…" → "sign-ins…").
+/// `truncate_text` for titles: a cut inside a word (a run of letters, digits and `/-_`) backs up to the last
+/// whitespace or hyphen, the pills' boundaries ("…reusable workflo…" → "…reusable…", "aws-node-term…" →
+/// "aws-node…"); only a single word that fills the column is cut mid-word. Trailing `,;:` go before the "…"
+/// ("sign-ins,…" → "sign-ins…"), and so does a trailing article or preposition (`TITLE_STOP_WORDS`: "…on the…"
+/// → "…on…" → "…").
 pub fn truncate_title(text: &str, max_w: f32, measure: impl Fn(&str) -> f32) -> String {
     let cut = truncate_text(text, max_w, measure);
     let Some(kept) = cut.strip_suffix('…') else { return cut };
     let word = |c: char| c.is_alphanumeric() || matches!(c, '/' | '-' | '_');
     // Mid-word: the kept text ends inside a word that the original continues.
     let mid_word = kept.ends_with(|c: char| !c.is_whitespace()) && text[kept.len()..].starts_with(word);
-    let kept = match kept.rfind(char::is_whitespace) {
-        Some(at) if mid_word && !kept[..at].trim().is_empty() => &kept[..at],
+    let kept = match kept.rfind(|c: char| c.is_whitespace() || c == '-') {
+        Some(at) if mid_word && !kept[..at].trim_end_matches(|c: char| c.is_whitespace() || c == '-').is_empty() => {
+            kept[..at].trim_end_matches(|c: char| c.is_whitespace() || c == '-')
+        }
         _ => kept,
     };
-    format!("{}…", trim_trailing_punctuation(kept))
+    format!("{}…", drop_stop_words(trim_trailing_punctuation(kept)))
+}
+
+/// Words a cut title never ends on: they promise a word the "…" hides.
+pub const TITLE_STOP_WORDS: [&str; 9] = ["the", "a", "an", "of", "on", "to", "from", "in", "for"];
+
+/// `kept` without trailing stop words (case-insensitive) and the punctuation they leave, keeping at least one word.
+fn drop_stop_words(mut kept: &str) -> &str {
+    while let Some(at) = kept.rfind(char::is_whitespace) {
+        let last = &kept[at..].trim_start();
+        if !TITLE_STOP_WORDS.iter().any(|w| w.eq_ignore_ascii_case(last)) {
+            break;
+        }
+        let rest = trim_trailing_punctuation(&kept[..at]);
+        if rest.is_empty() {
+            break;
+        }
+        kept = rest;
+    }
+    kept
 }
 
 /// `kept` without trailing whitespace and `,;:`, so an ellipsis never follows a dangling comma.
@@ -922,11 +953,21 @@ mod widget_tests {
         assert_eq!(truncate_title("Move the chart to PR checks", 26.0, w), "Move the chart to PR…", "any fragment backs up a word");
         assert_eq!(truncate_title("Supercalifragilistic", 3.0, w), "Su…", "one long word is still cut");
         assert_eq!(truncate_title("Build a reusable workflow for it", 25.0, w), "Build a reusable…");
-        assert_eq!(truncate_title("Move secondary-Environment checks", 20.0, w), "Move…", "a hyphen run is one word");
-        assert_eq!(truncate_title("Fix ci/cd-pipeline_steps now", 12.0, w), "Fix…", "/ and _ too");
+        assert_eq!(truncate_title("Move secondary-Environment checks", 20.0, w), "Move secondary…", "a hyphen is a boundary (K1)");
+        assert_eq!(truncate_title("Investigate aws-node-termination leaks", 27.0, w), "Investigate aws-node…", "the last hyphen before the cut");
+        assert_eq!(truncate_title("Fix ci/cd_pipeline steps now", 12.0, w), "Fix…", "/ and _ stay inside a word");
+        assert_eq!(truncate_title("Fix-it", 3.0, w), "Fi…", "a word that fills the column is still cut");
         assert_eq!(truncate_title("Support sign-ins, logins and more", 18.0, w), "Support sign-ins…", "a trailing comma goes");
         assert_eq!(truncate_title("One: two three", 6.0, w), "One…", "a trailing colon goes");
         assert_eq!(truncate_title("Alpha beta", 8.0, w), "Alpha…");
+        // C3: no title ends on an article or preposition.
+        assert_eq!(truncate_title("Move the chart to PR checks", 18.0, w), "Move the chart…", "'to' goes");
+        assert_eq!(truncate_title("Drill from a dashboard view", 15.0, w), "Drill…", "'from a' both go");
+        assert_eq!(truncate_title("Verify the label on the axis", 24.0, w), "Verify the label…", "'on the' both go");
+        assert_eq!(truncate_title("Fix tests for The release", 19.0, w), "Fix tests…", "case-insensitive");
+        assert_eq!(truncate_title("The quick brown", 6.0, w), "The…", "a lone stop word stays");
+        assert_eq!(truncate_title("Mirror of, the thing", 15.0, w), "Mirror…", "punctuation left behind goes too");
+        assert_eq!(truncate_title("In the beginning", 30.0, w), "In the beginning", "uncut titles keep every word");
     }
 
     #[test]

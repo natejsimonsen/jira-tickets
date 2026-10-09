@@ -880,10 +880,11 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
         key_column_width(rows.iter().map(|i| painter.layout_no_wrap(i.key.clone(), theme::mono(12.5), p.muted).size().x))
     };
     // egui's own fade dims whatever sits near an edge; the list fades only a row that is really cut (`fade_strip`).
-    ui.spacing_mut().scroll.fade = egui::style::ScrollFadeStyle { strength: 0.0, size: 0.0 };
+    crate::views::no_scroll_fade(ui);
     let mut row_spans: Vec<(f32, f32)> = Vec::with_capacity(rows.len());
     let mut selected_rect: Option<(Rect, usize)> = None;
     let mut row_x: Option<egui::Rangef> = None;
+    let mut stripes: Vec<(usize, Rect, CornerRadius, egui::Color32)> = Vec::new();
     let out = egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
         ui.spacing_mut().item_spacing.y = ROW_GAP;
         for (idx, i) in rows.iter().enumerate() {
@@ -992,9 +993,9 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
             }
             if let Some(t) = epic {
                 // Over the card's left border, on whole physical pixels, so no sliver of the page shows between
-                // the stripe and the fill.
+                // the stripe and the fill. Painted after the selection rules (below), so they never notch it.
                 let stripe = CornerRadius { nw: corners.nw, sw: corners.sw, ne: 0, se: 0 };
-                ui.painter().rect_filled(stripe_rect(rect, ui.ctx().pixels_per_point()), stripe, row_stripe(&t, p, is_sel));
+                stripes.push((idx, stripe_rect(rect, ui.ctx().pixels_per_point()), stripe, row_stripe(&t, p, is_sel)));
             }
             if is_sel {
                 selected_rect = Some((rect, idx));
@@ -1017,6 +1018,13 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
             let edge = crate::views::selected_edge(p);
             for (y, inset) in selected_dividers(rect, idx, rows.len()) {
                 ui.painter().hline(egui::Rangef::new(rect.left() + inset, rect.right()), y, Stroke::new(1.0, edge));
+            }
+        }
+        // Stripes last, in both themes; a row hidden as a bottom sliver shows none (it peeked 1 pt over the seam).
+        let hidden = sliver_row(&row_spans, ui.clip_rect().bottom());
+        for (idx, r, corners, color) in stripes {
+            if Some(idx) != hidden {
+                ui.painter().rect_filled(r, corners, color);
             }
         }
         // Room under the last row, so a toast (anchored above the hint bar) never covers it.
@@ -1046,8 +1054,9 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
 
 /// A row cut by more than this at a viewport edge fades; less, and it reads as whole.
 const CLIP_MIN: f32 = 8.0;
-/// The fade's height at most: a short gradient over the cut row's visible strip only.
-const FADE_MAX: f32 = 24.0;
+/// The fade's height at most: a short gradient over the cut row's visible strip only (24 read as the list
+/// fading into the hint bar; round 10: ≤ 8).
+const FADE_MAX: f32 = 8.0;
 /// The fade's strongest alpha, the same in both themes.
 const FADE_STRENGTH: f32 = 0.5;
 
@@ -1062,8 +1071,13 @@ pub fn fade_strip(rows: &[(f32, f32)], edge: f32, bottom: bool) -> Option<(f32, 
 /// The strip to hide at the viewport's bottom: a row showing less than CLIP_MIN there, from just under the
 /// previous row's border (rows share their 1 px seam) to the edge, as (top, bottom).
 pub fn bottom_sliver(rows: &[(f32, f32)], edge: f32) -> Option<(f32, f32)> {
-    let &(top, _) = rows.iter().find(|(t, b)| *t < edge && edge < *b)?;
-    (edge - top < CLIP_MIN).then_some((top + 1.0, edge))
+    sliver_row(rows, edge).map(|i| (rows[i].0 + 1.0, edge))
+}
+
+/// The index of the row the viewport's bottom `edge` cuts to a sliver (showing less than CLIP_MIN), if any.
+pub fn sliver_row(rows: &[(f32, f32)], edge: f32) -> Option<usize> {
+    let i = rows.iter().position(|(t, b)| *t < edge && edge < *b)?;
+    (edge - rows[i].0 < CLIP_MIN).then_some(i)
 }
 
 /// Whether any row reaches past the viewport's bottom edge (by more than half a pixel).
@@ -1092,15 +1106,18 @@ const LIST_BOTTOM_PAD: f32 = 56.0;
 /// Rows stack as one list: −1 overlaps neighbouring borders, so a single 1 px divider separates rows, and
 /// only the list's outer corners are rounded (no doubled lines or notches at the seams).
 const ROW_GAP: f32 = -1.0;
-/// Row inner vertical padding, measured edge (border included) to ink: 6 / title / 4 / pills / 6 (round 8; it
+/// Row inner vertical padding, measured edge (border included) to ink: 6 / title / pills / 6 (round 8; it
 /// measured 5.5 / 5 / 7.5 with pads 0 / 1 / 6). The title's line box carries ~4.5 of leading above the caps,
-/// so the top pad is 0.5; the bottom read 1.5 over its pad, so it is 4.5. Margins are whole points, so the
-/// half points are spaces inside the frame.
+/// so the top pad is 0.5. Round 10 measured the bottom 4.5 with a 4.5 pad (3.0 more than the old 1.5 estimate),
+/// so the pill row moves up 1.5 (ROW_LINE_GAP) and the pad below grows 1.5: the row's height is unchanged and
+/// the bottom lands on 6. ROW_LINE_GAP is the frame's item spacing, so it also follows the pill row: the bottom
+/// space is 3.5 to net 2.0 under the pills. Margins are whole points, so the half points are spaces inside the
+/// frame.
 const ROW_PAD_TOP: i8 = 0;
 const ROW_PAD_TOP_EXTRA: f32 = 0.5;
 const ROW_PAD_BOTTOM: i8 = 4;
-const ROW_PAD_BOTTOM_EXTRA: f32 = 0.5;
-const ROW_LINE_GAP: f32 = 0.0;
+const ROW_PAD_BOTTOM_EXTRA: f32 = 3.5;
+const ROW_LINE_GAP: f32 = -1.5;
 /// One row's pitch (rows overlap by ROW_GAP's 1 px), for the density check: 44 − 2 from round 8's padding.
 pub const ROW_PITCH: f32 = 42.0;
 
@@ -1630,10 +1647,10 @@ mod tests {
     fn only_a_really_cut_row_fades() {
         let rows = [(0.0, 44.0), (43.0, 87.0), (86.0, 130.0)];
         assert_eq!(fade_strip(&rows, 125.0, true), None, "cut by 5: reads whole, no fade");
-        assert_eq!(fade_strip(&rows, 100.0, true), Some((86.0, 100.0)), "cut by 30: its 14 px strip fades");
-        assert_eq!(fade_strip(&rows, 120.0, true), Some((96.0, 120.0)), "a short gradient, at most 24");
+        assert_eq!(fade_strip(&rows, 100.0, true), Some((92.0, 100.0)), "cut by 30: 8 px of its strip fade");
+        assert_eq!(fade_strip(&rows, 120.0, true), Some((112.0, 120.0)), "a short gradient, at most 8");
         assert_eq!(fade_strip(&rows, 200.0, true), None, "nothing at the edge");
-        assert_eq!(fade_strip(&rows, 20.0, false), Some((20.0, 44.0)), "the same rule at the top");
+        assert_eq!(fade_strip(&rows, 20.0, false), Some((20.0, 28.0)), "the same rule at the top");
         assert_eq!(fade_strip(&rows, 5.0, false), None);
     }
 
@@ -1644,6 +1661,8 @@ mod tests {
         assert_eq!(bottom_sliver(&rows, 100.0), None, "14 px shows (and fades)");
         assert_eq!(bottom_sliver(&rows, 130.0), None, "every row whole");
         assert_eq!(bottom_sliver(&rows, 87.0), Some((87.0, 87.0)), "only the shared seam: nothing to cover");
+        assert_eq!(sliver_row(&rows, 92.0), Some(2), "its stripe is not drawn");
+        assert_eq!(sliver_row(&rows, 100.0), None);
     }
 
     #[test]
@@ -1805,8 +1824,13 @@ mod tests {
         // Edge to ink as round 8 measured it: above, the border 1 and the title's ~4.5 of leading over the caps
         // (5.5 with a 0 pad); below, 1.5 more than the pad (7.5 with 6).
         assert_eq!(1.0 + 4.5 + f32::from(ROW_PAD_TOP) + ROW_PAD_TOP_EXTRA, 6.0);
-        assert_eq!(f32::from(ROW_PAD_BOTTOM) + ROW_PAD_BOTTOM_EXTRA + 1.5, 6.0);
-        assert_eq!(ROW_LINE_GAP, 0.0, "baseline to pill top 5 → 4");
+        // Round 10: the bottom measured 4.5 at a 4 + 0.5 pad (the pills' edge is their ink). The pill row moves up
+        // 1.5; the item spacing also follows the pill row, so the space under it nets ROW_LINE_GAP + EXTRA.
+        let under_pills = f32::from(ROW_PAD_BOTTOM) + ROW_PAD_BOTTOM_EXTRA + ROW_LINE_GAP;
+        assert_eq!(under_pills, 6.0, "6 below the pills");
+        assert_eq!(ROW_LINE_GAP, -1.5, "the pill row up 1.5");
+        // Inside the frame: 0.5 + title + gap + pills + gap + extra; it was 0.5 + title + pills + 0.5.
+        assert_eq!(ROW_PAD_TOP_EXTRA + 2.0 * ROW_LINE_GAP + ROW_PAD_BOTTOM_EXTRA, 1.0, "the row keeps its height (pitch unchanged)");
     }
 
     #[test]
