@@ -404,7 +404,7 @@ fn again_extra(h: f32) -> f32 {
 const SIGN_IN_STROKE: f32 = 1.0;
 
 /// "Check again"'s tooltip: its identifiers in mono like the aside's (round 15 J3).
-pub const CHECK_AGAIN_TIP: [&str; 5] = ["Look again for ", "JIRA_API_TOKEN", " or ", "api_token", " in config.toml"];
+pub const CHECK_AGAIN_TIP: [&str; 6] = ["Look again for ", "JIRA_API_TOKEN", " or ", "api_token", " in ", "config.toml"];
 
 /// The tooltip's clearance below the sign-in panel (round 15 J3: it overlapped the panel's edge).
 const TIP_PANEL_CLEAR: f32 = 4.0;

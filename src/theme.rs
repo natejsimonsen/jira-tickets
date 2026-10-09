@@ -548,10 +548,14 @@ fn visible_ink_at(ctx: &egui::Context, g: &egui::Galley, alpha: u8) -> egui::Rec
     }
     g.pixels_per_point.to_bits().hash(&mut h);
     alpha.hash(&mut h);
-    // The rasters' atlas cells too: other fonts (the first frame's) or a rebuilt atlas is another entry.
+    // The rasters themselves too: the first frame's fonts can land their glyphs in the very cells the app's fonts
+    // take once loaded (a rebuilt atlas fills in the same order), so the advances and raster boxes join the key.
     for row in &g.rows {
         for gl in &row.glyphs {
             (gl.uv_rect.min, gl.uv_rect.max).hash(&mut h);
+            for v in [gl.advance_width, gl.uv_rect.offset.x, gl.uv_rect.offset.y, gl.uv_rect.size.x, gl.uv_rect.size.y, gl.pos.x] {
+                v.to_bits().hash(&mut h);
+            }
         }
     }
     let id = egui::Id::new(("visible-ink", h.finish()));
