@@ -99,6 +99,8 @@ pub enum HintContext {
     GoTo,
     /// The search box has focus and Esc would clear it (text, or a search showing).
     Search,
+    /// The search box has focus and holds plain text (already filtered and text-searched); Enter runs it as JQL.
+    SearchText,
     /// The search box has focus with nothing to clear, so Esc leaves it.
     SearchEmpty,
     /// The comment composer has focus.
@@ -121,8 +123,12 @@ pub enum HintContext {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Focus {
     None,
-    /// The search box; true when Esc would clear it rather than leave.
-    Search(bool),
+    /// The search box: `clear` when Esc would clear it rather than leave, `plain` when it holds plain text
+    /// (not JQL), which Enter runs as JQL.
+    Search {
+        clear: bool,
+        plain: bool,
+    },
     Composer,
     /// Some other field: plain letters would type into it.
     OtherText,
@@ -165,8 +171,9 @@ pub fn hint_context(s: HintState) -> HintContext {
         (_, _, Some(PickerHint::Other)) => HintContext::Picker,
         (_, true, None) => HintContext::GoTo,
         _ => match focus {
-            Focus::Search(true) => HintContext::Search,
-            Focus::Search(false) => HintContext::SearchEmpty,
+            Focus::Search { clear: true, plain: true } => HintContext::SearchText,
+            Focus::Search { clear: true, plain: false } => HintContext::Search,
+            Focus::Search { clear: false, .. } => HintContext::SearchEmpty,
             Focus::Composer if read_only => HintContext::ComposerReadOnly,
             Focus::Composer => HintContext::Composer,
             Focus::None if has_selection && search_shown => HintContext::SelectedSearch,
@@ -184,6 +191,7 @@ pub fn hints(c: HintContext) -> &'static [Hint] {
         HintContext::Help => &[&[K("?"), W("or"), K("Esc"), W("close")]],
         HintContext::GoTo => &[&[K("Enter"), W("open")], &[K("Esc"), W("close")]],
         HintContext::Search => &[&[K("Enter"), W("search JQL")], &[K("Esc"), W("clear")]],
+        HintContext::SearchText => &[&[K("Enter"), W("run as JQL")], &[K("Esc"), W("clear")]],
         HintContext::SearchEmpty => &[&[K("Enter"), W("search JQL")], &[K("Esc"), W("done")]],
         HintContext::Composer => &[&[K("⌘Enter"), W("post")], &[K("Esc"), W("keep draft")]],
         HintContext::ComposerReadOnly => &[&[K("Esc"), W("keep draft")]],
@@ -303,8 +311,10 @@ mod tests {
         assert_eq!(hint_context(st(false, false, Some(PickerHint::Assign), true, Focus::OtherText)), AssignPicker);
         assert_eq!(hint_text(hints(AssignPicker)), "Type to filter · ↑/↓ move · Enter confirm · Esc cancel");
         assert_eq!(hint_context(st(false, true, None, true, Focus::OtherText)), GoTo);
-        assert_eq!(hint_context(st(false, false, None, true, Focus::Search(true))), Search);
-        assert_eq!(hint_context(st(false, false, None, true, Focus::Search(false))), SearchEmpty);
+        assert_eq!(hint_context(st(false, false, None, true, Focus::Search { clear: true, plain: false })), Search);
+        assert_eq!(hint_context(st(false, false, None, true, Focus::Search { clear: true, plain: true })), SearchText);
+        assert_eq!(hint_text(hints(SearchText)), "Enter run as JQL · Esc clear");
+        assert_eq!(hint_context(st(false, false, None, true, Focus::Search { clear: false, plain: false })), SearchEmpty);
         assert_eq!(hint_text(hints(SearchEmpty)), "Enter search JQL · Esc done");
         assert_eq!(hint_context(st(false, false, None, true, Focus::Composer)), Composer, "the bar follows focus into the composer");
         assert_eq!(hint_context(st(false, false, None, true, Focus::None)), Selected);

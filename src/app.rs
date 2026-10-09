@@ -514,6 +514,8 @@ impl App {
     fn text_search_tick(&mut self, ctx: &egui::Context) {
         let since = self.text_edited.map_or(Duration::MAX, |t| t.elapsed());
         match crate::filter::text_search_term(&self.filter.text).map(String::from) {
+            // Enter ran this very text as JQL: that search stands until the box changes.
+            Some(term) if crate::views::issues::typed_for(self.typed_search, self.last_search_jql.as_deref(), &term) => {}
             Some(term) if crate::filter::should_text_search(&term, since) => {
                 if self.text_search_jql.as_deref() != Some(self.text_search_jql(&term).as_str()) {
                     self.actions.push(Action::RunTextSearch(term));

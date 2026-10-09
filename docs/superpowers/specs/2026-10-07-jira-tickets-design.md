@@ -244,11 +244,12 @@ sequenced search path as every other search, so a newer term or scope drops
 an older reply, and the previous rows stay on screen with a muted count and
 "⟳ Updating…" while it runs. When it lands the rows are the server's set in
 Rank order (Mine and Roadmap still apply locally) and the count reads
-"N issues · text". Changing team, quick filter, sprint or epic reruns it in
+"N issues · text match". Changing team, quick filter, sprint or epic reruns it in
 the new scope. Clearing the box (or Esc) returns to the scope's rows; the
 team list needs no refetch, a quick filter's search is rerun. Text with a
-JQL operator (`=`, ` in `, `~`, `!`) is never text-searched: Enter runs it
-as a JQL search and the count reads "· JQL".
+JQL operator (`=`, ` in `, `~`, `!`) is never text-searched. Enter runs
+whatever the box holds, plain text included, as a JQL search (the hint bar
+reads "Enter run as JQL" over plain text) and the count reads "· JQL".
 Epics never appear in the Issues list: they are containers, not action
 items, and stay in the store for the epic picker, grooming, and the
 roadmap. `⌘K` jumps to a key or pasted browse link. A ticket assigned to a team member counts as that

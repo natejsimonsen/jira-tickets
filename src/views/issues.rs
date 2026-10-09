@@ -243,7 +243,11 @@ fn text_focus(ui: &Ui, app: &App) -> crate::keys::Focus {
     use crate::keys::Focus;
     let has = |id: egui::Id| ui.memory(|m| m.has_focus(id));
     if has(egui::Id::new("issue-search")) {
-        Focus::Search(search_esc(!app.filter.text.is_empty(), app.search_active) == SearchEsc::Clear)
+        let t = app.filter.text.trim();
+        Focus::Search {
+            clear: search_esc(!app.filter.text.is_empty(), app.search_active) == SearchEsc::Clear,
+            plain: !t.is_empty() && !filter::looks_like_jql(t),
+        }
     } else if app.selected.as_deref().is_some_and(|k| has(super::detail::composer_id(k))) {
         Focus::Composer
     } else if ui.ctx().text_edit_focused() {
@@ -381,6 +385,16 @@ fn combo(ui: &mut Ui, salt: &str, text: String, (w, widest): (f32, f32), pane: (
         });
 }
 
+/// The search box's placeholder: it filters, searches, and runs JQL on Enter.
+pub const SEARCH_HINT: &str = "Filter or search, Enter for JQL (⌘F)";
+
+/// What Enter in the search box runs as typed JQL: whatever it holds, plain text included (the hint says
+/// "Enter run as JQL"); the text stays in the box.
+pub fn enter_jql(text: &str) -> Option<String> {
+    let t = text.trim();
+    (!t.is_empty()).then(|| t.to_string())
+}
+
 /// What Esc does in the search box: first it clears the text and any search, then it blurs.
 #[derive(Debug, PartialEq, Eq)]
 pub enum SearchEsc {
@@ -398,9 +412,16 @@ pub fn esc_clears_search(search_active: bool, typed: bool, text: bool) -> bool {
     search_active && (typed || text)
 }
 
-/// The text search is waiting out its debounce: the box holds a term the active text search is not for yet.
-pub fn text_debouncing(term: Option<&str>, text_search: Option<&str>) -> bool {
-    term.is_some_and(|t| text_search != Some(t))
+/// The text search is waiting out its debounce: the box holds a term the active text search is not for yet
+/// (and that Enter has not already run as JQL, see `typed_for`).
+pub fn text_debouncing(term: Option<&str>, text_search: Option<&str>, typed: bool) -> bool {
+    !typed && term.is_some_and(|t| text_search != Some(t))
+}
+
+/// The active typed search is for exactly `term` (Enter ran the box's plain text as JQL), so no text search
+/// replaces it.
+pub fn typed_for(typed_search: bool, last_jql: Option<&str>, term: &str) -> bool {
+    typed_search && last_jql == Some(term)
 }
 
 fn filters(app: &mut App, ui: &mut Ui, p: &Palette) {
@@ -515,7 +536,7 @@ fn filters(app: &mut App, ui: &mut Ui, p: &Palette) {
             app.actions.push(Action::RunSearch(String::new()));
         }
     }
-    let r = ui.add(crate::views::input_field(&mut app.filter.text, "Filter, or type JQL and press Enter (⌘F)", theme::body(14.0), p).id(id));
+    let r = ui.add(crate::views::input_field(&mut app.filter.text, SEARCH_HINT, theme::body(14.0), p).id(id));
     if r.changed() {
         app.text_edited = Some(std::time::Instant::now());
     }
@@ -523,12 +544,11 @@ fn filters(app: &mut App, ui: &mut Ui, p: &Palette) {
         r.request_focus();
         app.focus_search = false;
     }
-    if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-        let t = app.filter.text.trim().to_string();
-        // JQL has an operator; a bare word is a local text filter. The JQL stays in the box.
-        if filter::looks_like_jql(&t) {
-            app.actions.push(Action::RunTypedSearch(t));
-        }
+    if r.lost_focus()
+        && ui.input(|i| i.key_pressed(egui::Key::Enter))
+        && let Some(jql) = enter_jql(&app.filter.text)
+    {
+        app.actions.push(Action::RunTypedSearch(jql));
     }
 }
 
@@ -619,7 +639,9 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
     // a search started here.
     let syncing = crate::views::header_syncing(&app.lists);
     // From the first keystroke of a term, not only once its debounced search is sent.
-    let debouncing = text_debouncing(filter::text_search_term(&app.filter.text), app.text_search.as_deref());
+    let term = filter::text_search_term(&app.filter.text);
+    let typed = term.is_some_and(|t| typed_for(app.typed_search, app.last_search_jql.as_deref(), t));
+    let debouncing = text_debouncing(term, app.text_search.as_deref(), typed);
     let row_spinner = crate::views::spinner_slots(syncing, pending, app.search_from_refresh, loading_first).1 || debouncing;
     let text_filter = !app.filter.text.trim().is_empty() && !filter::looks_like_jql(&app.filter.text) && !text_rows_shown(app);
     let total = text_filter.then(|| rows_without_text_filter(app));
@@ -1057,10 +1079,22 @@ mod tests {
 
     #[test]
     fn updating_shows_from_the_first_keystroke() {
-        assert!(text_debouncing(Some("alpha"), None), "typed, debounce running");
-        assert!(text_debouncing(Some("alpha"), Some("alp")), "a newer term");
-        assert!(!text_debouncing(Some("alpha"), Some("alpha")), "sent: the search spinner takes over");
-        assert!(!text_debouncing(None, None), "JQL or one letter: no text search");
+        assert!(text_debouncing(Some("alpha"), None, false), "typed, debounce running");
+        assert!(text_debouncing(Some("alpha"), Some("alp"), false), "a newer term");
+        assert!(!text_debouncing(Some("alpha"), Some("alpha"), false), "sent: the search spinner takes over");
+        assert!(!text_debouncing(None, None, false), "JQL or one letter: no text search");
+        assert!(!text_debouncing(Some("alpha"), None, true), "Enter ran it as JQL");
+        assert!(typed_for(true, Some("alpha"), "alpha"));
+        assert!(!typed_for(true, Some("alpha"), "alphas"), "edited after Enter: text search again");
+        assert!(!typed_for(false, Some("alpha"), "alpha"));
+    }
+
+    #[test]
+    fn enter_runs_the_box_as_jql() {
+        assert_eq!(enter_jql(" status = Blocked "), Some("status = Blocked".into()));
+        assert_eq!(enter_jql("alpha"), Some("alpha".into()), "plain text too, as the hint says");
+        assert_eq!(enter_jql("  "), None);
+        assert_eq!(SEARCH_HINT, "Filter or search, Enter for JQL (⌘F)");
     }
 
     #[test]
