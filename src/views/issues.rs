@@ -832,6 +832,34 @@ pub fn append_job(job: &mut egui::text::LayoutJob, other: egui::text::LayoutJob)
     }));
 }
 
+/// How much tighter the space after the "·" is before the mono "Enter" than a proportional word (round 14 I2:
+/// the dot read 3 / 4.5 to its neighbours' ink there, 3.5 / 3 in "· JQL").
+pub const NOTE_DOT_TIGHTEN: f32 = 1.5;
+
+/// The count row's one line: the count in `color`, then in `muted` the mode suffix and, with `note`, the Enter
+/// note ("Enter" in the key style). The line box is always the mono key's, so the count keeps one baseline
+/// whether or not the note shows (round 14 I2: it dropped 1 device px with it).
+pub fn count_job(f: &mut egui::epaint::text::FontsView<'_>, label: &str, color: egui::Color32, mode: &str, note: bool, p: &Palette) -> egui::text::LayoutJob {
+    let body = theme::body(12.0);
+    let fmt = |c: egui::Color32| egui::TextFormat { font_id: body.clone(), color: c, ..Default::default() };
+    let mut job = egui::text::LayoutJob { first_row_min_height: f.row_height(&theme::key_font()), ..Default::default() };
+    job.append(label, 0.0, fmt(color));
+    job.append(mode, 0.0, fmt(p.muted));
+    if note {
+        // The key in the key style, like the hint bar's (round 13 I4); the space after the dot NOTE_DOT_TIGHTEN
+        // narrower.
+        let (key, rest) = JQL_ENTER_NOTE.split_at(JQL_ENTER_KEY.len());
+        job.append(COUNT_SEP.trim_end(), 0.0, fmt(p.muted));
+        let first = job.sections.len();
+        append_job(&mut job, key_job(key, p.muted));
+        if let Some(s) = job.sections.get_mut(first) {
+            s.leading_space += f.glyph_width(&body, ' ') - NOTE_DOT_TIGHTEN;
+        }
+        job.append(rest, 0.0, fmt(p.muted));
+    }
+    job
+}
+
 /// The separator before anything the count row adds after the count: mode suffixes and the Enter note alike.
 pub const COUNT_SEP: &str = " · ";
 
@@ -942,17 +970,8 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
         } else {
             // One line: the count, then in `muted` the mode suffix and (JQL-looking text unrun, so the rows are not
             // filtered by it) what Enter does, each after the same "·".
-            let mut job = egui::text::LayoutJob::default();
-            let fmt = |c: egui::Color32| egui::TextFormat { font_id: theme::body(12.0), color: c, ..Default::default() };
-            job.append(&label, 0.0, fmt(color));
-            job.append(&mode, 0.0, fmt(p.muted));
-            if !row_spinner && jql_awaiting_enter(&app.filter.text, app.last_search_jql.as_deref(), app.typed_search && app.search_active, pending) {
-                // The key in the key style, like the hint bar's (round 13 I4).
-                let (key, rest) = JQL_ENTER_NOTE.split_at(JQL_ENTER_KEY.len());
-                job.append(COUNT_SEP, 0.0, fmt(p.muted));
-                append_job(&mut job, key_job(key, p.muted));
-                job.append(rest, 0.0, fmt(p.muted));
-            }
+            let note = !row_spinner && jql_awaiting_enter(&app.filter.text, app.last_search_jql.as_deref(), app.typed_search && app.search_active, pending);
+            let job = ui.ctx().fonts_mut(|f| count_job(f, &label, color, &mode, note, p));
             ui.label(job);
             if row_spinner {
                 spinner_label(ui, p, "Updating…");
@@ -1825,6 +1844,25 @@ mod tests {
         assert!(bar, "35 epics: the bar shows while open");
         assert_eq!(h % POPUP_ROW_H, 0.0, "never a row cut mid-text");
         assert_eq!(POPUP_FRAME / 2.0 - 1.0, 4.0, "selected-row fill 4 inside the stroke");
+    }
+
+    #[test]
+    fn the_count_keeps_one_baseline_with_the_enter_note() {
+        // Round 14 I2: the mono "Enter" no longer lowers the count; the dot's space before it is NOTE_DOT_TIGHTEN
+        // narrower than a word space.
+        let p = theme::LIGHT;
+        let (plain, noted, space, job) = crate::testutil::with_ui(|ui| {
+            ui.ctx().fonts_mut(|f| {
+                let (a, b) = (count_job(f, "18 issues", p.text, "", false, &p), count_job(f, "18 issues", p.text, "", true, &p));
+                (f.layout_job(a), f.layout_job(b.clone()), f.glyph_width(&theme::body(12.0), ' '), b)
+            })
+        });
+        let baseline = |g: &egui::Galley| g.rows[0].pos.y + g.rows[0].glyphs[0].pos.y;
+        assert_eq!(baseline(&plain), baseline(&noted), "one baseline");
+        assert_eq!(plain.size().y, noted.size().y, "one line box");
+        assert_eq!(job.text, format!("18 issues{}", count_note(JQL_ENTER_NOTE)).replacen(" · ", " ·", 1));
+        let enter = job.sections.iter().find(|s| job.text[s.byte_range.start.0..].starts_with("Enter")).expect("the key");
+        assert!((enter.leading_space - (space - NOTE_DOT_TIGHTEN)).abs() < 1e-4);
     }
 
     #[test]

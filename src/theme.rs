@@ -295,6 +295,9 @@ pub fn slot_tint(slot: usize, p: &Palette) -> Tint {
     Tint { bg: Color32::from_rgba_unmultiplied(stripe.r(), stripe.g(), stripe.b(), alpha), fg, stripe }
 }
 
+/// Every field's caret width, in points: two device pixels at 2x, in every field and state.
+pub const CARET_W: f32 = 1.0;
+
 fn visuals(p: &Palette) -> Visuals {
     let mut v = if p.dark { Visuals::dark() } else { Visuals::light() };
     v.panel_fill = p.bg;
@@ -307,6 +310,8 @@ fn visuals(p: &Palette) -> Visuals {
     v.hyperlink_color = p.accent;
     // One blue: the caret is the accent, not egui's default.
     v.text_cursor.stroke.color = p.accent;
+    // One caret width, empty or typed (round 14 I1: egui's 2 pt read 4x the clipped trailing caret).
+    v.text_cursor.stroke.width = CARET_W;
     // Hint (placeholder) text uses this; egui's default fades `text`, which drops below 4.5:1 in light.
     v.weak_text_color = Some(placeholder(p));
     v.selection.bg_fill = p.selected_row;

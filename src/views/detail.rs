@@ -174,13 +174,25 @@ const COMPOSER_H: f32 = 72.0;
 const COMPOSER_PAD: f32 = 11.0;
 /// The composer's stroke.
 const COMPOSER_STROKE: f32 = 1.0;
-/// How far the composer's text origin sits below an even margin (round 13 F3: its text read 1 higher than a card's).
-const COMPOSER_DROP: i8 = 1;
+/// The composer box's height as drawn: COMPOSER_H holds the field's four-row minimum, so the box is 90 (round 14
+/// F1 keeps it).
+#[cfg(test)]
+const COMPOSER_BOX_H: f32 = 90.0;
+/// The composer's border to its text's ink, above: a comment card's CARD_PAD (round 14 F1: 16.5 read to the line
+/// box's 12).
+const COMPOSER_INK_TOP: f32 = 12.0;
 
-/// The composer's inner margin: COMPOSER_PAD, its text COMPOSER_DROP lower; the box keeps COMPOSER_H.
-pub fn composer_margin() -> Margin {
+/// The composer's inner margin and the extra space above its text for a 14 pt line whose ink starts `ink_top`
+/// into its line box: COMPOSER_INK_TOP from the border's outer edge to the ink above, COMPOSER_PAD at the sides,
+/// the box's height unchanged (the bottom margin takes what the top gave up). Margins are whole points, so the
+/// fraction is returned as space to add before the text; one point of the bottom margin is space after it, so the
+/// two spaces make up one whole point.
+pub fn composer_margin(ink_top: f32) -> (Margin, f32) {
     let pad = COMPOSER_PAD as i8;
-    Margin { left: pad, right: pad, top: pad + COMPOSER_DROP, bottom: pad - COMPOSER_DROP }
+    let top = (COMPOSER_INK_TOP - COMPOSER_STROKE - ink_top).max(0.0);
+    let whole = top.floor();
+    let bottom = (2.0 * COMPOSER_PAD - whole - 1.0) as i8;
+    (Margin { left: pad, right: pad, top: whole as i8, bottom }, top - whole)
 }
 /// Comment author → date.
 const COMMENT_META_GAP: f32 = 8.0;
@@ -301,18 +313,7 @@ fn composer(app: &mut App, ui: &mut Ui, p: &Palette, key: &str) {
     let id = composer_id(key);
     let focused = ui.memory(|m| m.has_focus(id));
     let draft = app.drafts.entry(key.to_string()).or_default();
-    let resp = Frame::new()
-        // The one input rule: a step under the detail pane's surface.
-        .fill(theme::input_fill(p.surface, p))
-        .stroke(Stroke::new(COMPOSER_STROKE, if focused { p.accent } else { p.border }))
-        .corner_radius(theme::RADIUS)
-        // 11 + the 1 px stroke: the comment cards' 12 to the text at the sides; the text 1 lower (COMPOSER_DROP).
-        .inner_margin(composer_margin())
-        .show(ui, |ui| {
-            let size = vec2(ui.available_width(), COMPOSER_H - 2.0 * (COMPOSER_PAD + COMPOSER_STROKE));
-            crate::views::add_field(ui, Some(size), draft, |t| composer_edit(t, p).id(id))
-        })
-        .inner;
+    let resp = composer_box(ui, p, draft, id, focused);
     // Clicking the frame's padding focuses the box too.
     let enabled = comment_enabled(draft, &app.posting);
     let post = resp.has_focus() && ui.input_mut(|i| i.consume_shortcut(&egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::Enter)));
@@ -327,6 +328,27 @@ fn composer(app: &mut App, ui: &mut Ui, p: &Palette, key: &str) {
             crate::views::icons::spinner(ui, crate::views::icons::INLINE_SPINNER, p);
         }
     });
+}
+
+/// The composer's box: the input fill, its border (accent when `focused`), COMPOSER_H tall, the field inside.
+pub fn composer_box(ui: &mut Ui, p: &Palette, draft: &mut String, id: egui::Id, focused: bool) -> egui::Response {
+    let (margin, lead) = composer_margin(theme::Ink::of(ui.ctx(), &theme::body(14.0), None).top);
+    Frame::new()
+        // The one input rule: a step under the detail pane's surface.
+        .fill(theme::input_fill(p.surface, p))
+        .stroke(Stroke::new(COMPOSER_STROKE, if focused { p.accent } else { p.border }))
+        .corner_radius(theme::RADIUS)
+        // 11 + the 1 px stroke: the comment cards' 12 to the text at the sides; 12 to the ink above.
+        .inner_margin(margin)
+        .show(ui, |ui| {
+            ui.spacing_mut().item_spacing.y = 0.0;
+            ui.add_space(lead);
+            let size = vec2(ui.available_width(), COMPOSER_H - 2.0 * (COMPOSER_PAD + COMPOSER_STROKE) - 1.0);
+            let r = crate::views::add_field(ui, Some(size), draft, |t| composer_edit(t, p).id(id));
+            ui.add_space(1.0 - lead);
+            r
+        })
+        .inner
 }
 
 /// The composer's text field. The empty-field caret rule (I1) lives in the frame's margin: a TextEdit given its own
@@ -414,9 +436,32 @@ mod tests {
         assert!(DETAIL_RIGHT >= bar.bar_width + bar.bar_outer_margin + 4.0, "the scrollbar sits clear of the content");
         assert_eq!((COMMENT_TIP, COMPOSER_HINT), ("⌘Enter", "Add a comment (⌘Enter to post)"));
         assert_eq!(COMPOSER_PAD + COMPOSER_STROKE, 12.0, "text on the comment cards' 12 px edge");
-        let m = composer_margin();
-        assert_eq!((m.top - m.bottom, m.top + m.bottom), (2, 22), "F3: the text 1 lower, the box height kept");
+        let (m, lead) = composer_margin(3.5);
+        assert_eq!((m.top, lead, m.bottom), (7, 0.5, 14), "F1: 12 to the ink above, the box height kept");
         assert_eq!(super::super::issues::PILL_GAP, 8.0, "the detail pill row takes the list rows' gap (E3)");
+    }
+
+    #[test]
+    fn the_composer_insets_its_text_like_a_card() {
+        // Round 14 F1: 12 from the box's outer edge to the first line's ink, typed or placeholder; the box keeps
+        // COMPOSER_H.
+        for p in [crate::theme::LIGHT, crate::theme::DARK] {
+            for draft in ["Looks good, shipping it today", ""] {
+                let mut d = draft.to_string();
+                let shapes = crate::testutil::paint_at2(egui::vec2(800.0, 400.0), |ui| {
+                    ui.set_width(400.0);
+                    composer_box(ui, &p, &mut d, egui::Id::new("composer-test"), false);
+                });
+                let fill = crate::theme::input_fill(p.surface, &p);
+                let (r, _) = *crate::testutil::fills(&shapes).iter().find(|(_, c)| *c == fill).expect("the box");
+                let text = if draft.is_empty() { COMPOSER_HINT } else { draft };
+                let ink = crate::testutil::ink_of(&shapes, text);
+                // The frame paints its stroke inside its rect, so the rect's top is the border's outer edge.
+                assert!((ink.top() - r.top() - COMPOSER_INK_TOP).abs() < 0.01, "{draft:?}: {}", ink.top() - r.top());
+                assert_eq!(r.height(), COMPOSER_BOX_H, "the box keeps its height");
+                assert!((ink.left() - r.left() - 12.0).abs() <= 0.5, "left {}", ink.left() - r.left());
+            }
+        }
     }
 
     #[test]

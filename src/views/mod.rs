@@ -518,15 +518,21 @@ pub fn tip_job(text: &str, p: &Palette) -> egui::text::LayoutJob {
     job
 }
 
-/// A tooltip's one line, TIP_INK_X from the edge to the ink on both sides.
+/// How far a tip that is only a key ("⌘Enter") sits above the line box's place: its mono ink rode 1 pt low,
+/// 9 above and 8 below to the frame's outer edge (round 14 F2); 0.5 evens it.
+pub const TIP_KEY_RAISE: f32 = 0.5;
+
+/// A tooltip's one line, TIP_INK_X from the edge to the ink on both sides; a key-only tip TIP_KEY_RAISE higher.
 fn tip_row(ui: &mut Ui, text: &str, p: &Palette) {
     let g = ui.painter().layout_job(tip_job(text, p));
     let ink = theme::ink_rect(&g);
     let (lb, rb) = if ink.is_positive() { (ink.left(), g.size().x - ink.right()) } else { (0.0, 0.0) };
+    let raise = if tip_key_split(text).0.is_empty() { TIP_KEY_RAISE } else { 0.0 };
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 0.0;
         ui.add_space(TIP_INK_X - lb);
-        ui.add(egui::Label::new(g));
+        let (rect, _) = ui.allocate_exact_size(g.size(), egui::Sense::hover());
+        ui.painter().galley(rect.min - vec2(0.0, raise), g, p.text);
         ui.add_space(TIP_INK_X - rb);
     });
 }
@@ -764,13 +770,15 @@ pub fn caret_margin(m: Margin, empty: bool) -> Margin {
 /// centres the caret's stroke on the advance, so it touched round glyphs).
 pub const CARET_TRAIL_PX: f32 = 1.0;
 
-/// The x shift that puts a caret of `stroke_w` CARET_TRAIL_PX clear of the advance it is centred on.
-pub fn caret_trail(stroke_w: f32, ppp: f32) -> f32 {
-    stroke_w / 2.0 + CARET_TRAIL_PX / ppp
+/// The centre x of a trailing caret of `stroke_w` after an advance ending at `end`: its left edge CARET_TRAIL_PX
+/// past the advance, rounded up to the device pixel grid (round 14 I3: the stroke landed between pixels).
+pub fn caret_trail_x(end: f32, stroke_w: f32, ppp: f32) -> f32 {
+    let left = ((end * ppp).ceil() + CARET_TRAIL_PX) / ppp;
+    left + stroke_w / 2.0
 }
 
 /// Adds a field (`edit`, made over `text`) and, when its caret sits after the last glyph of non-empty text, puts
-/// the painted caret `caret_trail` right of that glyph's advance. Every field goes through here (search, go-to, sign-in, pickers,
+/// the painted caret at `caret_trail_x` past that glyph's advance, unclipped. Every field goes through here (search, go-to, sign-in, pickers,
 /// composer); an empty field's caret keeps the CARET_LEAD rule.
 pub fn add_field(ui: &mut Ui, size: Option<egui::Vec2>, text: &mut String, edit: impl FnOnce(&mut String) -> egui::TextEdit<'_>) -> egui::Response {
     let from = ui.painter().add(egui::Shape::Noop);
@@ -784,7 +792,7 @@ pub fn add_field(ui: &mut Ui, size: Option<egui::Vec2>, text: &mut String, edit:
         && egui::TextEdit::load_state(ui.ctx(), r.id).and_then(|s| s.cursor.char_range()).is_some_and(|c| c.is_empty() && c.primary.index.0 == n);
     if at_end {
         let caret = ui.visuals().text_cursor.stroke;
-        let dx = caret_trail(caret.width, ui.ctx().pixels_per_point());
+        let ppp = ui.ctx().pixels_per_point();
         let layer = ui.layer_id();
         ui.ctx().graphics_mut(|g| {
             let list = g.entry(layer);
@@ -796,17 +804,22 @@ pub fn add_field(ui: &mut Ui, size: Option<egui::Vec2>, text: &mut String, edit:
                     && let Some(row) = t.galley.rows.last()
                     && let Some(gl) = row.row.glyphs.last()
                 {
-                    end = Some(t.pos.x + row.pos.x + gl.max_x());
+                    // The tessellator puts the galley on a whole pixel.
+                    end = Some((t.pos.x * ppp).round() / ppp + row.pos.x + gl.max_x());
                 }
             }
             let Some(end) = end else { return };
+            let x = caret_trail_x(end, caret.width, ppp);
             for i in range {
                 list.mutate_shape(egui::layers::ShapeIdx(i), |c| {
                     if let egui::Shape::LineSegment { points, stroke } = &mut c.shape
                         && *stroke == caret
                     {
-                        points[0].x = end + dx;
-                        points[1].x = end + dx;
+                        points[0].x = x;
+                        points[1].x = x;
+                        // egui clips the field's painter 1 past the text, which cut the moved caret to one device
+                        // pixel (round 14 I1); let the whole stroke show.
+                        c.clip_rect.max.x = c.clip_rect.max.x.max(x + caret.width);
                     }
                 });
             }
@@ -1451,11 +1464,32 @@ mod widget_tests {
     }
 
     #[test]
-    fn a_trailing_caret_clears_the_last_glyph() {
-        // Round 13 I3: at the end of non-empty text the caret's stroke starts a device pixel past the last glyph's
-        // advance; an empty field's caret keeps the CARET_LEAD rule (no shift).
+    fn a_key_tip_sits_even_in_its_frame() {
+        // Round 14 F2: "⌘Enter" rode 1 low (9 above, 8 below to the frame's outer edge); raised 0.5, the two
+        // insets are within half a point. Prose tips keep their place.
+        for p in [theme::LIGHT, theme::DARK] {
+            let inset = |t: &str| {
+                let shapes = crate::testutil::paint_at2(vec2(800.0, 200.0), |ui| {
+                    tip_frame(&p).show(ui, |ui| tip_row(ui, t, &p));
+                });
+                let (r, _) = *crate::testutil::fills(&shapes).iter().find(|(_, c)| *c == issues::hint_bar_fill(&p)).expect("the tip");
+                let ink = crate::testutil::ink_of(&shapes, t);
+                (ink.top() - r.top(), r.bottom() - ink.bottom())
+            };
+            let (top, bottom) = inset("⌘Enter");
+            assert!((top - bottom).abs() <= 0.5, "⌘Enter: {top} above, {bottom} below");
+            assert_eq!(inset("Forget the saved token").0, inset("Look for JIRA_API_TOKEN or the config api_token again").0);
+        }
+    }
+
+    #[test]
+    fn one_caret_empty_or_typed() {
+        // Round 14 I1/I3: the empty and the trailing caret are one stroke, CARET_W wide, painted whole (egui's
+        // clip cut the trailing one to a device pixel); the trailing one starts on a device pixel, 1 px past the
+        // last glyph's advance; the empty one keeps the CARET_LEAD rule.
         let p = theme::LIGHT;
-        for typed in ["abco", ""] {
+        assert_eq!(theme::CARET_W, 1.0);
+        for typed in ["abco", "CI-1860", ""] {
             let id = egui::Id::new("caret-test");
             let mut text = typed.to_string();
             let mut end_x = 0.0;
@@ -1467,22 +1501,26 @@ mod widget_tests {
                 ui.memory_mut(|m| m.request_focus(id));
                 add_field(ui, None, &mut text, |t| input_field(t, "", theme::body(14.0), &p).id(id));
             });
-            fn walk(s: &egui::Shape, typed: &str, lines: &mut Vec<f32>, end: &mut f32) {
-                match s {
-                    egui::Shape::LineSegment { points, .. } => lines.push(points[0].x),
-                    egui::Shape::Text(t) if t.galley.job.text == typed => *end = t.pos.x + t.galley.rows[0].row.glyphs.last().map_or(0.0, |g| g.max_x()),
-                    egui::Shape::Vec(v) => v.iter().for_each(|s| walk(s, typed, lines, end)),
+            let mut carets = Vec::new();
+            for c in &shapes {
+                match &c.shape {
+                    egui::Shape::LineSegment { points, stroke } if points[0].x == points[1].x => carets.push((points[0].x, stroke.width, c.clip_rect)),
+                    egui::Shape::Text(t) if t.galley.job.text == typed && !typed.is_empty() => {
+                        end_x = (t.pos.x * 2.0).round() / 2.0 + t.galley.rows[0].row.glyphs.last().map_or(0.0, |g| g.max_x())
+                    }
                     _ => {}
                 }
             }
-            let mut lines = Vec::new();
-            shapes.iter().for_each(|c| walk(&c.shape, typed, &mut lines, &mut end_x));
-            let caret = *lines.last().expect("a caret");
+            let (x, w, clip) = *carets.last().expect("a caret");
+            assert_eq!(w, theme::CARET_W, "{typed:?}: one caret width");
+            assert!(clip.min.x <= x - w / 2.0 && x + w / 2.0 <= clip.max.x, "{typed:?}: the whole stroke shows ({x}, clip {clip:?})");
             if typed.is_empty() {
                 continue;
             }
-            let w = crate::testutil::with_ui(|ui| ui.visuals().text_cursor.stroke.width);
-            assert!((caret - w / 2.0 - end_x - 0.5).abs() < 0.01, "caret {caret}, advance end {end_x}, stroke {w}");
+            let left = (x - w / 2.0) * 2.0;
+            assert_eq!(left, left.round(), "{typed:?}: on the pixel grid");
+            let gap = left - end_x * 2.0;
+            assert!((1.0..2.0).contains(&gap), "{typed:?}: caret {x}, advance end {end_x}, gap {gap} px");
         }
     }
 
