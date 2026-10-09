@@ -76,3 +76,6 @@ These were decided in earlier rounds; raters treat them as correct and do not sc
   "placeholder 2 px right of the caret" in the fields that open focused.
 - **Sign-in aside.** Final wording: "Or export JIRA_API_TOKEN, or set api_token in config.toml, then check again."
   Two verbs end the comma ambiguity; do not reword.
+- **Chip fills.** Inline code chips and code blocks share one fill, LIGHT_CHIP (#ebebe7) on the light page; a chip
+  inside a card takes `chip_fill_on(card)`, one step off whatever it sits on (#dfdfda in a light comment card). The
+  page/card difference is intentional.

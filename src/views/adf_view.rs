@@ -9,8 +9,13 @@ use egui::{Frame, Margin, RichText, Stroke, TextFormat, Ui};
 pub fn show_value(ui: &mut Ui, v: &serde_json::Value, p: &Palette, container: egui::Color32) {
     let doc = adf::parse(v);
     if doc.blocks.is_empty() {
-        // Upright muted 14, like every other empty value (it was the only italic in the app).
-        ui.label(RichText::new(NO_DESCRIPTION).font(theme::body(14.0)).color(p.muted));
+        // Upright muted 14, like every other empty value (it was the only italic in the app), laid out as a
+        // one-paragraph description: the body line height in the document's zero-spacing scope, so the gap to
+        // Comments is a paragraph's (round 11 E1; the 17 label box sat 3.5 tighter).
+        ui.scope(|ui| {
+            ui.spacing_mut().item_spacing.y = 0.0;
+            ui.label(RichText::new(NO_DESCRIPTION).font(theme::body(BODY)).line_height(Some(line_height(BODY))).color(p.muted));
+        });
         return;
     }
     show(ui, &doc, p, theme::chip_fill_on(container, p));
@@ -742,6 +747,20 @@ mod tests {
             (gl.iter().find(|g| g.chr == 'w').unwrap().pos.y, gl.iter().find(|g| g.chr == 'c').unwrap().pos.y)
         });
         assert!((base_body - base_code).abs() <= 0.5, "body {base_body} vs code {base_code}");
+    }
+
+    #[test]
+    fn no_description_takes_a_paragraphs_height() {
+        // E1: the placeholder's block is as tall as a one-paragraph description's, so Comments sits as far below.
+        let h = |v: serde_json::Value| {
+            crate::testutil::with_ui(|ui| {
+                let p = crate::theme::LIGHT;
+                ui.scope(|ui| show_value(ui, &v, &p, p.surface)).response.rect.height()
+            })
+        };
+        let para = serde_json::json!({"type": "doc", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "No description"}]}]});
+        assert_eq!(h(serde_json::Value::Null), h(para));
+        assert_eq!(h(serde_json::Value::Null), line_height(BODY));
     }
 
     #[test]
