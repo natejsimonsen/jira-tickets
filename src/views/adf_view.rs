@@ -36,17 +36,17 @@ const BULLET_W: f32 = 10.0;
 /// Inline code is this fraction of the surrounding size, exactly, capped at 0.9× body (so a heading's code
 /// is never the largest mono on screen).
 const CODE_SCALE: f32 = 0.9;
-/// An inline code chip's padding either side (the text keeps the same room from its neighbours).
-const CODE_PAD_X: f32 = 4.0;
+/// An inline code chip's padding either side, to its glyphs' ink (round 13 E3).
+pub const CODE_PAD_X: f32 = 4.0;
 /// An inline code chip's padding above and below its glyphs.
 const CODE_PAD_Y: f32 = 1.0;
 /// Issue keys are mono 12.5 at body 14, scaled with the context.
 const KEY_SCALE: f32 = 12.5 / 14.0;
 /// Code block line height: 1.48 × mono 12.5.
 const CODE_LINE_H: f32 = 18.5;
-/// A code block's inner margin: 12 on every side, counting the line box's leading (round 12 E2: the 10 / 8 that
-/// put 12 to the ink read as ~8 to the lines' boxes).
-const CODE_MARGIN: Margin = Margin::same(12);
+/// A code block's padding, measured to the ink on every side (round 13 E1: a 12 margin to the line boxes read
+/// 13.5 / 14.5 / 16.5 to the ink).
+pub const CODE_PAD: f32 = 12.0;
 /// The marker gutter: list text starts this far from the list's left edge, for bullets and numbers alike.
 const LIST_GUTTER: f32 = 24.0;
 /// Marker → item text.
@@ -130,12 +130,7 @@ fn block(ui: &mut Ui, b: &Block, p: &Palette, size: f32, chip: egui::Color32) {
                 });
             }
         }
-        Block::Code { text, .. } => {
-            Frame::new().fill(chip).corner_radius(theme::RADIUS).inner_margin(CODE_MARGIN).show(ui, |ui| {
-                ui.set_width(ui.available_width());
-                ui.label(RichText::new(text).font(theme::mono(12.5)).line_height(Some(CODE_LINE_H)).color(p.text));
-            });
-        }
+        Block::Code { text, .. } => code_block(ui, text, p, chip),
         Block::Quote(bs) => {
             ui.horizontal_top(|ui| {
                 let (rect, _) = ui.allocate_exact_size(egui::vec2(3.0, 0.0), egui::Sense::hover());
@@ -177,6 +172,29 @@ fn block(ui: &mut Ui, b: &Block, p: &Palette, size: f32, chip: egui::Color32) {
             ui.separator();
         }
     }
+}
+
+/// A code block: its lines laid out here so the fill can sit CODE_PAD from their ink on every side (the left
+/// bearing, the cap line, the last line's lowest glyph; the wrap edge on the right). Still a selectable label.
+fn code_block(ui: &mut Ui, text: &str, p: &Palette, chip: egui::Color32) {
+    let w = ui.available_width();
+    let mut job = LayoutJob::simple(text.to_string(), theme::mono(12.5), p.text, (w - 2.0 * CODE_PAD).max(1.0));
+    if let Some(s) = job.sections.first_mut() {
+        s.format.line_height = Some(CODE_LINE_H);
+    }
+    let g = ui.fonts_mut(|f| f.layout_job(job));
+    let ink = theme::ink_rect(&g);
+    let ink = if ink.is_positive() { ink } else { egui::Rect::from_min_size(egui::Pos2::ZERO, g.size()) };
+    Frame::new().fill(chip).corner_radius(theme::RADIUS).show(ui, |ui| {
+        ui.set_width(w);
+        ui.spacing_mut().item_spacing = egui::Vec2::ZERO;
+        ui.add_space(CODE_PAD - ink.top());
+        ui.horizontal_top(|ui| {
+            ui.add_space(CODE_PAD - ink.left());
+            ui.add(egui::Label::new(g.clone()));
+        });
+        ui.add_space(CODE_PAD - (g.size().y - ink.bottom()));
+    });
 }
 
 /// The text format one span is painted with. Links are accent and always underlined (hue alone is too weak
@@ -333,29 +351,17 @@ fn is_key_link(sp: &Span) -> bool {
     sp.link.as_deref().and_then(adf::browse_key) == Some(sp.text.as_str())
 }
 
-/// One glyph on a laid-out row, for `code_runs`: (char, in inline code, left, right, top, bottom).
+/// One glyph on a laid-out row, for `code_runs`: (char, in inline code, ink left, ink right, top, bottom). The
+/// x edges are the glyph's ink (its advance box for whitespace); top and bottom its font box.
 pub type GlyphBox = (char, bool, f32, f32, f32, f32);
 
-/// One inline-code chip on a row: its glyphs' (left, right, top, bottom), and whether each side hugs
-/// punctuation (an opening mark just before it, a closing one just after), where the chip pads less.
+/// One inline-code chip on a row: its glyphs' ink (left, right) and font box (top, bottom).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct CodeRun {
     pub left: f32,
     pub right: f32,
     pub top: f32,
     pub bottom: f32,
-    pub tight_left: bool,
-    pub tight_right: bool,
-}
-
-/// Punctuation that hugs the code after it ("(`x`").
-pub fn opens(c: char) -> bool {
-    matches!(c, '(' | '[' | '{' | '"' | '\'' | '“' | '‘')
-}
-
-/// Punctuation that hugs the code before it ("`x`),").
-pub fn closes(c: char) -> bool {
-    matches!(c, ')' | ']' | '}' | ',' | '.' | ';' | ':' | '!' | '?' | '"' | '\'' | '”' | '’')
 }
 
 /// The inline-code chips on one laid-out row: one per run of code glyphs, with whitespace at either end of
@@ -379,17 +385,7 @@ pub fn code_runs(glyphs: &[GlyphBox]) -> Vec<CodeRun> {
             let run = &run[..n];
             let top = run.iter().map(|g| g.4).fold(f32::INFINITY, f32::min);
             let bottom = run.iter().map(|g| g.5).fold(f32::NEG_INFINITY, f32::max);
-            // Hugging only when the neighbour touches the run's glyphs, with no space in between.
-            let before = (lead == 0 && start > 0).then(|| glyphs[start - 1].0);
-            let after = (start + lead + n == i && i < glyphs.len()).then(|| glyphs[i].0);
-            out.push(CodeRun {
-                left: run[0].2,
-                right: run[n - 1].3,
-                top,
-                bottom,
-                tight_left: before.is_some_and(opens),
-                tight_right: after.is_some_and(closes),
-            });
+            out.push(CodeRun { left: run[0].2, right: run[n - 1].3, top, bottom });
         }
     }
     out
@@ -404,10 +400,19 @@ pub fn row_inset(glyphs: &[GlyphBox]) -> f32 {
     }
 }
 
-/// The leading space before span `i`: the chip's pad before inline code and before what follows it. Only
-/// where punctuation hugs the code ("(`07-31`)", "`x`, then") is the gap the chip's tight reach instead, so
-/// the mark sits just outside the fill. The text's own whitespace is never touched: " every" after a chip
-/// keeps its space on top of the pad.
+/// Punctuation that hugs the code after it ("(`x`").
+pub fn opens(c: char) -> bool {
+    matches!(c, '(' | '[' | '{' | '"' | '\'' | '“' | '‘')
+}
+
+/// Punctuation that hugs the code before it ("`x`),").
+pub fn closes(c: char) -> bool {
+    matches!(c, ')' | ']' | '}' | ',' | '.' | ';' | ':' | '!' | '?' | '"' | '\'' | '”' | '’')
+}
+
+/// The first-pass leading space before span `i`, at a code junction: the chip's pad, or its old tight reach
+/// where punctuation hugs the code. `layout_paragraph` then sets each junction from the laid-out ink
+/// (`junction_shift`); the text's own whitespace is never touched.
 pub fn span_lead(s: &[Span], i: usize) -> f32 {
     let sp = &s[i];
     let prev = i.checked_sub(1).map(|j| &s[j]);
@@ -421,8 +426,30 @@ pub fn span_lead(s: &[Span], i: usize) -> f32 {
     }
 }
 
-/// A chip's fill reach past its glyphs on a side that hugs punctuation.
+/// The first pass's lead where punctuation hugs the code.
 const CODE_PAD_TIGHT: f32 = 2.0;
+
+/// Ink of a neighbour that touches a chip (punctuation, a letter) → the chip's fill: it abuts, never trimming the
+/// fill's CODE_PAD_X (round 13 E3).
+pub const CHIP_ABUT: f32 = 1.0;
+
+/// One glyph at a code junction: (whitespace, ink left, ink right, advance left, advance right), in galley x.
+pub type JunctionGlyph = (bool, f32, f32, f32, f32);
+
+/// How far to move the glyphs after a code junction so the chip's fill (CODE_PAD_X outside its ink) meets its
+/// neighbour right: a space keeps its whole advance outside the fill, anything else sits CHIP_ABUT off it.
+/// `a` is the glyph before the junction, `b` the one after; `into_code` when `b` starts the code.
+pub fn junction_shift(a: JunctionGlyph, b: JunctionGlyph, into_code: bool) -> f32 {
+    if into_code {
+        // The fill starts CODE_PAD_X left of b's ink.
+        let want = if a.0 { a.4 } else { a.2 + CHIP_ABUT };
+        want - (b.1 - CODE_PAD_X)
+    } else {
+        // The fill ends CODE_PAD_X right of a's ink.
+        let fill = a.2 + CODE_PAD_X;
+        if b.0 { fill - b.3 } else { fill + CHIP_ABUT - b.1 }
+    }
+}
 
 /// One paragraph's layout job, and per char whether it is inline code.
 pub fn paragraph_job(s: &[Span], p: &Palette, size: f32, heading: bool, fit: &MonoFit) -> (LayoutJob, Vec<(char, bool)>) {
@@ -435,8 +462,55 @@ pub fn paragraph_job(s: &[Span], p: &Palette, size: f32, heading: bool, fit: &Mo
     (job, chars)
 }
 
-/// Lays `job` out in `width`: rows that start with a chip move in by its pad, every row takes at least the
-/// body line height (`row_tops`), and the chips' rects (relative to the galley) come back with it.
+/// Each glyph of a galley in text order: (char index, row, ink left, ink right, advance left, advance right),
+/// x relative to the galley. Rows drop a wrapping newline, so the chars are walked alongside.
+fn glyph_index(g: &egui::Galley, chars: &[(char, bool)]) -> Vec<(usize, usize, f32, f32, f32, f32)> {
+    let mut out = Vec::new();
+    let mut at = 0;
+    for (ri, row) in g.rows.iter().enumerate() {
+        for gl in &row.row.glyphs {
+            while at < chars.len() && chars[at].0 != gl.chr {
+                at += 1;
+            }
+            let lr = gl.logical_rect();
+            let (l, r) = (row.pos.x + lr.left(), row.pos.x + lr.right());
+            let (il, ir) = if gl.uv_rect.is_nothing() || gl.uv_rect.size.x <= 0.0 {
+                (l, r)
+            } else {
+                let x = row.pos.x + gl.pos.x + gl.uv_rect.offset.x;
+                (x, x + gl.uv_rect.size.x)
+            };
+            out.push((at, ri, il, ir, l, r));
+            at += 1;
+        }
+    }
+    out
+}
+
+/// Sets every code junction's leading space from a first layout's ink (`junction_shift`), so each chip's fill
+/// sits CODE_PAD_X outside its glyphs' ink on both sides.
+fn fit_junctions(fonts: &mut egui::epaint::text::FontsView<'_>, job: &mut LayoutJob, chars: &[(char, bool)]) {
+    let first = fonts.layout_job(job.clone());
+    let glyphs = glyph_index(&first, chars);
+    let text = job.text.clone();
+    for sec in job.sections.iter_mut() {
+        if sec.leading_space <= 0.0 {
+            continue;
+        }
+        let k = text[..sec.byte_range.start.0].chars().count();
+        let (Some(a), Some(b)) = (glyphs.iter().find(|g| g.0 + 1 == k), glyphs.iter().find(|g| g.0 == k)) else { continue };
+        let (Some(ca), Some(cb)) = (chars.get(k - 1), chars.get(k)) else { continue };
+        if a.1 != b.1 || ca.1 == cb.1 {
+            continue;
+        }
+        let jg = |g: &(usize, usize, f32, f32, f32, f32), c: char| (c.is_whitespace(), g.2, g.3, g.4, g.5);
+        sec.leading_space = (sec.leading_space + junction_shift(jg(a, ca.0), jg(b, cb.0), cb.1)).max(0.0);
+    }
+}
+
+/// Lays `job` out in `width`: code junctions fitted to the ink (`fit_junctions`), rows that start with a chip
+/// move in by its pad, every row takes at least the body line height (`row_tops`), and the chips' rects
+/// (relative to the galley, CODE_PAD_X outside their ink) come back with it.
 pub fn layout_paragraph(
     fonts: &mut egui::epaint::text::FontsView<'_>,
     mut job: LayoutJob,
@@ -446,29 +520,28 @@ pub fn layout_paragraph(
 ) -> (egui::Galley, Vec<egui::Rect>) {
     // 8 px narrower so a row moved in by `row_inset` (and a chip's pad at the row end) still fits.
     job.wrap.max_width = (width - 2.0 * CODE_PAD_X).max(1.0);
+    fit_junctions(fonts, &mut job, chars);
     let laid = fonts.layout_job(job);
     let mut g = (*laid).clone();
     let (tops, height) = row_tops(&g.rows.iter().map(|r| r.row.size.y).collect::<Vec<_>>(), line_h);
     let dy = height - g.rect.height();
+    let index = glyph_index(&g, chars);
     let mut runs: Vec<(f32, CodeRun)> = Vec::new();
-    // Glyphs come in text order; a row ending in a newline drops it, so walk the chars alongside.
-    let mut at_char = 0;
-    for (row, top) in g.rows.iter_mut().zip(tops) {
+    let mut at = 0;
+    for (ri, (row, top)) in g.rows.iter_mut().zip(tops).enumerate() {
         row.pos.y = top;
         let boxes: Vec<GlyphBox> = row
             .row
             .glyphs
             .iter()
             .map(|gl| {
-                while at_char < chars.len() && chars[at_char].0 != gl.chr {
-                    at_char += 1;
-                }
-                let code = chars.get(at_char).is_some_and(|c| c.1);
-                at_char += 1;
-                let lr = gl.logical_rect();
+                let (ci, _, il, ir, ..) = index[at];
+                debug_assert_eq!(index[at].1, ri);
+                at += 1;
+                let code = chars.get(ci).is_some_and(|c| c.1);
                 // The run's own font box (not its fitted line height), so the chip hugs the glyphs.
                 let glyph_top = gl.pos.y - gl.font_ascent;
-                (gl.chr, code, lr.left(), lr.right(), glyph_top, glyph_top + gl.font_height)
+                (gl.chr, code, il - row.pos.x, ir - row.pos.x, glyph_top, glyph_top + gl.font_height)
             })
             .collect();
         let shift = row_inset(&boxes);
@@ -482,13 +555,12 @@ pub fn layout_paragraph(
     g.rect.max.y += dy;
     g.mesh_bounds.max.x = g.mesh_bounds.max.x.max(g.mesh_bounds.min.x + widest);
     g.mesh_bounds.max.y += dy;
-    let pad = |tight: bool| if tight { CODE_PAD_TIGHT } else { CODE_PAD_X };
     let chips = runs
         .into_iter()
         .map(|(y, run)| {
             egui::Rect::from_min_max(
-                egui::pos2(run.left - pad(run.tight_left), y + run.top - CODE_PAD_Y),
-                egui::pos2(run.right + pad(run.tight_right), y + run.bottom + CODE_PAD_Y),
+                egui::pos2(run.left - CODE_PAD_X, y + run.top - CODE_PAD_Y),
+                egui::pos2(run.right + CODE_PAD_X, y + run.bottom + CODE_PAD_Y),
             )
         })
         .collect();
@@ -579,9 +651,23 @@ mod tests {
     }
 
     #[test]
-    fn code_blocks_pad_12_all_round() {
-        // E2: 12 on every side to the line boxes, leading counted.
-        assert_eq!(CODE_MARGIN, Margin::same(12));
+    fn code_blocks_pad_12_to_the_ink() {
+        // Round 13 E1: 12 from the fill to the ink above, left and below (the last line's descenders), with the
+        // real fonts at the captures' density; wrapped lines stop at least 12 short of the right edge.
+        let p = crate::theme::LIGHT;
+        let chip = theme::chip_fill_on(p.surface, &p);
+        for text in ["{\"matcher\": {\"id\": \"byName\"},\n \"properties\": [{\"id\": \"unit\"}]}", "make test", "HELLO world"] {
+            let shapes = crate::testutil::paint_at2(egui::vec2(800.0, 400.0), |ui| {
+                ui.set_width(300.0);
+                block(ui, &Block::Code { text: text.into(), lang: None }, &p, 14.0, chip);
+            });
+            let (fill, _) = *crate::testutil::fills(&shapes).iter().find(|(_, c)| *c == chip).expect("the block's fill");
+            let ink = crate::testutil::inks(&shapes).into_iter().map(|(_, r)| r).reduce(|a, b| a.union(b)).expect("ink");
+            for (side, gap) in [("top", ink.top() - fill.top()), ("left", ink.left() - fill.left()), ("bottom", fill.bottom() - ink.bottom())] {
+                assert!((gap - CODE_PAD).abs() <= 0.25, "{text:?} {side}: {gap}");
+            }
+            assert!(fill.right() - ink.right() >= CODE_PAD - 0.5, "{text:?} right: {}", fill.right() - ink.right());
+        }
     }
 
     #[test]
@@ -642,21 +728,76 @@ mod tests {
     }
 
     #[test]
-    fn chips_hug_punctuation() {
-        let g = |c: char, code: bool, x: f32| (c, code, x, x + 5.0, 0.0, 14.0);
-        let row =
-            [g('(', false, 0.0), g('0', true, 5.0), g('7', true, 10.0), g(')', false, 15.0), g(' ', false, 20.0), g('x', true, 25.0), g(' ', false, 30.0)];
-        let r = code_runs(&row);
-        assert!(r[0].tight_left && r[0].tight_right, "( 07 ): both sides hug");
-        assert!(!r[1].tight_left && !r[1].tight_right, "spaces either side");
+    fn chips_pad_4_to_the_ink_and_neighbours_abut() {
+        // Round 13 E3: the fill reaches CODE_PAD_X past the code's ink on both sides; punctuation (or a letter)
+        // that touches the code sits CHIP_ABUT off the fill; a space keeps its whole advance outside it.
+        let into = junction_shift((false, 0.0, 5.0, 0.0, 6.0), (false, 10.5, 15.0, 10.0, 16.0), true);
+        assert_eq!(into, 5.0 + CHIP_ABUT - (10.5 - CODE_PAD_X), "( then code: the fill starts 1 past the ( ink");
+        let spaced = junction_shift((true, 6.0, 9.0, 6.0, 9.0), (false, 10.5, 15.0, 10.0, 16.0), true);
+        assert_eq!(spaced, 9.0 - (10.5 - CODE_PAD_X), "space then code: the fill starts where the space ends");
+        let out = junction_shift((false, 0.0, 5.0, 0.0, 6.0), (false, 6.5, 8.0, 6.0, 9.0), false);
+        assert_eq!(out, 5.0 + CODE_PAD_X + CHIP_ABUT - 6.5, "code then ,: the comma's ink 1 past the fill");
         let s = |text: &str, code: bool| Span { code, ..span(text) };
         let para = [s("(", false), s("07-31", true), s(") then ", false), s("x", true), s(" y", false)];
         assert_eq!(
             [span_lead(&para, 1), span_lead(&para, 2), span_lead(&para, 3), span_lead(&para, 4)],
             [CODE_PAD_TIGHT, CODE_PAD_TIGHT, CODE_PAD_X, CODE_PAD_X],
-            "punctuation sits at the fill's tight reach; words keep the full pad"
+            "first-pass leads; the laid-out ink sets the final ones"
         );
         assert_eq!(span_lead(&para, 0), 0.0);
+        // With the real fonts: every chip 4 to its ink, the hugging marks 1 off the fill.
+        let p = palette();
+        let chip = theme::chip_fill_on(p.surface, &p);
+        let doc = adf::Doc {
+            blocks: vec![Block::Paragraph(vec![
+                s("correct (", false),
+                s("07-31", true),
+                s(") and ", false),
+                s("known_hosts", true),
+                s(", with ", false),
+                s("x", true),
+                s(" y", false),
+            ])],
+        };
+        let shapes = crate::testutil::paint_at2(egui::vec2(800.0, 200.0), |ui| show(ui, &doc, &p, chip));
+        let mut chips: Vec<egui::Rect> = crate::testutil::fills(&shapes).into_iter().filter(|(_, c)| *c == chip).map(|(r, _)| r).collect();
+        chips.sort_by(|a, b| a.left().total_cmp(&b.left()));
+        assert_eq!(chips.len(), 3, "{chips:?}");
+        let g = &shapes;
+        // Per-glyph ink of the painted paragraph.
+        let glyphs: Vec<(char, f32, f32)> = {
+            let mut v = Vec::new();
+            fn walk(s: &egui::Shape, v: &mut Vec<(char, f32, f32)>) {
+                match s {
+                    egui::Shape::Text(t) => {
+                        for row in &t.galley.rows {
+                            for gl in &row.row.glyphs {
+                                if !gl.uv_rect.is_nothing() && gl.uv_rect.size.x > 0.0 {
+                                    let x = t.pos.x + row.pos.x + gl.pos.x + gl.uv_rect.offset.x;
+                                    v.push((gl.chr, x, x + gl.uv_rect.size.x));
+                                }
+                            }
+                        }
+                    }
+                    egui::Shape::Vec(s) => s.iter().for_each(|s| walk(s, v)),
+                    _ => {}
+                }
+            }
+            g.iter().for_each(|c| walk(&c.shape, &mut v));
+            v
+        };
+        let find = |c: char, nth: usize| *glyphs.iter().filter(|g| g.0 == c).nth(nth).unwrap_or_else(|| panic!("{c}"));
+        let near = |v: f32, want: f32, what: &str| assert!((v - want).abs() <= 0.5, "{what}: {v}");
+        near(find('0', 0).1 - chips[0].left(), CODE_PAD_X, "07-31 left pad");
+        near(chips[0].right() - find('1', 0).2, CODE_PAD_X, "07-31 right pad");
+        near(chips[0].left() - find('(', 0).2, CHIP_ABUT, "( abuts");
+        near(find(')', 0).1 - chips[0].right(), CHIP_ABUT, ") abuts");
+        near(find('k', 0).1 - chips[1].left(), CODE_PAD_X, "known_hosts left pad");
+        near(chips[1].right() - find('s', 1).2, CODE_PAD_X, "known_hosts right pad");
+        near(find(',', 0).1 - chips[1].right(), CHIP_ABUT, ", abuts");
+        near(find('x', 0).1 - chips[2].left(), CODE_PAD_X, "x left pad");
+        near(chips[2].right() - find('x', 0).2, CODE_PAD_X, "x right pad");
+        assert!(find('y', 0).1 - chips[2].right() > 2.0, "the word after keeps its space");
     }
 
     #[test]

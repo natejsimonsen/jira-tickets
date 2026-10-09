@@ -905,9 +905,10 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
         let color = if loading_first { p.muted } else { count_color(row_spinner, p) };
         if loading_first {
             if row_spinner {
-                crate::views::icons::spinner(ui, crate::views::icons::INLINE_SPINNER, p);
+                spinner_label(ui, p, &label);
+            } else {
+                ui.label(RichText::new(label).color(color).size(12.0));
             }
-            ui.label(RichText::new(label).color(color).size(12.0));
         } else {
             // One line: the count, then in `muted` the mode suffix and (JQL-looking text unrun, so the rows are not
             // filtered by it) what Enter does, each after the same "·".
@@ -920,8 +921,7 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
             }
             ui.label(job);
             if row_spinner {
-                crate::views::icons::spinner(ui, crate::views::icons::INLINE_SPINNER, p);
-                ui.label(RichText::new("Updating…").color(p.muted).size(12.0));
+                spinner_label(ui, p, "Updating…");
             }
         }
         if show_clear {
@@ -983,14 +983,17 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
                         let key_color = row_key_color(is_sel, p);
                         let g = ui.painter().layout_no_wrap(i.key.clone(), theme::mono(12.5), key_color);
                         let (kr, _) = ui.allocate_exact_size(vec2(key_w, g.size().y), Sense::hover());
-                        ui.painter().galley(kr.min, g, key_color);
+                        // The key and the summary share one baseline, TITLE_RAISE above the row's slot.
+                        ui.painter().galley(kr.min - vec2(0.0, TITLE_RAISE), g, key_color);
                         let painter = ui.painter().clone();
                         let title = crate::views::truncate_title(&i.summary, ui.available_width(), |t| {
                             painter.layout_no_wrap(t.to_string(), theme::bold(13.5), p.text).size().x
                         });
-                        let r = ui.add(egui::Label::new(RichText::new(&title).font(theme::bold(13.5)).color(p.text)).extend().selectable(false));
+                        let tg = painter.layout_no_wrap(title.clone(), theme::bold(13.5), p.text);
+                        let (tr, _) = ui.allocate_exact_size(tg.size(), Sense::hover());
+                        ui.painter().galley(tr.min - vec2(0.0, TITLE_RAISE), tg, p.text);
                         if title != i.summary {
-                            tips.push((r.rect, i.summary.clone()));
+                            tips.push((tr, i.summary.clone()));
                         }
                     });
                     // One line of pills, never wrapped: see `fit_pills`.
@@ -1184,6 +1187,28 @@ pub fn sliver_row(rows: &[(f32, f32)], edge: f32) -> Option<usize> {
 
 /// Between the count row's parts.
 const COUNT_GAP: f32 = 7.0;
+
+/// The count row's spinner → its verb, ink to ink, one gap for "Updating…" and "Loading issues…" (round 13 D4:
+/// COUNT_GAP to the boxes read 8 and 8.5 with the letters' bearings).
+pub const SPINNER_TO_LABEL: f32 = 8.0;
+
+/// The space between the spinner's slot and a muted 12 `text` for SPINNER_TO_LABEL between their ink: the ring is
+/// ICON_INK across, centred in its slot.
+pub fn spinner_label_space(text_left_bearing: f32) -> f32 {
+    let ring_inset = (crate::views::icons::INLINE_SPINNER - crate::views::icons::ICON_INK) / 2.0;
+    SPINNER_TO_LABEL - ring_inset - text_left_bearing
+}
+
+/// The count row's spinner and its muted 12 verb, SPINNER_TO_LABEL apart to the ink.
+fn spinner_label(ui: &mut Ui, p: &Palette, text: &str) {
+    let g = ui.painter().layout_no_wrap(text.to_string(), theme::body(12.0), p.muted);
+    let lb = theme::ink_rect(&g).left().max(0.0);
+    let gap = ui.spacing().item_spacing.x;
+    crate::views::icons::spinner(ui, crate::views::icons::INLINE_SPINNER, p);
+    // The layout's own item spacing already follows the spinner.
+    ui.add_space(spinner_label_space(lb) - gap);
+    ui.add(egui::Label::new(g));
+}
 /// The count row: its 12 px line box (the spinner and link fit), so the gaps around it are what they say:
 /// 12 from the search box to the count's ink and 8 from its ink to the first card.
 const COUNT_H: f32 = 16.0;
@@ -1224,6 +1249,9 @@ const ROW_INK_TOP: f32 = 6.0;
 const TITLE_LINE: f32 = 8.0;
 /// Title line → pill line.
 const TITLE_TO_PILLS: f32 = 4.0;
+/// How far the key and summary are painted above their slot, so the summary's descenders clear the pills (round 13
+/// C1: they touched the pill line); the slot and the pill line (PILL_LINE_TOP) do not move.
+const TITLE_RAISE: f32 = 2.0;
 /// The pill line's top below the row's top edge: 6 + title line + 4 (round 11 C1), where it measured in every
 /// round-11 capture (row top + 36 px at 2×).
 pub const PILL_LINE_TOP: f32 = ROW_INK_TOP + TITLE_LINE + TITLE_TO_PILLS;
@@ -1454,16 +1482,12 @@ fn goto_box(app: &mut App, ctx: &egui::Context, p: &Palette) {
     let mut go = false;
     let x = ((ctx.content_rect().width() - GOTO_W) / 2.0).round();
     egui::Area::new(egui::Id::new("goto")).order(egui::Order::Foreground).fixed_pos(egui::pos2(x, goto_top())).show(ctx, |ui| {
-        Frame::new()
-            .fill(crate::views::dialog_fill(p))
-            .stroke(crate::views::dialog_stroke(p))
-            .corner_radius(theme::RADIUS)
-            .inner_margin(Margin::same(GOTO_PAD as i8))
-            .show(ui, |ui| {
+        Frame::new().fill(crate::views::dialog_fill(p)).stroke(crate::views::dialog_stroke(p)).corner_radius(theme::RADIUS).inner_margin(GOTO_MARGIN).show(
+            ui,
+            |ui| {
                 crate::views::dialog_fields(ui, p);
                 ui.set_width(goto_inner_w(crate::views::dialog_stroke(p).width));
-                ui.label(RichText::new("Go to issue").font(theme::bold(13.5)).color(p.text));
-                ui.add_space(4.0);
+                goto_title(ui, p);
                 // Proportional 14 like the search box: mono is for rendered ids, not input.
                 let r = ui.add(crate::views::input_field(text, "9001, CI-9001, or a browse link", theme::body(14.0), p));
                 // The box keeps focus while open, so Enter counts whether or not the field just gave it up.
@@ -1472,7 +1496,8 @@ fn goto_box(app: &mut App, ctx: &egui::Context, p: &Palette) {
                 } else {
                     r.request_focus();
                 }
-            });
+            },
+        );
     });
     if go {
         app.actions.push(Action::GoTo);
@@ -1482,6 +1507,21 @@ fn goto_box(app: &mut App, ctx: &egui::Context, p: &Palette) {
 /// The go-to box's outer width and padding.
 const GOTO_W: f32 = 444.0;
 const GOTO_PAD: f32 = 12.0;
+/// The box's margin: GOTO_PAD at the sides and bottom; the top is the title's, set to its ink (`goto_title`).
+const GOTO_MARGIN: Margin = Margin { left: GOTO_PAD as i8, right: GOTO_PAD as i8, top: 0, bottom: GOTO_PAD as i8 };
+pub const GOTO_TITLE: &str = "Go to issue";
+
+/// The go-to title: GOTO_PAD from the box's inner edge to its ink, and GOTO_PAD from its ink to the field
+/// (round 13 I1: 15 above and 13.5 below to the line box's 12 and 4).
+fn goto_title(ui: &mut egui::Ui, p: &Palette) {
+    let g = ui.painter().layout_no_wrap(GOTO_TITLE.to_string(), theme::bold(13.5), p.text);
+    let ink = theme::ink_rect(&g);
+    // The frame's content starts inside its edge.
+    ui.add_space(GOTO_PAD - ink.top());
+    let h = g.size().y;
+    ui.add(egui::Label::new(g));
+    ui.add_space(crate::views::pickers::gap_space(GOTO_PAD - (h - ink.bottom()), ui.spacing().item_spacing.y));
+}
 
 /// The go-to box's content width: GOTO_W less the padding and the frame's stroke, which egui adds outside the
 /// margin (it made the box 446 wide and 1 px right of centre; round 12 I2).
@@ -1589,6 +1629,46 @@ mod tests {
     fn epic_tooltip_names_key_and_epic() {
         assert_eq!(epic_tip("CI-1860", "Cluster Operations (ongoing)"), "CI-1860 · Cluster Operations (ongoing)");
         assert_eq!(epic_tip("CI-1860", ""), "CI-1860");
+    }
+
+    #[test]
+    fn the_goto_title_sits_12_from_edge_and_field() {
+        // Round 13 I1: 12 from the box's inner edge to the title's ink, and 12 from that ink to the field.
+        let p = crate::theme::LIGHT;
+        let mut text = String::new();
+        let shapes = crate::testutil::paint_at2(egui::vec2(800.0, 400.0), |ui| {
+            Frame::new().fill(crate::views::dialog_fill(&p)).stroke(crate::views::dialog_stroke(&p)).inner_margin(GOTO_MARGIN).show(ui, |ui| {
+                crate::views::dialog_fields(ui, &p);
+                ui.set_width(goto_inner_w(1.0));
+                goto_title(ui, &p);
+                ui.add(crate::views::input_field(&mut text, "Hint", theme::body(14.0), &p));
+            });
+        });
+        let fills = crate::testutil::fills(&shapes);
+        let dialog = fills.iter().find(|(_, c)| *c == crate::views::dialog_fill(&p)).expect("box").0;
+        let field = fills.iter().find(|(_, c)| *c == theme::dialog_input_fill(&p)).expect("field").0;
+        let ink = crate::testutil::ink_of(&shapes, GOTO_TITLE);
+        assert!((ink.top() - dialog.top() - 1.0 - GOTO_PAD).abs() <= 0.5, "above {}", ink.top() - dialog.top() - 1.0);
+        assert!((field.top() - ink.bottom() - GOTO_PAD).abs() <= 0.5, "below {}", field.top() - ink.bottom());
+    }
+
+    #[test]
+    fn spinner_to_verb_is_one_ink_gap() {
+        // Round 13 D4: "Updating…" and "Loading issues…" sit SPINNER_TO_LABEL from the ring's ink, real fonts.
+        let p = crate::theme::LIGHT;
+        for text in ["Updating…", "Loading issues…"] {
+            let mut left = 0.0;
+            let shapes = crate::testutil::paint_at2(egui::vec2(800.0, 200.0), |ui| {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = COUNT_GAP;
+                    left = ui.cursor().left();
+                    spinner_label(ui, &p, text);
+                });
+            });
+            let ring_right = left + crate::views::icons::INLINE_SPINNER - (crate::views::icons::INLINE_SPINNER - crate::views::icons::ICON_INK) / 2.0;
+            let gap = crate::testutil::ink_of(&shapes, text).left() - ring_right;
+            assert!((gap - SPINNER_TO_LABEL).abs() <= 0.5, "{text}: {gap}");
+        }
     }
 
     #[test]

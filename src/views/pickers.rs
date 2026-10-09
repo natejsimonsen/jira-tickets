@@ -30,12 +30,9 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
     // A fixed top edge, so a list that shrinks while filtering never moves the dialog.
     let top = dialog_top(ctx.content_rect().height());
     egui::Area::new(egui::Id::new("picker")).order(egui::Order::Foreground).anchor(egui::Align2::CENTER_TOP, vec2(0.0, top)).show(ctx, |ui| {
-        Frame::new()
-            .fill(crate::views::dialog_fill(p))
-            .stroke(crate::views::dialog_stroke(p))
-            .corner_radius(theme::RADIUS)
-            .inner_margin(Margin::same(16))
-            .show(ui, |ui| {
+        Frame::new().fill(crate::views::dialog_fill(p)).stroke(crate::views::dialog_stroke(p)).corner_radius(theme::RADIUS).inner_margin(DIALOG_MARGIN).show(
+            ui,
+            |ui| {
                 ui.set_width(440.0);
                 // Fields on `bg` with the dialog's own edge, in both themes.
                 crate::views::dialog_fields(ui, p);
@@ -91,9 +88,9 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                         if !help_open && ui.memory(|m| m.focused().is_none()) {
                             r.request_focus();
                         }
-                        ui.add_space(12.0);
+                        ui.add_space(group_space(ui, "Priority"));
                         edit_group(ui, p, "Priority", field(priority, crate::app::PRIORITY_HINT, p));
-                        ui.add_space(12.0);
+                        ui.add_space(group_space(ui, "Story points"));
                         edit_group(ui, p, "Story points", field(points, crate::app::POINTS_HINT, p));
                     }
                 }
@@ -108,7 +105,8 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                         cancel = true;
                     }
                 });
-            });
+            },
+        );
     });
     if confirm {
         app.actions.push(Action::PickerConfirm);
@@ -129,15 +127,31 @@ fn picker_key(p: &Picker) -> &str {
     }
 }
 
-/// The dialog's top edge: 20% down the window less 10, so at 900 (170) it covers the detail pane's pill row under
-/// a two-line title (ink 175–192.5) with 4 of margin above it; 174 put its edge on the pills' first pixel row and
+/// The dialog's top edge: 20% down the window less DIALOG_LIFT, so at 900 (167) it covers the detail pane's pill row
+/// under a two-line title (ink 175–192.5) with 8 of margin above it; 174 put its edge on the pills' first pixel row and
 /// 188 cut across them (round 11 G1, round 12 G2: up, not down, since lower would show the pills' tops).
 pub fn dialog_top(window_h: f32) -> f32 {
     ((window_h * 0.2).round() - DIALOG_LIFT).max(0.0)
 }
 
-/// How far the dialog sits above the window's 20% line.
-const DIALOG_LIFT: f32 = 10.0;
+/// How far the dialog sits above the window's 20% line (round 13 G4: 10 left 5 over the pills; 13 leaves 8).
+const DIALOG_LIFT: f32 = 13.0;
+
+/// The dialog's margin: 16 at the sides and bottom; the top is the title's (`title`), set to its ink.
+const DIALOG_MARGIN: Margin = Margin { left: 16, right: 16, top: 0, bottom: 16 };
+/// The dialog edge's stroke: egui starts the frame's content inside it, and the title's ink is measured from it.
+const DIALOG_EDGE: f32 = 1.0;
+/// The dialog's inner edge → the title's ink (round 13 G1: 19.5 with a 16 margin to its line box).
+const TITLE_INK_TOP: f32 = 16.0;
+/// An Edit field → the next group's label ink (round 13 G3: 20.5 with a 12 space).
+const GROUP_INK_GAP: f32 = 16.0;
+
+/// The space before an Edit group's `label`: GROUP_INK_GAP from the field above (its fill is its ink) to the
+/// label's ink, less the layout's item spacing.
+fn group_space(ui: &egui::Ui, label: &str) -> f32 {
+    let top = theme::ink_rect(&ui.painter().layout_no_wrap(label.to_string(), theme::body(12.0), egui::Color32::WHITE)).top();
+    gap_space(GROUP_INK_GAP - top, ui.spacing().item_spacing.y)
+}
 
 /// The Assign filter field → the first row (round 11 G2: 8 left the field and the cursor row reading as one).
 const ASSIGN_FIELD_GAP: f32 = 12.0;
@@ -157,8 +171,12 @@ const ROW_H: f32 = 30.0;
 const TITLE_GAP: f32 = 14.0;
 const BUTTONS_GAP: f32 = 18.0;
 
+/// The dialog's title, TITLE_INK_TOP under the dialog's inner edge to its ink, then TITLE_GAP.
 fn title(ui: &mut egui::Ui, p: &Palette, text: &str) {
-    ui.label(RichText::new(text).font(theme::bold(15.0)).color(p.text));
+    let g = ui.painter().layout_no_wrap(text.to_string(), theme::bold(15.0), p.text);
+    // The frame's content already starts inside its 1 px edge.
+    ui.add_space(TITLE_INK_TOP - theme::ink_rect(&g).top());
+    ui.add(egui::Label::new(g));
     ui.add_space(TITLE_GAP);
 }
 
@@ -284,10 +302,35 @@ mod tests {
 
     #[test]
     fn dialog_sits_a_fifth_down() {
-        assert_eq!(super::dialog_top(900.0), 170.0, "4 over the edge pixel row above the two-line-title pills (175)");
-        assert!(super::dialog_top(900.0) + 4.0 < 175.0, "the dialog covers the pill row with margin");
+        assert_eq!(super::dialog_top(900.0), 167.0, "8 over the two-line-title pills' first ink row (175)");
+        assert!(super::dialog_top(900.0) + 8.0 <= 175.0, "the dialog covers the pill row with margin");
         assert_eq!(super::dialog_top(0.0), 0.0);
         assert_eq!(super::ASSIGN_FIELD_GAP, 12.0);
+    }
+
+    #[test]
+    fn titles_and_edit_groups_sit_16_to_the_ink() {
+        // Round 13 G1 / G3: 16 from the dialog's inner edge to the title's ink, 16 from an Edit field to the next
+        // label's ink, with the real fonts at the captures' density.
+        let p = crate::theme::LIGHT;
+        let mut labels = String::from("a");
+        let shapes = crate::testutil::paint_at2(egui::vec2(800.0, 600.0), |ui| {
+            egui::Frame::new().fill(crate::views::dialog_fill(&p)).stroke(crate::views::dialog_stroke(&p)).inner_margin(super::DIALOG_MARGIN).show(ui, |ui| {
+                ui.set_width(440.0);
+                crate::views::dialog_fields(ui, &p);
+                super::title(ui, &p, "Edit CI-3779");
+                super::edit_group(ui, &p, "Labels, comma separated", super::field(&mut labels, "", &p));
+                ui.add_space(super::group_space(ui, "Priority"));
+                super::edit_group(ui, &p, "Priority", super::field(&mut String::new(), "Hint", &p));
+            });
+        });
+        let fills = crate::testutil::fills(&shapes);
+        let dialog = fills.iter().find(|(_, c)| *c == crate::views::dialog_fill(&p)).expect("dialog").0;
+        let title = crate::testutil::ink_of(&shapes, "Edit CI-3779");
+        assert!((title.top() - (dialog.top() + super::DIALOG_EDGE) - 16.0).abs() <= 0.5, "title {}", title.top() - dialog.top());
+        let field = fills.iter().find(|(_, c)| *c == crate::theme::dialog_input_fill(&p)).expect("field").0;
+        let gap = crate::testutil::ink_of(&shapes, "Priority").top() - field.bottom();
+        assert!((gap - 16.0).abs() <= 0.5, "field → label {gap}");
     }
 
     #[test]

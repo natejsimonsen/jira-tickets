@@ -474,6 +474,84 @@ pub fn apply(ctx: &egui::Context) {
     ctx.set_fonts(fonts());
 }
 
+/// The painted ink box of a galley, relative to its origin: the union of its glyphs' raster boxes (what a
+/// rater measures; egui's margins and rects are to the line box). Empty galleys give `Rect::NOTHING`.
+pub fn ink_rect(g: &egui::Galley) -> egui::Rect {
+    let ppp = g.pixels_per_point.max(1.0);
+    // Each glyph's raster lands on a whole pixel inside its row, as the tessellator places it, so ink edges (and
+    // the spaces derived from them) stay on the pixel grid.
+    let snap = |v: f32| (v * ppp).round() / ppp;
+    let mut r = egui::Rect::NOTHING;
+    for row in &g.rows {
+        for gl in &row.glyphs {
+            if gl.uv_rect.is_nothing() || gl.uv_rect.size.x <= 0.0 {
+                continue;
+            }
+            let at = gl.pos + gl.uv_rect.offset;
+            let min = row.pos + egui::vec2(snap(at.x), snap(at.y));
+            r = r.union(egui::Rect::from_min_size(min, gl.uv_rect.size));
+        }
+    }
+    r
+}
+
+/// One font's ink offsets inside its line box, measured on reference glyphs with the loaded fonts at the
+/// current pixel density. "Spacing is measured to the ink": a container's margin is the ruled ink gap minus
+/// these (`pad_*`), so the ink, not the line box, lands on the 4 / 8 / 12 / 16 / 24 scale.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Ink {
+    /// Line-box top → the top of the tallest ascender / capital ("Hdlk").
+    pub top: f32,
+    /// Line-box top → the baseline.
+    pub base: f32,
+    /// Baseline → the bottom of the descenders ("gpqy").
+    pub descent: f32,
+    /// The line box's height.
+    pub line: f32,
+}
+
+/// The item spacing that puts `target` between the ink of `left` and `right` laid side by side: the target less
+/// `left`'s right bearing (its advance past its ink) and `right`'s left bearing.
+pub fn ink_gap(left: &egui::Galley, right: &egui::Galley, target: f32) -> f32 {
+    let (l, r) = (ink_rect(left), ink_rect(right));
+    let rb = if l.is_positive() { left.size().x - l.right() } else { 0.0 };
+    let lb = if r.is_positive() { r.left() } else { 0.0 };
+    target - rb - lb
+}
+
+/// Reference glyphs for the ascender / cap line and for the descender line.
+const INK_TALL: &str = "Hdlk";
+const INK_DEEP: &str = "gpqy";
+
+impl Ink {
+    /// Measures `font` (with `line_height`, or the font's own) in `ctx`'s fonts.
+    pub fn of(ctx: &egui::Context, font: &FontId, line_height: Option<f32>) -> Ink {
+        let lay = |t: &str| {
+            let mut job = egui::text::LayoutJob::simple_singleline(t.to_string(), font.clone(), Color32::WHITE);
+            if let Some(s) = job.sections.first_mut() {
+                s.format.line_height = line_height;
+            }
+            ctx.fonts_mut(|f| f.layout_job(job))
+        };
+        let tall = lay(INK_TALL);
+        let deep = lay(INK_DEEP);
+        let base = tall.rows.first().and_then(|r| r.glyphs.first().map(|g| r.pos.y + g.pos.y)).unwrap_or(0.0);
+        Ink { top: ink_rect(&tall).top(), base, descent: ink_rect(&deep).bottom() - base, line: tall.size().y }
+    }
+    /// The margin above a line box for `target` to the cap / ascender ink.
+    pub fn pad_top(&self, target: f32) -> f32 {
+        target - self.top
+    }
+    /// The margin below a line box for `target` to the baseline (a line without descenders).
+    pub fn pad_base(&self, target: f32) -> f32 {
+        target - (self.line - self.base)
+    }
+    /// The margin below a line box for `target` to the descender ink.
+    pub fn pad_deep(&self, target: f32) -> f32 {
+        target - (self.line - self.base - self.descent)
+    }
+}
+
 struct Face {
     path: &'static str,
     index: u32,
@@ -533,6 +611,40 @@ mod tests {
 
     fn none() -> BTreeMap<String, String> {
         BTreeMap::new()
+    }
+
+    #[test]
+    fn ink_offsets_invert_with_the_real_fonts() {
+        // Spacing is measured to the ink: a line `pad_top(12)` under a fill's edge inks 12 under it, and
+        // `pad_deep(12)` leaves 12 under its descenders, for every font the containers use (captures' 2x). Glyph
+        // rasters shift by half a pixel with their subpixel x, so the tolerance is one device pixel.
+        let marker = Color32::from_rgb(1, 2, 3);
+        let fonts = [
+            (body(14.0), None),
+            (body(14.0), Some(20.0)),
+            (body(12.0), None),
+            (bold(13.5), None),
+            (bold(15.0), None),
+            (bold(22.0), None),
+            (mono(12.5), Some(18.5)),
+        ];
+        for (font, lh) in fonts {
+            let text = format!("{INK_TALL} {INK_DEEP}");
+            let shapes = crate::testutil::paint_at2(egui::vec2(400.0, 200.0), |ui| {
+                let ink = Ink::of(ui.ctx(), &font, lh);
+                assert!(ink.top > 0.0 && ink.base > ink.top && ink.descent > 0.0 && ink.line >= ink.base + ink.descent, "{font:?}: {ink:?}");
+                egui::Frame::new().fill(marker).show(ui, |ui| {
+                    ui.spacing_mut().item_spacing = egui::Vec2::ZERO;
+                    ui.add_space(ink.pad_top(12.0));
+                    ui.label(egui::RichText::new(&text).font(font.clone()).line_height(lh));
+                    ui.add_space(ink.pad_deep(12.0));
+                });
+            });
+            let (fill, _) = *crate::testutil::fills(&shapes).iter().find(|(_, c)| *c == marker).expect("fill");
+            let ink = crate::testutil::ink_of(&shapes, &text);
+            assert!((ink.top() - fill.top() - 12.0).abs() <= 0.5, "{font:?} {lh:?} top {}", ink.top() - fill.top());
+            assert!((fill.bottom() - ink.bottom() - 12.0).abs() <= 0.5, "{font:?} {lh:?} bottom {}", fill.bottom() - ink.bottom());
+        }
     }
 
     #[test]

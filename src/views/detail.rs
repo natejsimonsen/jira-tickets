@@ -81,7 +81,8 @@ pub fn show(app: &mut App, ui: &mut Ui) {
                 outline_pill(ui, l, p, crate::views::PILL_MARGIN);
             }
         });
-        ui.add_space(SECTION_GAP);
+        // The pills' edge is their ink.
+        ui.add_space(section_space(ui, "Description", 0.0));
         let window_w = ui.ctx().content_rect().width();
         ui.horizontal_top(|ui| {
             // The gutter is FIELDS_GUTTER exactly: no item spacing either side of it.
@@ -97,18 +98,15 @@ pub fn show(app: &mut App, ui: &mut Ui) {
                     }
                     None => adf_view::show_value(ui, &serde_json::Value::Null, p, p.surface),
                 }
-                ui.add_space(SECTION_GAP);
-                section_heading(ui, p, &format!("Comments ({})", issue.comments.len()));
+                // The description's last line ends at its descenders, the body line's leading under them.
+                let body = theme::Ink::of(ui.ctx(), &theme::body(14.0), Some(adf_view::line_height(14.0)));
+                let comments = format!("Comments ({})", issue.comments.len());
+                ui.add_space(section_space(ui, &comments, body.line - body.base - body.descent));
+                section_heading(ui, p, &comments);
                 // The comment cards and the composer sit 16 below their label (8 already given).
                 ui.add_space(LABEL_TO_BOX - 8.0 - ui.spacing().item_spacing.y);
                 for c in &issue.comments {
-                    // surface_2, fill only (like code blocks), in both themes; code inside steps off it (`chip_fill_on`).
-                    Frame::new().fill(p.surface_2).corner_radius(theme::RADIUS).inner_margin(Margin::same(12)).show(ui, |ui| {
-                        ui.set_width(ui.available_width());
-                        comment_header(ui, p, &c.author, &short_date(&c.created));
-                        ui.add_space(4.0);
-                        adf_view::show_value(ui, &c.body, p, p.surface_2);
-                    });
+                    comment_card(ui, p, &c.author, &short_date(&c.created), &c.body);
                     ui.add_space(COMMENT_GAP - ui.spacing().item_spacing.y);
                 }
                 // After the cards, 16 to the composer (12 + 4); with no cards it sits 16 below the label like one.
@@ -150,8 +148,21 @@ pub fn show(app: &mut App, ui: &mut Ui) {
 
 /// Title → pills.
 const TITLE_TO_PILLS: f32 = 12.0;
-/// Pills → Description, Description → Comments.
-const SECTION_GAP: f32 = 24.0;
+/// Pills → Description and the description's last line → Comments, measured to the ink (round 13 E5: 24 to
+/// the boxes read 34 and 37).
+const SECTION_INK_GAP: f32 = 32.0;
+
+/// The space before a section heading `text` for SECTION_INK_GAP between the ink of the block above (ending
+/// `below_ink` over its box's bottom) and the heading's ink; the layout's item spacing already follows the block.
+fn section_space(ui: &Ui, text: &str, below_ink: f32) -> f32 {
+    let top = theme::ink_rect(&ui.painter().layout_no_wrap(text.to_string(), theme::bold(12.0), egui::Color32::WHITE)).top();
+    section_gap_space(below_ink, top, ui.spacing().item_spacing.y)
+}
+
+/// SECTION_INK_GAP less the ink's leading either side and the item spacing.
+pub fn section_gap_space(below_ink: f32, heading_ink_top: f32, item_spacing_y: f32) -> f32 {
+    SECTION_INK_GAP - below_ink - heading_ink_top - item_spacing_y
+}
 /// Section label → the comment cards or composer box.
 const LABEL_TO_BOX: f32 = 16.0;
 /// Between comment cards: the cards' own 12 px padding.
@@ -162,6 +173,14 @@ const COMPOSER_H: f32 = 72.0;
 const COMPOSER_PAD: f32 = 11.0;
 /// The composer's stroke.
 const COMPOSER_STROKE: f32 = 1.0;
+/// How far the composer's text origin sits below an even margin (round 13 F3: its text read 1 higher than a card's).
+const COMPOSER_DROP: i8 = 1;
+
+/// The composer's inner margin: COMPOSER_PAD, its text COMPOSER_DROP lower; the box keeps COMPOSER_H.
+pub fn composer_margin() -> Margin {
+    let pad = COMPOSER_PAD as i8;
+    Margin { left: pad, right: pad, top: pad + COMPOSER_DROP, bottom: pad - COMPOSER_DROP }
+}
 /// Comment author → date.
 const COMMENT_META_GAP: f32 = 8.0;
 /// The detail content's right inset, inside the scroll area: the pane's 16 px gutter, which holds the floating
@@ -175,13 +194,66 @@ const NOTE_LIFT: f32 = 3.5;
 /// What read-only mode shows instead of the composer.
 pub const READ_ONLY_NOTE: &str = "Read-only, comments can't be posted";
 
-/// A comment card's header: the author in bold, 8, the date muted. Returns both labels' rects.
+/// A comment card's padding, measured to the ink on every side (round 13 E2: a 12 margin read 16–16.5 to the ink
+/// above and below).
+pub const CARD_PAD: f32 = 12.0;
+
+/// One comment: surface_2, fill only (like code blocks), in both themes; code inside steps off it
+/// (`chip_fill_on`). CARD_PAD to the header's ink above and to the body's descenders below; the sides keep the
+/// 12 margin (the text's own bearing reads 12, round 13).
+pub fn comment_card(ui: &mut Ui, p: &Palette, author: &str, date: &str, body: &serde_json::Value) {
+    let below = theme::Ink::of(ui.ctx(), &theme::body(14.0), Some(adf_view::line_height(14.0))).pad_deep(CARD_PAD);
+    let pad = CARD_PAD as i8;
+    Frame::new().fill(p.surface_2).corner_radius(theme::RADIUS).inner_margin(Margin { left: pad, right: pad, top: 0, bottom: 0 }).show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        let header = header_galleys(ui, p, author, date);
+        ui.add_space(CARD_PAD - header.ink_top);
+        comment_header_row(ui, header);
+        ui.add_space(4.0);
+        adf_view::show_value(ui, body, p, p.surface_2);
+        // The layout's item spacing already follows the body.
+        ui.add_space(below - ui.spacing().item_spacing.y);
+    });
+}
+
+/// A laid-out comment header: author and date galleys, the date's drop onto the author's baseline, the item
+/// spacing that puts COMMENT_META_GAP between their ink, and the row's topmost ink.
+#[derive(Clone)]
+pub struct HeaderGalleys {
+    author: std::sync::Arc<egui::Galley>,
+    date: std::sync::Arc<egui::Galley>,
+    drop: f32,
+    gap: f32,
+    ink_top: f32,
+}
+
+fn header_galleys(ui: &Ui, p: &Palette, author: &str, date: &str) -> HeaderGalleys {
+    let author = ui.painter().layout_no_wrap(author.to_string(), theme::bold(13.5), p.text);
+    let date = ui.painter().layout_no_wrap(date.to_string(), theme::body(12.0), p.muted);
+    let drop = crate::views::galley_baseline(&author) - crate::views::galley_baseline(&date);
+    let gap = theme::ink_gap(&author, &date, COMMENT_META_GAP);
+    let ink_top = theme::ink_rect(&author).top().min(drop + theme::ink_rect(&date).top());
+    HeaderGalleys { author, date, drop, gap, ink_top }
+}
+
+/// A comment card's header: the author in bold, COMMENT_META_GAP to the ink, the date muted on its baseline.
+/// Returns both labels' rects.
 pub fn comment_header(ui: &mut Ui, p: &Palette, author: &str, date: &str) -> (egui::Rect, egui::Rect) {
-    ui.horizontal(|ui| {
+    let header = header_galleys(ui, p, author, date);
+    comment_header_row(ui, header)
+}
+
+fn comment_header_row(ui: &mut Ui, h: HeaderGalleys) -> (egui::Rect, egui::Rect) {
+    ui.horizontal_top(|ui| {
         // Set here: the detail pane zeroes item spacing for its column gutter, and this row inherits it.
-        ui.spacing_mut().item_spacing.x = COMMENT_META_GAP;
-        let a = ui.label(RichText::new(author).font(theme::bold(13.5))).rect;
-        let d = ui.label(RichText::new(date).color(p.muted).size(12.0)).rect;
+        ui.spacing_mut().item_spacing.x = h.gap;
+        let a = ui.add(egui::Label::new(h.author)).rect;
+        let d = ui
+            .vertical(|ui| {
+                ui.add_space(h.drop);
+                ui.add(egui::Label::new(h.date)).rect
+            })
+            .inner;
         (a, d)
     })
     .inner
@@ -212,7 +284,7 @@ pub fn composer_read_only() -> bool {
     !composer_shown(crate::jira::READ_ONLY.load(std::sync::atomic::Ordering::Relaxed), snapshot_composer())
 }
 
-/// A section heading; the 24 px above it comes from SECTION_GAP, 8 below.
+/// A section heading; the space above it comes from `section_space`, 8 below.
 fn section_heading(ui: &mut Ui, p: &Palette, text: &str) {
     ui.label(RichText::new(text).font(theme::bold(12.0)).color(p.muted));
     ui.add_space(8.0);
@@ -233,8 +305,8 @@ fn composer(app: &mut App, ui: &mut Ui, p: &Palette, key: &str) {
         .fill(theme::input_fill(p.surface, p))
         .stroke(Stroke::new(COMPOSER_STROKE, if focused { p.accent } else { p.border }))
         .corner_radius(theme::RADIUS)
-        // 11 + the 1 px stroke: the comment cards' 12 to the text on every side.
-        .inner_margin(Margin::same(COMPOSER_PAD as i8))
+        // 11 + the 1 px stroke: the comment cards' 12 to the text at the sides; the text 1 lower (COMPOSER_DROP).
+        .inner_margin(composer_margin())
         .show(ui, |ui| ui.add_sized([ui.available_width(), COMPOSER_H - 2.0 * (COMPOSER_PAD + COMPOSER_STROKE)], composer_edit(draft, p).id(id)))
         .inner;
     // Clicking the frame's padding focuses the box too.
@@ -338,7 +410,61 @@ mod tests {
         assert!(DETAIL_RIGHT >= bar.bar_width + bar.bar_outer_margin + 4.0, "the scrollbar sits clear of the content");
         assert_eq!((COMMENT_TIP, COMPOSER_HINT), ("⌘Enter", "Add a comment (⌘Enter to post)"));
         assert_eq!(COMPOSER_PAD + COMPOSER_STROKE, 12.0, "text on the comment cards' 12 px edge");
+        let m = composer_margin();
+        assert_eq!((m.top - m.bottom, m.top + m.bottom), (2, 22), "F3: the text 1 lower, the box height kept");
         assert_eq!(super::super::issues::PILL_GAP, 8.0, "the detail pill row takes the list rows' gap (E3)");
+    }
+
+    #[test]
+    fn comment_cards_pad_12_to_the_ink() {
+        // Round 13 E2 / E4: 12 from the card's edge to the header's ink above and to the body's descenders below,
+        // 12 at the sides; the author's ink 8 from the date's, both on one baseline. Real fonts, captures' density.
+        let p = crate::theme::LIGHT;
+        let body =
+            serde_json::json!({"type": "doc", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "Looks good, shipping it today"}]}]});
+        let shapes = crate::testutil::paint_at2(egui::vec2(800.0, 400.0), |ui| {
+            ui.set_width(400.0);
+            comment_card(ui, &p, "Ada Lovelace", "2026-07-29 13:28", &body);
+        });
+        let (card, _) = *crate::testutil::fills(&shapes).iter().find(|(_, c)| *c == p.surface_2).expect("the card");
+        let (a, d) = (crate::testutil::ink_of(&shapes, "Ada Lovelace"), crate::testutil::ink_of(&shapes, "2026-07-29 13:28"));
+        let b = crate::testutil::ink_of(&shapes, "Looks good, shipping it today");
+        let near = |v: f32, want: f32| (v - want).abs() <= 0.5;
+        assert!(near(a.top().min(d.top()) - card.top(), CARD_PAD), "top {}", a.top().min(d.top()) - card.top());
+        assert!(near(card.bottom() - b.bottom(), CARD_PAD), "bottom {}", card.bottom() - b.bottom());
+        assert!(near(a.left() - card.left(), CARD_PAD), "left {}", a.left() - card.left());
+        assert!(near(d.left() - a.right(), COMMENT_META_GAP), "author · date {}", d.left() - a.right());
+        // Neither has descenders, so the ink bottoms are the baselines.
+        assert!(near(a.bottom(), d.bottom()), "one baseline: {} vs {}", a.bottom(), d.bottom());
+    }
+
+    #[test]
+    fn sections_sit_32_below_the_ink_above() {
+        // Round 13 E5: the pills' edge and the description's descenders each sit 32 above the heading's ink, with
+        // the real fonts (a block, the item spacing, the space, then the heading).
+        let p = crate::theme::LIGHT;
+        let marker = egui::Color32::from_rgb(1, 2, 3);
+        for below in ["pills", "text"] {
+            let shapes = crate::testutil::paint_at2(egui::vec2(800.0, 400.0), |ui| {
+                if below == "pills" {
+                    crate::views::pill(ui, "New", marker, p.text);
+                    ui.add_space(section_space(ui, "Description", 0.0));
+                } else {
+                    let body = theme::Ink::of(ui.ctx(), &theme::body(14.0), Some(adf_view::line_height(14.0)));
+                    let v = serde_json::json!({"type": "doc", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "a gpqy line"}]}]});
+                    ui.scope(|ui| adf_view::show_value(ui, &v, &p, p.surface));
+                    ui.add_space(section_space(ui, "Description", body.line - body.base - body.descent));
+                }
+                section_heading(ui, &p, "Description");
+            });
+            let above = if below == "pills" {
+                crate::testutil::fills(&shapes).iter().find(|(_, c)| *c == marker).expect("pill").0.bottom()
+            } else {
+                crate::testutil::ink_of(&shapes, "a gpqy line").bottom()
+            };
+            let gap = crate::testutil::ink_of(&shapes, "Description").top() - above;
+            assert!((gap - SECTION_INK_GAP).abs() <= 0.5, "{below}: {gap}");
+        }
     }
 
     #[test]

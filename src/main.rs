@@ -77,4 +77,60 @@ pub mod testutil {
         .clear();
         out.expect("one pass")
     }
+
+    /// Paints `f` headless at the captures' 2 px per point with the app's theme and fonts, and returns the last
+    /// pass's shapes (three passes, so fonts, density and sizes settle). Measure with `inks`, `ink_of` and `fills`.
+    pub fn paint_at2(size: egui::Vec2, mut f: impl FnMut(&mut egui::Ui)) -> Vec<egui::epaint::ClippedShape> {
+        let ctx = egui::Context::default();
+        crate::theme::apply(&ctx);
+        ctx.set_pixels_per_point(2.0);
+        let input = || egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)), ..Default::default() };
+        let mut shapes = Vec::new();
+        for _ in 0..3 {
+            let mut o = ctx.run_ui(input(), &mut f);
+            o.textures_delta.clear();
+            shapes = o.shapes;
+        }
+        shapes
+    }
+
+    /// Every painted text's (text, ink rect in points), in paint order.
+    pub fn inks(shapes: &[egui::epaint::ClippedShape]) -> Vec<(String, egui::Rect)> {
+        fn walk(s: &egui::Shape, out: &mut Vec<(String, egui::Rect)>) {
+            match s {
+                egui::Shape::Text(t) => {
+                    let r = crate::theme::ink_rect(&t.galley);
+                    if r.is_positive() {
+                        // The tessellator puts a galley on whole pixels (2x here).
+                        let pos = (t.pos.to_vec2() * 2.0).round() / 2.0;
+                        out.push((t.galley.job.text.clone(), r.translate(pos)));
+                    }
+                }
+                egui::Shape::Vec(v) => v.iter().for_each(|s| walk(s, out)),
+                _ => {}
+            }
+        }
+        let mut out = Vec::new();
+        shapes.iter().for_each(|c| walk(&c.shape, &mut out));
+        out
+    }
+
+    /// The ink rect of the first painted text equal to `text`.
+    pub fn ink_of(shapes: &[egui::epaint::ClippedShape], text: &str) -> egui::Rect {
+        inks(shapes).into_iter().find(|(t, _)| t == text).unwrap_or_else(|| panic!("{text:?} not painted")).1
+    }
+
+    /// Every painted rect's (rect, fill), in paint order.
+    pub fn fills(shapes: &[egui::epaint::ClippedShape]) -> Vec<(egui::Rect, egui::Color32)> {
+        fn walk(s: &egui::Shape, out: &mut Vec<(egui::Rect, egui::Color32)>) {
+            match s {
+                egui::Shape::Rect(r) => out.push((r.rect, r.fill)),
+                egui::Shape::Vec(v) => v.iter().for_each(|s| walk(s, out)),
+                _ => {}
+            }
+        }
+        let mut out = Vec::new();
+        shapes.iter().for_each(|c| walk(&c.shape, &mut out));
+        out
+    }
 }

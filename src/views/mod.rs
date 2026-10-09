@@ -82,10 +82,23 @@ fn centred(ui: &mut Ui, id: &str, content: impl FnOnce(&mut Ui)) {
 /// The tabs, in ⌘1–⌘4 order.
 const TABS: [(Screen, &str); 4] = [(Screen::Issues, "Issues"), (Screen::Grooming, "Grooming"), (Screen::Team, "Team"), (Screen::Roadmap, "Roadmap")];
 
-/// Every tab label is regular 14 (the underline marks the active one), so a tab's slot is its label's width
-/// whatever its state and switching tabs never moves anything.
-pub fn tab_width(label_w: f32) -> f32 {
-    label_w.ceil()
+/// Each tab's origin x for a title whose galley starts at `left`: TITLE_GAP from the title's ink to the first
+/// tab's ink, TAB_GAP between the tabs' ink (round 13 A1 / A2: gaps between the boxes read 33.5 and 24.5–25.5).
+/// Every tab label is regular 14 (the underline marks the active one), so its slot is its label's width whatever
+/// its state and switching tabs never moves anything.
+pub fn tab_origins(left: f32, title: &egui::Galley, tabs: &[std::sync::Arc<egui::Galley>]) -> Vec<f32> {
+    // On whole pixels, so each galley paints exactly the raster its ink was measured on.
+    let ppp = title.pixels_per_point.max(1.0);
+    let ink = |g: &egui::Galley| {
+        let r = theme::ink_rect(g);
+        if r.is_positive() { (r.left(), r.right()) } else { (0.0, g.size().x) }
+    };
+    let (tl, tr) = ink(title);
+    let items: Vec<(f32, f32, f32)> =
+        std::iter::once((tl, tr, 0.0)).chain(tabs.iter().enumerate().map(|(i, g)| (ink(g).0, ink(g).1, if i == 0 { TITLE_GAP } else { TAB_GAP }))).collect();
+    let (xs, _) = issues::ink_origins(&items);
+    // `ink_origins` puts the first ink at 0; the title's galley stays at `left`.
+    xs.iter().skip(1).map(|x| issues::snap_px(left + tl + x, ppp)).collect()
 }
 
 /// The header rule: the header panel's last whole point, under the 48 px bar.
@@ -150,14 +163,15 @@ pub struct HeaderRight {
     pub name: Option<f32>,
 }
 
-/// `dot_w` is the "·" label's width.
-pub fn header_right(right: f32, name_w: Option<f32>, read_only_w: Option<f32>, dot_w: f32) -> HeaderRight {
+/// `dot_w` is the "·" label's width; `gaps` the spacing between the boxes of the name and "·", and of "·" and
+/// "Read-only" (LABEL_GAP to the ink, `theme::ink_gap`).
+pub fn header_right(right: f32, name_w: Option<f32>, read_only_w: Option<f32>, dot_w: f32, gaps: [f32; 2]) -> HeaderRight {
     let help = right - HEADER_BUTTON;
     let sync = help - HEADER_GAP - HEADER_BUTTON;
     let labels_right = sync - LABELS_TO_BUTTONS;
     let read_only = read_only_w.map(|w| labels_right - w);
-    let dot = read_only.filter(|_| name_w.is_some()).map(|x| x - LABEL_GAP - dot_w);
-    let name_right = dot.map_or(labels_right, |x| x - LABEL_GAP);
+    let dot = read_only.filter(|_| name_w.is_some()).map(|x| x - gaps[1] - dot_w);
+    let name_right = dot.map_or(labels_right, |x| x - gaps[0]);
     let name = name_w.map(|w| name_right - w);
     let labels_w = labels_right - name.or(read_only).unwrap_or(labels_right);
     HeaderRight { help, sync, labels_right, labels_w, read_only, dot, name }
@@ -200,20 +214,23 @@ fn header(app: &mut App, ui: &mut Ui, p: &Palette) -> (egui::Rect, Option<egui::
     let frame = Frame::new().fill(p.surface).inner_margin(Margin { left: 16, right: 16, top: 0, bottom: (HEADER_H - BAR_H) as i8 });
     let panel = egui::Panel::top("header").exact_size(HEADER_H).show_separator_line(false).frame(frame).show(ui, |ui| {
         ui.horizontal_centered(|ui| {
-            ui.spacing_mut().item_spacing.x = TAB_GAP;
+            // Every gap is placed by ink (`tab_origins`), so none comes from item spacing.
+            ui.spacing_mut().item_spacing.x = 0.0;
             // The title and the tabs share the tabs' baseline (the 15 bold title sat 1 px below it).
             let tab_probe = ui.painter().layout_no_wrap("Issues".into(), theme::body(14.0), p.text);
             let title = ui.painter().layout_no_wrap("Jira Tickets".into(), theme::bold(15.0), p.text);
+            let tabs: Vec<_> = TABS
+                .iter()
+                .map(|(s, name)| ui.painter().layout_no_wrap(name.to_string(), theme::body(14.0), if app.screen == *s { p.text } else { p.muted }))
+                .collect();
+            let origins = tab_origins(ui.cursor().left(), &title, &tabs);
             let (title_rect, _) = ui.allocate_exact_size(vec2(title.size().x.ceil(), 32.0), Sense::hover());
             let line = (title_rect.center().y - tab_probe.size().y / 2.0).round() + baseline(&tab_probe);
             ui.painter().galley(egui::pos2(title_rect.left(), top_for_baseline(line, baseline(&title))), title, p.text);
-            ui.add_space(TITLE_GAP - TAB_GAP);
-            for (i, (s, name)) in TABS.into_iter().enumerate() {
+            for (i, ((s, name), galley)) in TABS.into_iter().zip(tabs).enumerate() {
                 let active = app.screen == s;
-                let galley = ui.painter().layout_no_wrap(name.to_string(), theme::body(14.0), if active { p.text } else { p.muted });
-                let w = tab_width(galley.size().x);
-                let (rect, r) = ui.allocate_exact_size(vec2(w, 32.0), Sense::click());
-                // Left-aligned in its slot, so every gap is exactly TAB_GAP.
+                ui.add_space(origins[i] - ui.cursor().left());
+                let (rect, r) = ui.allocate_exact_size(vec2(galley.size().x, 32.0), Sense::click());
                 let pos = egui::pos2(rect.left(), top_for_baseline(line, baseline(&galley)));
                 ui.painter().galley(pos, galley, p.text);
                 if active {
@@ -241,7 +258,12 @@ fn header(app: &mut App, ui: &mut Ui, p: &Palette) -> (egui::Rect, Option<egui::
                 });
                 let ro = read_only.then(|| read_only_galley(&painter, p));
                 let dot = painter.layout_no_wrap("·".into(), theme::body(12.0), p.muted);
-                let at = header_right(right, name.as_ref().map(|(g, _)| g.size().x), ro.as_ref().map(|g| g.size().x), dot.size().x);
+                // LABEL_GAP between the labels' ink, not their boxes (round 13 A3: 8 to the boxes read 9).
+                let gaps = [
+                    name.as_ref().map_or(LABEL_GAP, |(g, _)| theme::ink_gap(g, &dot, LABEL_GAP)),
+                    ro.as_ref().map_or(LABEL_GAP, |g| theme::ink_gap(&dot, g, LABEL_GAP)),
+                ];
+                let at = header_right(right, name.as_ref().map(|(g, _)| g.size().x), ro.as_ref().map(|g| g.size().x), dot.size().x, gaps);
                 let help = icons::icon_button(ui, icons::Icon::Help, "Keyboard help (?)", p);
                 if help.clicked() {
                     app.actions.push(Action::ToggleHelp);
@@ -323,13 +345,40 @@ fn sign_in_aside(p: &Palette) -> egui::text::LayoutJob {
 /// Final wording (round 11 J1): two verbs, so neither identifier reads as the other's alternative name.
 pub const SIGN_IN_ASIDE: [&str; 7] = ["Or export ", "JIRA_API_TOKEN", ", or set ", "api_token", " in ", "config.toml", ", then check again."];
 
-/// The sign-in panel's top padding: 16 less the 22 px title's ~4 of leading above its ink, so the panel reads
-/// 16 above the title's ink as below "Check again" (round 8 measured 21.5 top, 17.5 bottom).
-const SIGN_IN_TOP: f32 = 12.0;
+/// The sign-in panel's padding, measured to the ink: its inner edge → the title's ink, and the "g" of "Check
+/// again" → its inner edge (round 13 J1 / J2: 17.5 and 17 with margins to the line boxes).
+const SIGN_IN_PAD: f32 = 16.0;
+/// The panel's margin: 16 at the sides; top and bottom are set to the ink (`sign_in_title`, `check_again`).
+const SIGN_IN_MARGIN: Margin = Margin { left: 16, right: 16, top: 0, bottom: 0 };
+pub const SIGN_IN_TITLE: &str = "Sign in to Jira";
+pub const CHECK_AGAIN: &str = "Check again";
 
-/// Sign in → "Check again" in code: its row-height box carries ~5 above the ink of "Check", so 7 reads as the
-/// 12 the field → button gap shows (round 12 J1 measured 17 ink to ink at 12).
-const SIGN_IN_TO_AGAIN: f32 = 7.0;
+/// The title, SIGN_IN_PAD under the panel's inner edge to its ink (the frame's content starts inside its edge).
+fn sign_in_title(ui: &mut Ui, p: &Palette) {
+    let g = ui.painter().layout_no_wrap(SIGN_IN_TITLE.to_string(), theme::bold(22.0), p.text);
+    ui.add_space(SIGN_IN_PAD - theme::ink_rect(&g).top());
+    ui.add(egui::Label::new(g));
+}
+
+/// "Check again", only as tall as its text, then SIGN_IN_PAD from its descenders to the panel's edge. `text`, so
+/// it reads as a control beside the muted aside; the standard hover fill when pointed at (J2), no frame at rest.
+fn check_again(ui: &mut Ui, p: &Palette, w: f32) -> egui::Response {
+    let g = ui.painter().layout_no_wrap(CHECK_AGAIN.to_string(), theme::body(14.0), p.text);
+    let (h, ink_bottom) = (g.size().y, theme::ink_rect(&g).bottom());
+    let again = egui::Button::new(RichText::new(CHECK_AGAIN).color(p.text).size(14.0)).frame_when_inactive(false);
+    ui.spacing_mut().button_padding.y = 0.0;
+    // egui's 18 interact height made it 1.5 taller than its text, which then sat 0.75 low.
+    ui.spacing_mut().interact_size.y = h;
+    let r = ui.add_sized([w, h], again);
+    // The text is centred in a box its own height, so its ink sits where the galley's does.
+    ui.add_space(SIGN_IN_PAD - (h - ink_bottom) - ui.spacing().item_spacing.y);
+    r
+}
+
+/// Sign in → "Check again" in code: its row-height box carries ~5 above the ink of "Check", so this reads as the
+/// 12 the field → button gap shows (round 12 J1 measured 17 ink to ink at 12). 7.75: the box is now its text's
+/// height, not egui's 18 with the text 0.75 down (round 13 J2), so the ink stays where it was.
+const SIGN_IN_TO_AGAIN: f32 = 7.75;
 
 /// Body → aside in code: the 14 px line's leading under its ink and the aside's over its ink add ~6, so 2 reads
 /// as the 8 that makes the aside a footnote of the line above (round 12 J1 measured 14 at 8).
@@ -362,14 +411,14 @@ pub fn sign_in(app: &mut App, ui: &mut Ui) {
     let aside = sign_in_aside(p);
     let aside_w = ui.fonts_mut(|f| f.layout_job(aside.clone())).size().x;
     centred(ui, "sign-in", |ui| {
-        Frame::new().fill(p.surface).stroke(Stroke::new(1.0, p.border)).corner_radius(theme::RADIUS).inner_margin(Margin { left: 16, right: 16, top: SIGN_IN_TOP as i8, bottom: 16 }).show(ui, |ui| {
+        Frame::new().fill(p.surface).stroke(Stroke::new(1.0, p.border)).corner_radius(theme::RADIUS).inner_margin(SIGN_IN_MARGIN).show(ui, |ui| {
             let w = sign_in_width(aside_w);
             ui.set_width(w);
             ui.vertical(|ui| {
                 // Every gap is explicit, ink to ink: 16 title → body, 8 body → aside, 16 aside → field, 12 → button, 12 → Check again.
                 // The aside's mono runs make its line box ~1 px taller than its prose, so 15 reads as 16.
                 ui.spacing_mut().item_spacing.y = 0.0;
-                ui.label(RichText::new("Sign in to Jira").font(theme::bold(22.0)).color(p.text));
+                sign_in_title(ui, p);
                 ui.add_space(TITLE_TO_BODY);
                 let (lead, is_error) = sign_in_lead(app.token_error.as_deref());
                 ui.label(RichText::new(lead).size(14.0).color(if is_error { p.off_track } else { p.text }));
@@ -410,13 +459,7 @@ pub fn sign_in(app: &mut App, ui: &mut Ui) {
                     app.actions.push(Action::SubmitToken);
                 }
                 ui.add_space(SIGN_IN_TO_AGAIN);
-                // Only as tall as its text, so the panel's 16 bottom padding is all that shows under it.
-                // `text`, so it reads as a control beside the muted aside; the standard hover fill when pointed at
-                // (J2), no frame at rest.
-                let again = egui::Button::new(RichText::new("Check again").color(p.text).size(14.0)).frame_when_inactive(false);
-                let again_h = ui.fonts_mut(|f| f.row_height(&theme::body(14.0)));
-                ui.spacing_mut().button_padding.y = 0.0;
-                if tooltip(ui.add_sized([w, again_h], again), "Look for JIRA_API_TOKEN or the config api_token again").clicked() {
+                if tooltip(check_again(ui, p, w), "Look for JIRA_API_TOKEN or the config api_token again").clicked() {
                     app.actions.push(Action::FindToken);
                 }
             });
@@ -431,8 +474,59 @@ pub const TIP_H: f32 = 24.0;
 pub const TIP_GAP: f32 = 8.0;
 /// The tooltip's text size: the hint bar's.
 pub const TIP_TEXT: f32 = 12.0;
-/// Inside the tooltip's edge: 8 at the sides, 3 above and below.
-pub const TIP_MARGIN: Margin = Margin { left: 8, right: 8, top: 3, bottom: 3 };
+/// Inside the tooltip's edge: 3 above and below; the sides are TIP_INK_X to the ink (`tip_row`).
+pub const TIP_MARGIN: Margin = Margin { left: 0, right: 0, top: 3, bottom: 3 };
+/// The tooltip's side padding, from its edge to the text's ink, the same on both sides (round 13 F2: 8 to the
+/// line box read 9–11.5 left and 8 right with "⌘"'s bearing).
+pub const TIP_INK_X: f32 = 8.0;
+
+/// A tooltip's text split around its key token, which takes the hint bar's key style (round 13 F1): the whole
+/// text when it is a key ("⌘Enter"), else a trailing "(…)" that holds a key ("Copy link (c)", "Refresh (⌘R)").
+/// Returns (before, key, after); the key is empty when the text has none.
+pub fn tip_key_split(text: &str) -> (&str, &str, &str) {
+    let modified = |t: &str| t.starts_with(['⌘', '⇧', '⌥', '⌃']);
+    let is_key = |t: &str| !t.is_empty() && !t.contains(' ') && (modified(t) || t.chars().count() <= 3);
+    if modified(text) && !text.contains(' ') {
+        return ("", text, "");
+    }
+    if let Some(inner) = text.strip_suffix(')')
+        && let Some(open) = inner.rfind('(')
+        && is_key(&inner[open + 1..])
+    {
+        return (&text[..open + 1], &inner[open + 1..], ")");
+    }
+    (text, "", "")
+}
+
+/// A tooltip's text: TIP_TEXT `text`, its key token in the key style (`tip_key_split`).
+pub fn tip_job(text: &str, p: &Palette) -> egui::text::LayoutJob {
+    let (before, key, after) = tip_key_split(text);
+    let plain = egui::TextFormat { font_id: theme::body(TIP_TEXT), color: p.text, ..Default::default() };
+    let mut job = egui::text::LayoutJob::default();
+    job.append(before, 0.0, plain.clone());
+    let k = issues::key_job(key, p.text);
+    let base = job.text.len();
+    job.text.push_str(&k.text);
+    job.sections.extend(k.sections.into_iter().map(|mut s| {
+        s.byte_range = egui::text::ByteIndex(s.byte_range.start.0 + base)..egui::text::ByteIndex(s.byte_range.end.0 + base);
+        s
+    }));
+    job.append(after, 0.0, plain);
+    job
+}
+
+/// A tooltip's one line, TIP_INK_X from the edge to the ink on both sides.
+fn tip_row(ui: &mut Ui, text: &str, p: &Palette) {
+    let g = ui.painter().layout_job(tip_job(text, p));
+    let ink = theme::ink_rect(&g);
+    let (lb, rb) = if ink.is_positive() { (ink.left(), g.size().x - ink.right()) } else { (0.0, 0.0) };
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 0.0;
+        ui.add_space(TIP_INK_X - lb);
+        ui.add(egui::Label::new(g));
+        ui.add_space(TIP_INK_X - rb);
+    });
+}
 
 /// The app's one tooltip frame (F1): the hint bar's fill, a 1 px `border` (no control-weight edge, no shadow),
 /// so a tip never reads as a sibling button.
@@ -453,10 +547,7 @@ fn show_tip(resp: &egui::Response, text: String, align: Option<egui::RectAlign>)
     if let Some(align) = align {
         tip.popup = tip.popup.align(align).align_alternatives(&[]);
     }
-    tip.show(|ui| {
-        ui.set_max_width(ui.spacing().tooltip_width);
-        ui.add(egui::Label::new(RichText::new(text).color(p.text).size(TIP_TEXT)));
-    });
+    tip.show(|ui| tip_row(ui, &text, p));
 }
 
 /// Whether a tooltip goes above its control: when, below it, it would cross `limit` (the hint bar's top rule,
@@ -533,9 +624,30 @@ pub fn toast_centre_x(window_w: f32, detail: Option<(f32, f32)>) -> f32 {
     detail.map_or(window_w / 2.0, |(l, r)| (l + r) / 2.0)
 }
 
-/// The toast's padding: 16 either side; 6 above and 10 below, because the 14 px line box carries its leading
-/// under the glyphs (8/8 set the text ~2 pt low, 7/9 still 1; round 12 D2).
-const TOAST_MARGIN: Margin = Margin { left: 16, right: 16, top: 6, bottom: 10 };
+/// The toast's padding: 6 above and 10 below, because the 14 px line box carries its leading under the glyphs
+/// (8/8 set the text ~2 pt low, 7/9 still 1; round 12 D2); the sides are TOAST_INK_X to the ink (`toast_row`).
+const TOAST_MARGIN: Margin = Margin { left: 0, right: 0, top: 6, bottom: 10 };
+/// The toast's side padding, from the fill to the dot or the text's ink (round 13 D2: 16 to the text's box read
+/// 17–18.3 to its ink).
+pub const TOAST_INK_X: f32 = 16.0;
+
+/// The toast's one line: the type dot (if any), 8, the text, with TOAST_INK_X from the fill to the ink either side.
+fn toast_row(ui: &mut Ui, p: &Palette, dot: Option<Color32>, text: &str) {
+    let g = ui.painter().layout_no_wrap(text.to_string(), theme::body(14.0), p.tooltip_text);
+    let ink = theme::ink_rect(&g);
+    let (lb, rb) = if ink.is_positive() { (ink.left(), g.size().x - ink.right()) } else { (0.0, 0.0) };
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 8.0;
+        // The dot's circle fills its slot, so its edge is its ink.
+        ui.add_space(if dot.is_some() { TOAST_INK_X } else { TOAST_INK_X - lb });
+        if let Some(color) = dot {
+            health_dot(ui, color);
+        }
+        ui.add(egui::Label::new(g).wrap_mode(egui::TextWrapMode::Extend));
+        // The layout's item spacing already follows the text.
+        ui.add_space(TOAST_INK_X - rb - ui.spacing().item_spacing.x);
+    });
+}
 
 /// The toast's shadow: heavier in dark, where a light shadow vanishes on the near-black page.
 pub fn toast_shadow(p: &Palette) -> egui::Shadow {
@@ -560,13 +672,7 @@ pub fn toast(app: &mut App, ctx: &egui::Context) {
     let at = egui::pos2(x, window.bottom() - toast_offset(hint_bar_height(app)));
     egui::Area::new(egui::Id::new("toast")).pivot(egui::Align2::CENTER_BOTTOM).fixed_pos(at).show(ctx, |ui| {
         Frame::new().fill(p.tooltip).stroke(toast_stroke(p)).shadow(shadow).corner_radius(theme::RADIUS).inner_margin(TOAST_MARGIN).show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 8.0;
-                if let Some(color) = toast_dot(t.kind) {
-                    health_dot(ui, color);
-                }
-                ui.add(egui::Label::new(RichText::new(&t.text).color(p.tooltip_text).size(14.0)).wrap_mode(egui::TextWrapMode::Extend));
-            });
+            toast_row(ui, p, toast_dot(t.kind), &t.text);
         });
     });
 }
@@ -1260,6 +1366,38 @@ mod widget_tests {
     }
 
     #[test]
+    fn tooltip_keys_take_the_key_style() {
+        // Round 13 F1: the key token in a tip is mono like the hint bar's; prose stays proportional.
+        assert_eq!(tip_key_split("⌘Enter"), ("", "⌘Enter", ""));
+        assert_eq!(tip_key_split("Copy link (c)"), ("Copy link (", "c", ")"));
+        assert_eq!(tip_key_split("Refresh (⌘R)"), ("Refresh (", "⌘R", ")"));
+        assert_eq!(tip_key_split("Keyboard help (?)"), ("Keyboard help (", "?", ")"));
+        assert_eq!(tip_key_split("Writes are blocked (JIRA_TICKETS_READONLY)"), ("Writes are blocked (JIRA_TICKETS_READONLY)", "", ""));
+        assert_eq!(tip_key_split("Forget the saved token"), ("Forget the saved token", "", ""));
+        let job = tip_job("Copy link (c)", &theme::LIGHT);
+        assert_eq!(job.text, "Copy link (c)");
+        let font_at = |i: usize| job.sections.iter().find(|s| (s.byte_range.start.0..s.byte_range.end.0).contains(&i)).map(|s| s.format.font_id.clone());
+        assert_eq!(font_at(0), Some(theme::body(TIP_TEXT)));
+        assert_eq!(font_at(11), Some(theme::key_font()), "the key in the key style");
+        assert_eq!(font_at(12), Some(theme::body(TIP_TEXT)));
+    }
+
+    #[test]
+    fn tooltips_inset_their_ink_equally() {
+        // Round 13 F2: TIP_INK_X from the edge to the ink on both sides, "⌘"'s bearing counted, real fonts.
+        let p = theme::LIGHT;
+        for text in [detail::COMMENT_TIP, "Copy link (c)", "Forget the saved token"] {
+            let shapes = crate::testutil::paint_at2(vec2(800.0, 200.0), |ui| {
+                tip_frame(&p).show(ui, |ui| tip_row(ui, text, &p));
+            });
+            let fill = crate::testutil::fills(&shapes).iter().find(|(_, c)| *c == issues::hint_bar_fill(&p)).expect("tip").0;
+            let ink = crate::testutil::ink_of(&shapes, text);
+            let (l, r) = (ink.left() - fill.left() - 1.0, fill.right() - 1.0 - ink.right());
+            assert!((l - TIP_INK_X).abs() <= 0.5 && (r - TIP_INK_X).abs() <= 0.5, "{text}: {l} / {r}");
+        }
+    }
+
+    #[test]
     fn one_centring_rule() {
         assert_eq!(centre_top(800.0, 300.0), 250.0);
         assert_eq!(centre_top(100.0, 300.0), 0.0, "never negative");
@@ -1269,10 +1407,31 @@ mod widget_tests {
     #[test]
     fn sign_in_aside_reads_as_one_sentence() {
         assert_eq!(SIGN_IN_ASIDE.concat(), "Or export JIRA_API_TOKEN, or set api_token in config.toml, then check again.");
-        assert_eq!(SIGN_IN_TOP, 16.0 - 4.0, "title top leading trimmed");
         assert_eq!(sign_in_width(300.0), 480.0);
         assert_eq!(sign_in_width(451.0), 480.0, "round 6: 480 so the aside has margin");
         assert_eq!(sign_in_width(470.3), 495.0, "a wider aside keeps 24 of margin");
+    }
+
+    #[test]
+    fn the_sign_in_panel_pads_16_to_the_ink() {
+        // Round 13 J1 / J2: 16 from the panel's inner edge to the title's ink, and from the "g" of "Check again" to
+        // the inner edge below, with the real fonts.
+        let p = crate::theme::LIGHT;
+        let shapes = crate::testutil::paint_at2(egui::vec2(800.0, 400.0), |ui| {
+            Frame::new().fill(p.surface).stroke(Stroke::new(1.0, p.border)).inner_margin(SIGN_IN_MARGIN).show(ui, |ui| {
+                ui.set_width(480.0);
+                ui.vertical(|ui| {
+                    ui.spacing_mut().item_spacing.y = 0.0;
+                    sign_in_title(ui, &p);
+                    ui.add_space(40.0);
+                    check_again(ui, &p, 480.0);
+                });
+            });
+        });
+        let panel = crate::testutil::fills(&shapes).iter().find(|(_, c)| *c == p.surface).expect("panel").0;
+        let (title, again) = (crate::testutil::ink_of(&shapes, SIGN_IN_TITLE), crate::testutil::ink_of(&shapes, CHECK_AGAIN));
+        assert!((title.top() - (panel.top() + 1.0) - SIGN_IN_PAD).abs() <= 0.5, "top {}", title.top() - panel.top() - 1.0);
+        assert!(((panel.bottom() - 1.0) - again.bottom() - SIGN_IN_PAD).abs() <= 0.5, "bottom {}", panel.bottom() - 1.0 - again.bottom());
     }
 
     #[test]
@@ -1306,9 +1465,38 @@ mod widget_tests {
     }
 
     #[test]
-    fn tabs_take_their_label_width() {
-        assert_eq!(tab_width(52.3), 53.0);
-        assert_eq!(tab_width(41.0), 41.0);
+    fn header_gaps_are_measured_to_the_ink() {
+        // Round 13 A1–A3, real fonts at the captures' density: 32 from the title's ink to the first tab's, 24
+        // between tabs, and 8 between the right-hand labels' ink.
+        let p = &theme::LIGHT;
+        let ctx = egui::Context::default();
+        theme::apply(&ctx);
+        ctx.set_pixels_per_point(2.0);
+        let input = || egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, vec2(1440.0, 900.0))), ..Default::default() };
+        for _ in 0..3 {
+            let mut o = ctx.run_ui(input(), |ui| {
+                let lay = |t: &str, f: egui::FontId| ui.painter().layout_no_wrap(t.to_string(), f, p.text);
+                let title = lay("Jira Tickets", theme::bold(15.0));
+                let tabs: Vec<_> = TABS.iter().map(|(_, n)| lay(n, theme::body(14.0))).collect();
+                let xs = tab_origins(16.0, &title, &tabs);
+                let ink = |x: f32, g: &egui::Galley| {
+                    let r = theme::ink_rect(g);
+                    egui::Rangef::new(r.left() + x, r.right() + x)
+                };
+                assert!((ink(xs[0], &tabs[0]).min - ink(16.0, &title).max - TITLE_GAP).abs() <= 0.25, "title gap");
+                for i in 1..tabs.len() {
+                    let gap = ink(xs[i], &tabs[i]).min - ink(xs[i - 1], &tabs[i - 1]).max;
+                    assert!((gap - TAB_GAP).abs() <= 0.5, "tab {i}: {gap}");
+                    assert_eq!(xs[i] * 2.0, (xs[i] * 2.0).round(), "on whole pixels");
+                }
+                let (name, dot, ro) = (lay("Shawn Sorichetti", theme::body(12.0)), lay("·", theme::body(12.0)), read_only_galley(ui.painter(), p));
+                let gaps = [theme::ink_gap(&name, &dot, LABEL_GAP), theme::ink_gap(&dot, &ro, LABEL_GAP)];
+                let at = header_right(1424.0, Some(name.size().x), Some(ro.size().x), dot.size().x, gaps);
+                let (n, d, r) = (ink(at.name.unwrap(), &name), ink(at.dot.unwrap(), &dot), ink(at.read_only.unwrap(), &ro));
+                assert!((d.min - n.max - LABEL_GAP).abs() < 0.01 && (r.min - d.max - LABEL_GAP).abs() < 0.01, "{n:?} {d:?} {r:?}");
+            });
+            o.textures_delta.clear();
+        }
     }
 
     #[test]
@@ -1422,11 +1610,11 @@ mod widget_tests {
         assert_eq!(long.chars().count(), 40);
         let names = [None, Some(measure("Shawn")), Some(measure(&truncate_text(long, name_cap(m_w), measure)))];
         for ro in [None, Some(52.0)] {
-            let first = header_right(edge, None, ro, 4.0);
+            let first = header_right(edge, None, ro, 4.0, [LABEL_GAP; 2]);
             assert_eq!(first.help, edge - 32.0, "? at the 16 px edge");
             assert_eq!(first.sync, first.help - 40.0, "sync 8 left of ?");
             for name_w in names {
-                let at = header_right(edge, name_w, ro, 4.0);
+                let at = header_right(edge, name_w, ro, 4.0, [LABEL_GAP; 2]);
                 assert_eq!((at.help, at.sync), (first.help, first.sync), "ro={ro:?} name_w={name_w:?}");
                 // The text nearest sync (Read-only, else the name) ends 12 left of it (A1).
                 let nearest_right = match (at.read_only, at.name) {
@@ -1445,7 +1633,7 @@ mod widget_tests {
             }
         }
         assert!(measure(&truncate_text(long, name_cap(m_w), measure)) <= name_cap(m_w), "a long name is cut to the cap");
-        assert_eq!(header_right(edge, None, None, 4.0).labels_w, 0.0);
+        assert_eq!(header_right(edge, None, None, 4.0, [LABEL_GAP; 2]).labels_w, 0.0);
         for p in [&theme::LIGHT, &theme::DARK] {
             assert_eq!(read_only_color(p), p.text, "Read-only in text, the name muted");
         }
@@ -1490,6 +1678,24 @@ mod widget_tests {
         assert!(toast_shadow(&theme::DARK).color.a() > toast_shadow(&theme::LIGHT).color.a());
         assert_eq!(TOAST_MARGIN.left, TOAST_MARGIN.right);
         assert_eq!((TOAST_MARGIN.top, TOAST_MARGIN.bottom), (6, 10), "D2: the text 1 up, the box height kept");
+    }
+
+    #[test]
+    fn the_toast_insets_16_to_the_ink() {
+        // Round 13 D2: 16 from the fill to the text's ink either side (or to the dot on the left), real fonts.
+        let p = theme::DARK;
+        for dot in [None, Some(theme::DARK.on_track)] {
+            let text = "Read-only mode: transition not sent to Jira";
+            let shapes = crate::testutil::paint_at2(vec2(1440.0, 400.0), |ui| {
+                Frame::new().fill(p.tooltip).inner_margin(TOAST_MARGIN).show(ui, |ui| toast_row(ui, &p, dot, text));
+            });
+            let fill = crate::testutil::fills(&shapes).iter().find(|(_, c)| *c == p.tooltip).expect("toast").0;
+            let ink = crate::testutil::ink_of(&shapes, text);
+            assert!((fill.right() - ink.right() - TOAST_INK_X).abs() <= 0.5, "right {}", fill.right() - ink.right());
+            if dot.is_none() {
+                assert!((ink.left() - fill.left() - TOAST_INK_X).abs() <= 0.5, "left {}", ink.left() - fill.left());
+            }
+        }
     }
 
     #[test]
