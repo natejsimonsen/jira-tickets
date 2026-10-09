@@ -14,7 +14,8 @@ echo "building (snapshot, release)..." >&2
 (cd "$root" && nix develop --command cargo build --release --features snapshot)
 bin="$root/target/release/jira-tickets"
 
-token="$(op read --account "${OP_ACCOUNT:-my.1password.com}" "op://Private/jira-cli JIRA API Credentials/credential")"
+# A token already in the environment (exported inline by the caller) is used as is; otherwise op reads it.
+token="${JIRA_API_TOKEN:-$(op read --account "${OP_ACCOUNT:-my.1password.com}" "op://Private/jira-cli JIRA API Credentials/credential")}"
 
 manifest="$out/manifest.md"
 {
@@ -82,8 +83,9 @@ flow() {
     done
 }
 
-flow issues-default 'wait:500;shot:01-list.png' \
-    '01-list.png|Issues list with the default team, sprint, and columns'
+flow issues-default 'wait:500;shot:01-list.png;key:j;key:j;key:j;key:j;key:j;key:j;key:j;key:j;key:j;key:j;wait:300;shot:02-selected-new.png' \
+    '01-list.png|Issues list with the default team, sprint, and columns' \
+    '02-selected-new.png|Tenth row selected (j×10), a "New" status pill on the selected row'
 flow issues-team-picker 'click:Platform;wait:200;shot:01-open.png' \
     '01-open.png|Team picker ComboBox open'
 flow issues-sprint-picker 'click:(active);wait:200;shot:01-open.png' \
