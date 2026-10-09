@@ -102,9 +102,9 @@ flow issues-detail 'key:j;key:j;wait:1500;shot:01-detail.png;key:j;wait:1500;sho
 # JIRA_TICKETS_SNAPSHOT_COMPOSER=1 (snapshot builds only) draws the writable composer for this flow while every
 # write stays blocked by read-only mode. The pointer moves to an empty stretch of the header before the draft shot.
 flow_env=(JIRA_TICKETS_SNAPSHOT_COMPOSER=1)
-flow issues-composer "key:j;key:j;wait:1500;shot:00-rest.png;click:Add a comment;type:This is a draft comment that will not be posted;hover:900,24;wait:200;shot:01-draft.png" \
+flow issues-composer "key:j;key:j;wait:1500;shot:00-rest.png;click:Add a comment;type:This is a draft comment that will not be posted;point:Comment;wait:900;shot:01-draft.png" \
     '00-rest.png|Writable composer at rest (JIRA_TICKETS_SNAPSHOT_COMPOSER=1; writes still blocked): placeholder, quiet Comment' \
-    '01-draft.png|Writable composer focused with an unposted draft, Comment primary (JIRA_TICKETS_SNAPSHOT_COMPOSER=1)'
+    '01-draft.png|Writable composer focused with an unposted draft, Comment primary, pointer on Comment showing its tooltip (JIRA_TICKETS_SNAPSHOT_COMPOSER=1)'
 flow_env=()
 flow pickers-transition 'key:j;wait:800;key:t;wait:1500;shot:01-open.png;key:down;shot:02-moved.png;key:enter;wait:800;shot:03-readonly-toast.png' \
     '01-open.png|Transition picker open' \
@@ -141,6 +141,12 @@ flow header-sync 'key:cmd+r;shot:01-syncing.png' \
 flow detail-rich 'key:cmd+k;type:CI-4091;wait:300;key:enter;wait:2000;shot:01-code-block.png;key:cmd+k;type:CI-2119;wait:300;key:enter;wait:2000;shot:02-smart-link.png' \
     '01-code-block.png|A description with a code block' \
     '02-smart-link.png|A description with a smart link (inlineCard)'
+
+# The header on its first frame, before the user record loads (warm cache, no wait for data).
+flow_env=(JIRA_TICKETS_NO_WAIT=1)
+flow header-first-frame 'shot:01-first-frame.png' \
+    '01-first-frame.png|First frame, no wait: header before the signed-in name arrives (name slot reserved from the cache)'
+flow_env=()
 
 # First load with nothing cached: an empty cache dir and no wait for data, then a quick filter at once.
 flow_env=(JIRA_TICKETS_CACHE_DIR="$out/empty-cache" JIRA_TICKETS_NO_WAIT=1)

@@ -33,3 +33,20 @@ carry equal weight; a flow scores 10 only when both do.
 
 Raters judge only the chunk they are given. Each finding states: what, where (screenshot + region),
 why it breaks a rule above, and the smallest fix.
+
+## Standing rulings (do not re-flag)
+
+These were decided in earlier rounds; raters treat them as correct and do not score against them.
+
+- **Spinners.** The header sync spinner is for ⌘R (and the sync after a write) only; a list, filter or search
+  load spins inline in the count row. A spinner takes the text colour of the slot it replaces.
+- **Stale count.** While a list is updating, the count is `muted` (the rows on screen are stale); it returns to
+  `text` when the result lands.
+- **Backdrop.** The dark modal backdrop alpha is 110 and final; light is 48.
+- **Placeholders.** Every placeholder uses the `placeholder` token, a step dimmer than `muted`, in both themes, so
+  an empty field never reads as filled in.
+- **"Only opened"** mirrors the Jira board's quick filter of that name; the wording stays.
+- **Dialog edge.** One dialog edge token is shared by every modal, the go-to box included; it may differ from
+  `border`.
+- **Read-only composer.** In read-only mode the detail pane shows only the muted line "Read-only, comments can't
+  be posted" under Comments; composer captures use `JIRA_TICKETS_SNAPSHOT_COMPOSER=1` (writes still blocked).

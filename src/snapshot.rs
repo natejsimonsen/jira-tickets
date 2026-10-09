@@ -1,8 +1,8 @@
 //! Offscreen screenshots for UI review. Build with `--features snapshot`:
 //!   JIRA_TICKETS_SCREENSHOT=out.png JIRA_TICKETS_VIEW=issues ./target/release/jira-tickets
 //!   JIRA_TICKETS_SCRIPT='key:j;wait:1500;shot:detail.png' ./target/release/jira-tickets
-//! Script steps (`;`-separated): `key:<combo>`, `type:<text>`, `click:<label>`, `at:x,y`,
-//! `hover:x,y`, `wait:<ms>`, `shot:<path>`, `theme:light|dark`, `width:<px>`.
+//! Script steps (`;`-separated): `key:<combo>`, `type:<text>`, `click:<label>`, `point:<label>` (hover a
+//! widget, exact label first), `at:x,y`, `hover:x,y`, `wait:<ms>`, `shot:<path>`, `theme:light|dark`, `width:<px>`.
 //! Writes are always blocked in this mode.
 
 use crate::app::{Action, App, Screen};
@@ -20,6 +20,7 @@ pub enum Step {
     Key(Modifiers, Key),
     Type(String),
     Click(String),
+    Point(String),
     At(Pos2),
     Hover(Pos2),
     Wait(u64),
@@ -73,6 +74,7 @@ fn parse_step(step: &str) -> Step {
         "key" => parse_key(arg.trim()).map(|(m, k)| Step::Key(m, k)),
         "type" => Some(Step::Type(arg.to_owned())),
         "click" => Some(arg.trim()).filter(|a| !a.is_empty()).map(|a| Step::Click(a.to_owned())),
+        "point" => Some(arg.trim()).filter(|a| !a.is_empty()).map(|a| Step::Point(a.to_owned())),
         "at" => parse_point(arg).map(Step::At),
         "hover" => parse_point(arg).map(Step::Hover),
         "wait" => arg.trim().parse().ok().map(Step::Wait),
@@ -153,6 +155,16 @@ fn click(harness: &mut Harness<'_, App>, label: &str) {
     }
 }
 
+/// Hovers the widget whose label is exactly `label` (ignoring case), else the first `click:` would pick.
+fn point(harness: &mut Harness<'_, App>, label: &str) {
+    let exact = harness.query_all_by(|n| n.label().is_some_and(|t| t.eq_ignore_ascii_case(label))).next().map(|n| n.rect());
+    let rect = exact.or_else(|| harness.query_all_by(|n| texts(n).iter().flatten().any(|t| label_matches(t, label))).next().map(|n| n.rect()));
+    match rect {
+        Some(r) => harness.hover_at(r.center()),
+        None => eprintln!("snapshot: nothing labelled {label:?} to point at"),
+    }
+}
+
 fn run_step(harness: &mut Harness<'_, App>, step: &Step) {
     match step {
         Step::Key(m, k) => {
@@ -164,6 +176,7 @@ fn run_step(harness: &mut Harness<'_, App>, step: &Step) {
         }
         Step::Type(t) => harness.event(egui::Event::Text(t.clone())),
         Step::Click(label) => click(harness, label),
+        Step::Point(label) => point(harness, label),
         Step::At(pos) => {
             harness.hover_at(*pos);
             for pressed in [true, false] {
@@ -239,13 +252,15 @@ mod tests {
 
     #[test]
     fn parses_each_kind() {
-        let steps = parse_steps("key:cmd+k;type:status = Blocked;click:All teams;at:10,20;hover:1.5, 2;wait:200;shot:a.png;theme:dark;width:1000");
+        let steps =
+            parse_steps("key:cmd+k;type:status = Blocked;click:All teams;point:Comment;at:10,20;hover:1.5, 2;wait:200;shot:a.png;theme:dark;width:1000");
         assert_eq!(
             steps,
             vec![
                 Step::Key(Modifiers::COMMAND, Key::K),
                 Step::Type("status = Blocked".into()),
                 Step::Click("All teams".into()),
+                Step::Point("Comment".into()),
                 Step::At(Pos2::new(10.0, 20.0)),
                 Step::Hover(Pos2::new(1.5, 2.0)),
                 Step::Wait(200),
@@ -278,7 +293,7 @@ mod tests {
 
     #[test]
     fn bad_steps_are_unknown() {
-        for bad in ["nope", "key:hyper+j", "key:", "wait:soon", "at:1", "theme:blue", "width:-3", "click:", "frobnicate:1"] {
+        for bad in ["nope", "point:", "key:hyper+j", "key:", "wait:soon", "at:1", "theme:blue", "width:-3", "click:", "frobnicate:1"] {
             assert_eq!(parse_steps(bad), vec![Step::Unknown(bad.into())], "{bad}");
         }
     }
