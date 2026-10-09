@@ -24,8 +24,8 @@ manifest="$out/manifest.md"
     echo "|---|---|---|---|---|"
 } >"$manifest"
 
-# Where the pointer waits before a shot: an empty stretch of the header (no widget, no tooltip) at any width.
-park="hover:600,24"
+# Where the pointer waits before a shot: off the window, over no panel, widget or tooltip, at any width.
+park="hover:-40,-40"
 
 # Rewrites each `shot:NN-name.png` to `shot:<out>/<flow>-NN-name-<theme>.png`, parking the pointer off the
 # panels first, except for a shot that a `point:` or `hover:` step since the last shot set up (a hover shot).
@@ -114,9 +114,9 @@ flow issues-detail 'key:j;key:j;wait:1500;shot:01-detail.png;key:j;wait:1500;sho
 # JIRA_TICKETS_SNAPSHOT_COMPOSER=1 (snapshot builds only) draws the writable composer for this flow while every
 # write stays blocked by read-only mode. The pointer rests on Comment for the draft shot (its tooltip); other shots park it.
 flow_env=(JIRA_TICKETS_SNAPSHOT_COMPOSER=1)
-flow issues-composer "key:j;key:j;wait:1500;shot:00-rest.png;click:Add a comment;type:This is a draft comment that will not be posted;point:Comment;wait:900;shot:01-draft.png" \
+flow issues-composer "key:j;key:j;wait:1500;shot:00-rest.png;click:Add a comment;type:This is a draft comment that will not be posted;point:Comment@left;wait:900;shot:01-draft.png" \
     '00-rest.png|Writable composer at rest (JIRA_TICKETS_SNAPSHOT_COMPOSER=1; writes still blocked): placeholder, quiet Comment' \
-    '01-draft.png|Writable composer focused with an unposted draft, Comment primary, pointer on Comment showing its tooltip (JIRA_TICKETS_SNAPSHOT_COMPOSER=1)'
+    '01-draft.png|Writable composer focused with an unposted draft, Comment primary, pointer on the left third of Comment showing its tooltip (JIRA_TICKETS_SNAPSHOT_COMPOSER=1)'
 flow_env=()
 flow pickers-transition 'key:j;wait:800;key:t;wait:1500;shot:01-open.png;key:down;shot:02-moved.png;key:enter;wait:800;shot:03-readonly-toast.png' \
     '01-open.png|Transition picker open' \
@@ -163,7 +163,8 @@ flow_env=()
 # First load with nothing cached: an empty cache dir and no wait for data, then a quick filter at once.
 flow_env=(JIRA_TICKETS_CACHE_DIR="$out/empty-cache" JIRA_TICKETS_NO_WAIT=1)
 rm -rf "$out/empty-cache"
-flow loading-empty 'wait:400;shot:01-first-load.png;click:Only opened;shot:02-loading.png' \
+flow loading-empty 'shot:00-first-frame.png;wait:400;shot:01-first-load.png;click:Only opened;shot:02-loading.png' \
+    '00-first-frame.png|First frame with no cache, no wait: the pending sprint label' \
     '01-first-load.png|First launch with no cache: "Loading issues…"' \
     '02-loading.png|Quick filter clicked before any rows arrived'
 flow_env=()

@@ -2,7 +2,7 @@
 //!   JIRA_TICKETS_SCREENSHOT=out.png JIRA_TICKETS_VIEW=issues ./target/release/jira-tickets
 //!   JIRA_TICKETS_SCRIPT='key:j;wait:1500;shot:detail.png' ./target/release/jira-tickets
 //! Script steps (`;`-separated): `key:<combo>`, `type:<text>`, `click:<label>`, `point:<label>` (hover a
-//! widget, exact label first), `at:x,y`, `hover:x,y`, `wait:<ms>`, `shot:<path>`, `theme:light|dark`, `width:<px>`.
+//! widget, exact label first; `point:<label>@left` hovers its left third, so the pointer hides no label), `at:x,y`, `hover:x,y`, `wait:<ms>`, `shot:<path>`, `theme:light|dark`, `width:<px>`.
 //! Writes are always blocked in this mode.
 
 use crate::app::{Action, App, Screen};
@@ -155,12 +155,26 @@ fn click(harness: &mut Harness<'_, App>, label: &str) {
     }
 }
 
+/// A `point:` argument as (label, left third): "Comment@left" → ("Comment", true).
+pub fn point_target(arg: &str) -> (&str, bool) {
+    match arg.strip_suffix("@left") {
+        Some(l) => (l.trim_end(), true),
+        None => (arg, false),
+    }
+}
+
+/// Where a `point:` lands in a widget's rect: its centre, or the middle of its left third.
+pub fn point_pos(r: egui::Rect, left: bool) -> Pos2 {
+    if left { Pos2::new(r.left() + r.width() / 6.0, r.center().y) } else { r.center() }
+}
+
 /// Hovers the widget whose label is exactly `label` (ignoring case), else the first `click:` would pick.
-fn point(harness: &mut Harness<'_, App>, label: &str) {
+fn point(harness: &mut Harness<'_, App>, arg: &str) {
+    let (label, left) = point_target(arg);
     let exact = harness.query_all_by(|n| n.label().is_some_and(|t| t.eq_ignore_ascii_case(label))).next().map(|n| n.rect());
     let rect = exact.or_else(|| harness.query_all_by(|n| texts(n).iter().flatten().any(|t| label_matches(t, label))).next().map(|n| n.rect()));
     match rect {
-        Some(r) => harness.hover_at(r.center()),
+        Some(r) => harness.hover_at(point_pos(r, left)),
         None => eprintln!("snapshot: nothing labelled {label:?} to point at"),
     }
 }
@@ -248,6 +262,15 @@ mod tests {
     fn empty_script_has_no_steps() {
         assert!(parse_steps("").is_empty());
         assert!(parse_steps(" ; ;").is_empty());
+    }
+
+    #[test]
+    fn point_can_aim_at_the_left_third() {
+        assert_eq!(point_target("Comment@left"), ("Comment", true));
+        assert_eq!(point_target("Comment"), ("Comment", false));
+        let r = egui::Rect::from_min_size(Pos2::new(100.0, 10.0), egui::vec2(90.0, 28.0));
+        assert_eq!(point_pos(r, true), Pos2::new(115.0, 24.0));
+        assert_eq!(point_pos(r, false), Pos2::new(145.0, 24.0));
     }
 
     #[test]
