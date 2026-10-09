@@ -879,7 +879,7 @@ pub const fn search_margin() -> Margin {
     input_margin(SEARCH_PAD_X)
 }
 
-/// A modal dialog's fill: plain surface in light; in dark #333331, a step past surface_2, so the dialog lifts
+/// A modal dialog's fill: plain surface in light; in dark #383836, two steps past surface_2, so the dialog lifts
 /// off the dimmed page about as far as the light one does (the backdrop stays at 110).
 pub fn dialog_fill(p: &Palette) -> Color32 {
     if p.dark { theme::DARK_DIALOG } else { p.surface }
@@ -1037,10 +1037,10 @@ pub fn outline_pill_selected(ui: &mut Ui, text: &str, p: &Palette, margin: egui:
 }
 
 /// A neutral pill's outline on a selected row: light #77766f (≥ 3.3:1 on the #dfdfda selection; the
-/// `selected_edge` rule tone read 2.88), dark #7a7974 (2.5:1 on the #3d3d3a selection; the `selected_edge` tone
-/// read 1.6, round 13 C2).
+/// `selected_edge` rule tone read 2.88), dark #868580 (2.95:1 on the #3d3d3a selection, still 1.75 off the pill
+/// text; #7a7974 read 2.50, round 14 L2).
 pub fn selected_pill_edge(p: &Palette) -> Color32 {
-    if p.dark { Color32::from_rgb(0x7a, 0x79, 0x74) } else { Color32::from_rgb(0x77, 0x76, 0x6f) }
+    if p.dark { Color32::from_rgb(0x86, 0x85, 0x80) } else { Color32::from_rgb(0x77, 0x76, 0x6f) }
 }
 
 /// A scrollbar thumb at rest and hovered: at rest an opaque quiet neutral, so row separators never show through it

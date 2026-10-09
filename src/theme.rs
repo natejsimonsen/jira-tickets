@@ -182,13 +182,17 @@ fn mix(c: Color32, toward: u8, t: f32) -> Color32 {
 /// (accent-tinted) selected-row fill.
 const LIGHT_WASH: u8 = 76;
 const DARK_WASH: u8 = 84;
+/// The grey hue's dark wash ("New" and other to-do statuses): 1.45:1 on a plain row, near light's 1.37 (84 read
+/// 1.64; round 14 L3). Its text holds 4.9:1 over the wash on the selected row.
+const DARK_GREY_WASH: u8 = 66;
 /// Dark stripe (and epic outline): 42% of the way to white, so it holds ≥4:1 on the selected row.
 const DARK_STRIPE_MIX: f32 = 0.42;
 /// Dark pill text: a little past halfway to white, so it holds 4.5:1 on the lighter selected row too.
 const DARK_TEXT_MIX: f32 = 0.62;
 /// The grey hue's dark pill text ("New" and other to-do statuses): less far toward white, #cccbc9, 1.36 off body
 /// text instead of 1.27 (#d3d2d0 read as plain text; round 12 L1). The asked-for #c4c3c0 (1.5 off) falls to 4.2:1
-/// on the grey wash over the selected row, so this is the furthest step that keeps every row at 4.5:1 (4.55).
+/// on the grey wash over the selected row, so this was the furthest step that kept every row at 4.5:1 (4.55 at
+/// DARK_WASH; 4.9 since round 14's lighter grey wash).
 const DARK_GREY_TEXT_MIX: f32 = 0.56;
 
 /// How far toward white a hue's dark pill text goes.
@@ -202,7 +206,7 @@ fn dark_text_mix(base: Color32) -> f32 {
 /// halfway tint washes every hue out to the same pale stripe).
 pub fn tint_from_hue(base: Color32, p: &Palette) -> Tint {
     let (alpha, fg, stripe) = if p.dark {
-        (DARK_WASH, mix(base, 255, dark_text_mix(base)), mix(base, 255, DARK_STRIPE_MIX))
+        (if base == hex(GREY) { DARK_GREY_WASH } else { DARK_WASH }, mix(base, 255, dark_text_mix(base)), mix(base, 255, DARK_STRIPE_MIX))
     } else {
         (LIGHT_WASH, mix(base, 0, 0.45), mix(base, 0, 0.2))
     };
@@ -419,6 +423,9 @@ pub fn dialog_input_fill(p: &Palette) -> Color32 {
 /// #e4e4df page input, so code never reads as a field (#e3e3de was 1.01 off it; round 11 L2). Chips inside a card
 /// step on to #dfdfda (`chip_fill_on`).
 const LIGHT_CHIP: Color32 = hex(0xebebe7);
+/// The dark page's code chip: the first step past `surface_2`, 1.29:1 off the page (light's #ebebe7 is 1.20),
+/// so page code is quieter than the card chip and the dialog fill it used to share (#383836, 1.39; round 14 L1).
+const DARK_PAGE_CHIP: Color32 = hex(0x333331);
 /// The dark modal dialog's fill: one step above `surface_2`, so a dialog lifts off the dimmed page.
 pub const DARK_DIALOG: Color32 = hex(0x383836);
 /// The lifted dark edge: modal dialogs, fields and buttons inside them.
@@ -434,10 +441,11 @@ const CHIP_STEP: f32 = 1.17;
 
 /// The fill for a chip (inline code, a code block, a help key) inside a `container`: the first step of the
 /// theme's neutral ramp at least CHIP_STEP off it, darker in light and lighter in dark (a key reads raised).
-/// On the page (surface) that is #ebebe7 light, #333331 dark; in a comment card #dfdfda / #383836.
+/// On the page (surface) that is #ebebe7 light, #333331 dark; in a comment card #dfdfda / #383836; on the dark
+/// dialog (help keys) #454542.
 pub fn chip_fill_on(container: Color32, p: &Palette) -> Color32 {
     let ramp: &[Color32] = if p.dark {
-        &[p.surface_2, DARK_DIALOG, p.border, p.selected_row, DARK_DIALOG_CHIP, DARK_EDGE]
+        &[p.surface_2, DARK_PAGE_CHIP, DARK_DIALOG, p.border, p.selected_row, DARK_DIALOG_CHIP, DARK_EDGE]
     } else {
         &[p.surface_2, LIGHT_CHIP, p.selected_row, p.border]
     };
@@ -695,6 +703,11 @@ mod tests {
             assert!(c >= 4.5, "{row:?}: {c:.2}");
         }
         assert_eq!(tint_from_hue(hex(BLUE), &DARK).fg, mix(hex(BLUE), 255, DARK_TEXT_MIX), "other hues keep theirs");
+        // Round 14 L3: the grey wash on a plain dark row ≈ 1.45, near light's; other hues keep DARK_WASH.
+        let wash = contrast(over(t.bg, DARK.surface), DARK.surface);
+        let light = contrast(over(tint_from_hue(hex(GREY), &LIGHT).bg, LIGHT.surface), LIGHT.surface);
+        assert!((1.42..=1.48).contains(&wash) && wash - light < 0.12, "dark {wash:.3}, light {light:.3}");
+        assert_eq!(tint_from_hue(hex(BLUE), &DARK).bg.a(), DARK_WASH);
     }
 
     #[test]
@@ -777,7 +790,10 @@ mod tests {
                 assert!(contrast(p.text, chip_fill_on(container, p)) >= 7.0, "code text on its chip (dark={})", p.dark);
             }
         }
-        assert_eq!(chip_fill_on(DARK.surface, &DARK), DARK_DIALOG, "code on the dark page");
+        assert_eq!(chip_fill_on(DARK.surface, &DARK), hex(0x333331), "code on the dark page");
+        let (dark_page, light_page) = (contrast(DARK_PAGE_CHIP, DARK.surface), contrast(LIGHT_CHIP, LIGHT.surface));
+        assert!((1.28..1.30).contains(&dark_page), "L1: {dark_page:.3}");
+        assert!(dark_page - light_page < 0.1, "dark page chips no louder than light by much");
         assert_eq!(chip_fill_on(LIGHT.surface_2, &LIGHT), LIGHT.selected_row, "code in a light comment card");
         assert_eq!(chip_fill_on(DARK.surface_2, &DARK), DARK_DIALOG, "code in a dark comment card");
         assert_eq!(chip_fill_on(DARK_DIALOG, &DARK), DARK_DIALOG_CHIP, "help keys in the dark dialog");
