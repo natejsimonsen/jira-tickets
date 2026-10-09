@@ -241,6 +241,8 @@ pub struct App {
     pub members_disabled: bool,
     /// Each epic's hue slot, given to the epics on screen first and kept for the session (`theme::assign_epic_slots`).
     pub epic_slots: std::collections::BTreeMap<String, usize>,
+    /// The slots above were given from the resolved sprint scope's rows and are kept from now on.
+    pub epic_slots_final: bool,
     /// Unposted comment text, keyed by issue key.
     pub drafts: HashMap<String, String>,
     /// The issue key of the comment post in flight.
@@ -341,6 +343,7 @@ impl App {
             text_shown: None,
             members_disabled: false,
             epic_slots: Default::default(),
+            epic_slots_final: false,
             drafts: HashMap::new(),
             posting: None,
             picker: None,

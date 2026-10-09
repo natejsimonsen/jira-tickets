@@ -235,8 +235,25 @@ pub fn assign_epic_slots<'a>(slots: &mut BTreeMap<String, usize>, visible: impl 
 /// An epic's tint: the config override for its exact key wins, else its slot's hue (see `assign_epic_slots`).
 pub fn epic_tint_in(epic_key: &str, slots: &BTreeMap<String, usize>, p: &Palette, overrides: &BTreeMap<String, String>) -> Tint {
     let slot = slots.get(epic_key).copied().unwrap_or(0);
-    let base = overrides.get(epic_key).and_then(|v| parse_hex(v)).unwrap_or_else(|| hex(EPIC_HUES[slot % EPIC_HUES.len()]));
-    tint_from_hue(base, p)
+    match overrides.get(epic_key).and_then(|v| parse_hex(v)) {
+        Some(base) => tint_from_hue(base, p),
+        None => slot_tint(slot, p),
+    }
+}
+
+/// Dark only: adjacent slots (36° apart) alternate lightness by this much, so neighbouring hues on one
+/// screen stay further apart (the dark tints, mixed toward white, compress hue differences).
+const DARK_SLOT_LIGHTNESS: f32 = 0.06;
+
+/// A slot's tint: its hue's, and in dark the pill text and stripe of even slots 6 % lighter and of odd slots
+/// 6 % darker, so two neighbouring slots never share a lightness.
+pub fn slot_tint(slot: usize, p: &Palette) -> Tint {
+    let t = tint_from_hue(hex(EPIC_HUES[slot % EPIC_HUES.len()]), p);
+    if !p.dark {
+        return t;
+    }
+    let toward = if slot.is_multiple_of(2) { 255 } else { 0 };
+    Tint { fg: mix(t.fg, toward, DARK_SLOT_LIGHTNESS), stripe: mix(t.stripe, toward, DARK_SLOT_LIGHTNESS), ..t }
 }
 
 fn visuals(p: &Palette) -> Visuals {
@@ -731,6 +748,47 @@ mod tests {
         assert_eq!((slots["CI-7"], slots["CI-3"]), (2, 5), "same key, same hue in every list");
         assert!(![2, 5].contains(&slots["CI-4"]));
         assert_eq!(EPIC_SLOT_ORDER.iter().collect::<BTreeSet<_>>().len(), 10);
+    }
+
+    /// CIE76 ΔE between two sRGB colours.
+    fn delta_e(a: Color32, b: Color32) -> f32 {
+        let lab = |c: Color32| {
+            let lin = |v: u8| {
+                let v = f32::from(v) / 255.0;
+                if v <= 0.040_45 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) }
+            };
+            let (r, g, b) = (lin(c.r()), lin(c.g()), lin(c.b()));
+            let x = (0.4124 * r + 0.3576 * g + 0.1805 * b) / 0.950_47;
+            let y = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+            let z = (0.0193 * r + 0.1192 * g + 0.9505 * b) / 1.088_83;
+            let f = |t: f32| if t > 0.008_856 { t.cbrt() } else { 7.787 * t + 16.0 / 116.0 };
+            (116.0 * f(y) - 16.0, 500.0 * (f(x) - f(y)), 200.0 * (f(y) - f(z)))
+        };
+        let ((l1, a1, b1), (l2, a2, b2)) = (lab(a), lab(b));
+        ((l1 - l2).powi(2) + (a1 - a2).powi(2) + (b1 - b2).powi(2)).sqrt()
+    }
+
+    #[test]
+    fn dark_neighbouring_slots_stay_apart() {
+        // Round 7: Node Autoscaling and Cluster (adjacent slots) measured ΔE 11.3 in dark.
+        // ±6 % lightness (the ruled value) widens every adjacent pair; it cannot reach ΔE 20 for all of them
+        // without odd slots' text falling under 4.5:1, so the assignment order keeps neighbours off one screen.
+        let none = BTreeMap::new();
+        let plain = |k: usize| tint_from_hue(hex(EPIC_HUES[k]), &DARK);
+        let pairs = |t: &dyn Fn(usize) -> Tint| (0..EPIC_HUES.len()).map(|s| delta_e(t(s).fg, t((s + 1) % EPIC_HUES.len()).fg)).fold(f32::INFINITY, f32::min);
+        let (before, after) = (pairs(&plain), pairs(&|s| slot_tint(s, &DARK)));
+        assert!(after > before + 1.5, "closest neighbouring pair: ΔE {before:.1} → {after:.1}");
+        for s in 0..EPIC_HUES.len() {
+            let slots = BTreeMap::from([("A".to_string(), s)]);
+            let a = epic_tint_in("A", &slots, &DARK, &none);
+            assert_eq!(a, slot_tint(s, &DARK));
+            // Every alternated tint still reads on every dark row fill.
+            for fill in [DARK.surface, DARK.hover_row, DARK.selected_row] {
+                assert!(contrast(a.fg, fill) >= 4.5, "slot {s} text on {fill:?}: {:.2}", contrast(a.fg, fill));
+            }
+            assert!(contrast(a.stripe, DARK.selected_row) > 3.6, "slot {s} stripe: {:.2}", contrast(a.stripe, DARK.selected_row));
+        }
+        assert_eq!(slot_tint(3, &LIGHT), tint_from_hue(hex(EPIC_HUES[3]), &LIGHT), "light keeps the base hues");
     }
 
     #[test]

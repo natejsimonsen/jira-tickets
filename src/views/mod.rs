@@ -666,9 +666,14 @@ pub fn outline_pill(ui: &mut Ui, text: &str, p: &Palette, margin: egui::Vec2) ->
 }
 
 /// An outline pill on a selected row: the `selected_edge` outline so it never sinks into the fill; its text
-/// (assignee, labels) is `text`, like the row's key, since `muted` only reaches ~4.6:1 on the selection.
+/// (assignee, labels) stays secondary (`selected_pill_text`): only the row's key switches to `text`.
 pub fn outline_pill_selected(ui: &mut Ui, text: &str, p: &Palette, margin: egui::Vec2) -> egui::Response {
-    pill_sized(ui, text, Color32::TRANSPARENT, p.text, Stroke::new(1.0, selected_edge(p)), margin)
+    pill_sized(ui, text, Color32::TRANSPARENT, selected_pill_text(p), Stroke::new(1.0, selected_edge(p)), margin)
+}
+
+/// Outline-pill text on the selected row: `muted`, lifted only where it would fall under 4.5:1 (`muted_on`).
+pub fn selected_pill_text(p: &Palette) -> Color32 {
+    theme::muted_on(p.selected_row, p)
 }
 
 /// The edge every list-row pill gets: its own text colour at 35%, so a wash stays visible on any row fill.

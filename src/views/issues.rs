@@ -9,9 +9,40 @@ use crate::views::{outline_pill, outline_pill_selected, pill_outlined, small_lin
 use egui::{CornerRadius, Frame, Margin, Rect, RichText, Sense, Stroke, Ui, vec2};
 use std::collections::BTreeSet;
 
+/// When the epic hue slots are given (`track_epics`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SlotPhase {
+    /// The sprint scope is still resolving (the first rows are the all-sprints flash): slots are worked out
+    /// afresh each frame and nothing is kept.
+    Provisional,
+    /// The scope has just resolved: drop the provisional slots and give them from these rows.
+    Reset,
+    /// Kept for the session; only new epics take slots.
+    Keep,
+}
+
+/// The slot phase: provisional until the board's sprints answer (or there is no client to ask), then one
+/// reset, then kept.
+pub fn slot_phase(scope_resolved: bool, already_final: bool) -> SlotPhase {
+    match (scope_resolved, already_final) {
+        (false, _) => SlotPhase::Provisional,
+        (true, false) => SlotPhase::Reset,
+        (true, true) => SlotPhase::Keep,
+    }
+}
+
 /// Gives hue slots to the epics on screen first (row order, then the selected issue's parent), then to the
-/// rest of the loaded epic list (see `theme::assign_epic_slots`).
+/// rest of the loaded epic list (see `theme::assign_epic_slots`), once the sprint scope has resolved
+/// (`slot_phase`).
 pub fn track_epics(app: &mut App) {
+    match slot_phase(app.sprints_answered || app.client.is_none(), app.epic_slots_final) {
+        SlotPhase::Provisional => app.epic_slots.clear(),
+        SlotPhase::Reset => {
+            app.epic_slots.clear();
+            app.epic_slots_final = true;
+        }
+        SlotPhase::Keep => {}
+    }
     let selected = app.selected.as_ref().and_then(|k| app.store.get(k)).and_then(|i| i.parent_key.clone());
     let visible: Vec<String> = current_rows(app).iter().filter_map(|i| i.parent_key.clone()).chain(selected).collect();
     let rest: Vec<String> = app.store.list(ListId::Epics).iter().map(|e| e.key.clone()).collect();
@@ -805,6 +836,7 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
     // egui's own fade dims whatever sits near an edge; the list fades only a row that is really cut (`fade_strip`).
     ui.spacing_mut().scroll.fade = egui::style::ScrollFadeStyle { strength: 0.0, size: 0.0 };
     let mut row_spans: Vec<(f32, f32)> = Vec::with_capacity(rows.len());
+    let mut selected_rect: Option<(Rect, usize)> = None;
     let out = egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
         ui.spacing_mut().item_spacing.y = ROW_GAP;
         for (idx, i) in rows.iter().enumerate() {
@@ -905,8 +937,13 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
             let fill = row_fill(is_sel, r.hovered(), p);
             ui.painter().set(bg, egui::epaint::RectShape::filled(rect, corners, fill));
             if let Some(t) = epic {
+                // Over the card's left border, on whole physical pixels, so no sliver of the page shows between
+                // the stripe and the fill.
                 let stripe = CornerRadius { nw: corners.nw, sw: corners.sw, ne: 0, se: 0 };
-                ui.painter().rect_filled(Rect::from_min_size(rect.min, vec2(3.0, rect.height())), stripe, t.stripe);
+                ui.painter().rect_filled(stripe_rect(rect, ui.ctx().pixels_per_point()), stripe, t.stripe);
+            }
+            if is_sel {
+                selected_rect = Some((rect, idx));
             }
             if r.clicked() {
                 app.cursor = idx;
@@ -918,6 +955,14 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
             }
             if scroll_cursor && is_sel {
                 r.scroll_to_me(None);
+            }
+        }
+        // The dividers next to the selected row, over both fills (the next row's fill covers the lower one) in
+        // the selected-row edge, so they never sink into the selection.
+        if let Some((rect, idx)) = selected_rect {
+            let edge = crate::views::selected_edge(p);
+            for y in selected_dividers(rect, idx, rows.len()) {
+                ui.painter().hline(rect.x_range(), y, Stroke::new(1.0, edge));
             }
         }
         // Room under the last row, so a toast (anchored above the hint bar) never covers it.
@@ -984,6 +1029,25 @@ const ROW_PAD_BOTTOM: i8 = 6;
 const ROW_LINE_GAP: f32 = 1.0;
 /// One row's pitch (rows overlap by ROW_GAP's 1 px), for the density check.
 pub const ROW_PITCH: f32 = 44.0;
+
+/// The 3 px epic stripe over a row card's left edge, snapped to whole physical pixels.
+pub fn stripe_rect(row: Rect, ppp: f32) -> Rect {
+    let snap = |v: f32| (v * ppp).round() / ppp;
+    Rect::from_min_max(egui::pos2(snap(row.left()), row.top()), egui::pos2(snap(row.left() + 3.0), row.bottom()))
+}
+
+/// The centre lines of the dividers next to the selected row `idx` of `n`: above it unless it is the first
+/// row, below it unless it is the last (the list's outer edge keeps its rounded border).
+pub fn selected_dividers(rect: Rect, idx: usize, n: usize) -> Vec<f32> {
+    let mut out = Vec::new();
+    if idx > 0 {
+        out.push(rect.top() + 0.5);
+    }
+    if idx + 1 < n {
+        out.push(rect.bottom() - 0.5);
+    }
+    out
+}
 
 /// The list's outer corners are rounded (6); the seams between rows are square.
 pub fn row_corners(idx: usize, n: usize) -> CornerRadius {
@@ -1468,5 +1532,43 @@ mod tests {
         assert_eq!(team_combo_label("PLAT · Platform", true), "PLAT · Platform");
         assert_eq!(team_combo_label("PLAT · Platform", false), "PLAT");
         assert_eq!(team_combo_label("All teams", false), "All teams");
+    }
+
+    #[test]
+    fn epic_slots_wait_for_the_sprint_scope() {
+        // Round 7: slots given during the all-sprints flash were kept, so neighbouring hues met on screen.
+        assert_eq!(slot_phase(false, false), SlotPhase::Provisional);
+        assert_eq!(slot_phase(true, false), SlotPhase::Reset, "once, when the scope resolves");
+        assert_eq!(slot_phase(true, true), SlotPhase::Keep);
+    }
+
+    #[test]
+    fn stripe_covers_the_left_border_on_whole_pixels() {
+        let row = Rect::from_min_max(egui::pos2(16.3, 100.0), egui::pos2(400.0, 144.0));
+        let s = stripe_rect(row, 2.0);
+        assert_eq!((s.left(), s.right(), s.top(), s.bottom()), (16.5, 19.5, 100.0, 144.0));
+        assert_eq!(stripe_rect(row, 1.0).left(), 16.0);
+    }
+
+    #[test]
+    fn selected_row_keeps_its_dividers() {
+        let r = Rect::from_min_max(egui::pos2(0.0, 100.0), egui::pos2(10.0, 144.0));
+        assert_eq!(selected_dividers(r, 3, 10), [100.5, 143.5]);
+        assert_eq!(selected_dividers(r, 0, 10), [143.5], "the first row's top is the list's rounded edge");
+        assert_eq!(selected_dividers(r, 9, 10), [100.5]);
+        assert!(selected_dividers(r, 0, 1).is_empty());
+        for p in [&theme::LIGHT, &theme::DARK] {
+            let edge = theme::over(crate::views::selected_edge(p), p.selected_row);
+            assert!(theme::contrast(edge, p.selected_row) > theme::contrast(p.border, p.selected_row), "dark={}", p.dark);
+        }
+    }
+
+    #[test]
+    fn selected_row_pills_stay_secondary() {
+        for p in [&theme::LIGHT, &theme::DARK] {
+            let t = crate::views::selected_pill_text(p);
+            assert_ne!(t, p.text, "only the key switches to text (dark={})", p.dark);
+            assert!(theme::contrast(t, p.selected_row) >= 4.5, "dark={}: {:.2}", p.dark, theme::contrast(t, p.selected_row));
+        }
     }
 }
