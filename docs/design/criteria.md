@@ -79,3 +79,6 @@ These were decided in earlier rounds; raters treat them as correct and do not sc
 - **Chip fills.** Inline code chips and code blocks share one fill, LIGHT_CHIP (#ebebe7) on the light page; a chip
   inside a card takes `chip_fill_on(card)`, one step off whatever it sits on (#dfdfda in a light comment card). The
   page/card difference is intentional.
+- **Scroll clipping.** Scroll areas (the list, the detail pane) clip at the viewport with a bottom fade of at most
+  8 px that stops one pixel row short of the edge; they do not snap rows, so a scrolled line or comment card may be
+  cut. This replaces round 11's "detail viewport stops 4 pt above the bar".

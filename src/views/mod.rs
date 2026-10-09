@@ -857,23 +857,48 @@ pub fn scroll_thumb(p: &Palette) -> (Color32, Color32) {
     (p.muted.gamma_multiply(if p.dark { 0.5 } else { 0.6 }), p.muted)
 }
 
+/// The scrollbar thumb's width at rest (round 12 C1: the 2 px flush bar read as a partial right border).
+pub const THUMB_W: f32 = 4.0;
+/// The floating thumb's inset from its pane's (or card's) right edge.
+pub const THUMB_INSET: f32 = 2.0;
+/// The thumb's corner radius: round ends at THUMB_W.
+pub const THUMB_RADIUS: u8 = 2;
+/// The floating thumbs' opacity at rest (floating bars default to 0, hidden until hovered): faint, over the
+/// `scroll_thumb` rest colour, so an overflowing list or detail pane always shows "more" (C4, round 12 K1).
+pub const THUMB_REST: f32 = 0.5;
+
+/// The thumb style for the floating bars (the list and the detail pane): THUMB_W wide at rest, THUMB_INSET in
+/// from the edge, shown at THUMB_REST when the area overflows. Call before the ScrollArea, with `set_thumb_fills`.
+pub fn floating_thumb(scroll: &mut egui::style::ScrollStyle) {
+    scroll.floating_width = THUMB_W;
+    scroll.bar_outer_margin = THUMB_INSET;
+    scroll.dormant_handle_opacity = THUMB_REST;
+}
+
+/// What `set_thumb_fills` replaced: the inactive, hovered and active widget visuals.
+pub type ThumbSaved = [egui::style::WidgetVisuals; 3];
+
 /// Gives the scroll areas shown in `ui` the `scroll_thumb` colours (a bar paints in its outer ui's widget
-/// `bg_fill`), returning the fills it replaced so content can put them back (`restore_fills`).
-pub fn set_thumb_fills(ui: &mut Ui, p: &Palette) -> [Color32; 3] {
+/// `bg_fill`) and the THUMB_RADIUS ends (it takes the widgets' corner radius), returning what it replaced so
+/// content can put it back (`restore_fills`).
+pub fn set_thumb_fills(ui: &mut Ui, p: &Palette) -> ThumbSaved {
     let (rest, hover) = scroll_thumb(p);
     // Floating bars paint their thumb in the widgets' text colour unless told otherwise (egui's cool grey,
     // round 11 F2): use the fills, so every thumb is the warm `muted`.
     ui.spacing_mut().scroll.foreground_color = false;
     let w = &mut ui.visuals_mut().widgets;
-    let saved = [w.inactive.bg_fill, w.hovered.bg_fill, w.active.bg_fill];
-    (w.inactive.bg_fill, w.hovered.bg_fill, w.active.bg_fill) = (rest, hover, hover);
+    let saved = [w.inactive, w.hovered, w.active];
+    for (v, fill) in [(&mut w.inactive, rest), (&mut w.hovered, hover), (&mut w.active, hover)] {
+        v.bg_fill = fill;
+        v.corner_radius = egui::CornerRadius::same(THUMB_RADIUS);
+    }
     saved
 }
 
-pub fn restore_fills(ui: &mut Ui, [inactive, hovered, active]: [Color32; 3]) {
+pub fn restore_fills(ui: &mut Ui, [inactive, hovered, active]: ThumbSaved) {
     ui.spacing_mut().scroll.foreground_color = egui::style::ScrollStyle::default().foreground_color;
     let w = &mut ui.visuals_mut().widgets;
-    (w.inactive.bg_fill, w.hovered.bg_fill, w.active.bg_fill) = (inactive, hovered, active);
+    (w.inactive, w.hovered, w.active) = (inactive, hovered, active);
 }
 
 /// Secondary text inside a modal dialog (labels, "Unassigned", "N matches", help section heads, "or"): `muted`
@@ -929,7 +954,7 @@ pub fn pill_sized(ui: &mut Ui, text: &str, bg: Color32, fg: Color32, stroke: Str
 /// `text` cut to fit `max_w` (as `measure` lays it out) with "…"; trailing whitespace is trimmed before the
 /// ellipsis. Unchanged when it already fits.
 /// `truncate_text` for titles: a cut inside a word (a run of letters, digits and `/-_`) backs up to the last
-/// whitespace or hyphen, the pills' boundaries ("…reusable workflo…" → "…reusable…", "aws-node-term…" →
+/// whitespace, hyphen or slash, the pills' boundaries ("…reusable workflo…" → "…reusable…", "aws-node-term…" →
 /// "aws-node…"); only a single word that fills the column is cut mid-word. Trailing `,;:` go before the "…"
 /// ("sign-ins,…" → "sign-ins…"), and so does a trailing article or preposition (`TITLE_STOP_WORDS`: "…on the…"
 /// → "…on…" → "…").
@@ -939,10 +964,10 @@ pub fn truncate_title(text: &str, max_w: f32, measure: impl Fn(&str) -> f32) -> 
     let word = |c: char| c.is_alphanumeric() || matches!(c, '/' | '-' | '_');
     // Mid-word: the kept text ends inside a word that the original continues.
     let mid_word = kept.ends_with(|c: char| !c.is_whitespace()) && text[kept.len()..].starts_with(word);
-    let kept = match kept.rfind(|c: char| c.is_whitespace() || c == '-') {
-        Some(at) if mid_word && !kept[..at].trim_end_matches(|c: char| c.is_whitespace() || c == '-').is_empty() => {
-            kept[..at].trim_end_matches(|c: char| c.is_whitespace() || c == '-')
-        }
+    // A slash breaks like a hyphen ("environments/kubern…" → "environments…", round 12 C3).
+    let brk = |c: char| c.is_whitespace() || matches!(c, '-' | '/');
+    let kept = match kept.rfind(brk) {
+        Some(at) if mid_word && !kept[..at].trim_end_matches(brk).is_empty() => kept[..at].trim_end_matches(brk),
         _ => kept,
     };
     format!("{}…", drop_stop_words(trim_trailing_punctuation(kept)))
@@ -1164,7 +1189,9 @@ mod widget_tests {
         assert_eq!(truncate_title("Build a reusable workflow for it", 25.0, w), "Build a reusable…");
         assert_eq!(truncate_title("Move secondary-Environment checks", 20.0, w), "Move secondary…", "a hyphen is a boundary (K1)");
         assert_eq!(truncate_title("Investigate aws-node-termination leaks", 27.0, w), "Investigate aws-node…", "the last hyphen before the cut");
-        assert_eq!(truncate_title("Fix ci/cd_pipeline steps now", 12.0, w), "Fix…", "/ and _ stay inside a word");
+        assert_eq!(truncate_title("Fix ci/cd_pipeline steps now", 12.0, w), "Fix ci…", "/ breaks like a hyphen (round 12 C3); _ stays inside a word");
+        assert_eq!(truncate_title("Add plugin to environments/cluster", 33.0, w), "Add plugin to environments…", "C3: the slash is the boundary");
+        assert_eq!(truncate_title("Fix snake_case_names now", 13.0, w), "Fix…", "_ stays inside a word");
         assert_eq!(truncate_title("Fix-it", 3.0, w), "Fi…", "a word that fills the column is still cut");
         assert_eq!(truncate_title("Support sign-ins, logins and more", 18.0, w), "Support sign-ins…", "a trailing comma goes");
         assert_eq!(truncate_title("One: two three", 6.0, w), "One…", "a trailing colon goes");
@@ -1347,6 +1374,12 @@ mod widget_tests {
             let saved = set_thumb_fills(ui, p);
             assert!(!ui.spacing().scroll.foreground_color);
             assert_eq!(ui.visuals().widgets.inactive.bg_fill, scroll_thumb(p).0);
+            // C1: round ends at THUMB_W, inset THUMB_INSET, shown at rest.
+            assert_eq!(ui.visuals().widgets.inactive.corner_radius, egui::CornerRadius::same(THUMB_RADIUS));
+            assert!((3.0..=4.0).contains(&THUMB_W) && f32::from(THUMB_RADIUS) * 2.0 <= THUMB_W);
+            let mut bar = egui::style::ScrollStyle::floating();
+            floating_thumb(&mut bar);
+            assert_eq!((bar.floating_width, bar.bar_outer_margin, bar.dormant_handle_opacity), (THUMB_W, THUMB_INSET, THUMB_REST));
             restore_fills(ui, saved);
             assert!(ui.spacing().scroll.foreground_color, "content keeps egui's default");
         });

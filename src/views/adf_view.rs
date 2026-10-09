@@ -44,9 +44,9 @@ const CODE_PAD_Y: f32 = 1.0;
 const KEY_SCALE: f32 = 12.5 / 14.0;
 /// Code block line height: 1.48 × mono 12.5.
 const CODE_LINE_H: f32 = 18.5;
-/// A code block's inner margin: 12 to the glyphs on every side. The 18.5 line box carries ~2.5 of leading
-/// above the first line and ~4.5 below the last, so the frame gives 10 / 8 there (measured 14.5 / 16.5 at 12).
-const CODE_MARGIN: Margin = Margin { left: 12, right: 12, top: 10, bottom: 8 };
+/// A code block's inner margin: 12 on every side, counting the line box's leading (round 12 E2: the 10 / 8 that
+/// put 12 to the ink read as ~8 to the lines' boxes).
+const CODE_MARGIN: Margin = Margin::same(12);
 /// The marker gutter: list text starts this far from the list's left edge, for bullets and numbers alike.
 const LIST_GUTTER: f32 = 24.0;
 /// Marker → item text.
@@ -576,6 +576,12 @@ mod tests {
 
     fn span(text: &str) -> Span {
         Span { text: text.into(), bold: false, italic: false, code: false, strike: false, link: None }
+    }
+
+    #[test]
+    fn code_blocks_pad_12_all_round() {
+        // E2: 12 on every side to the line boxes, leading counted.
+        assert_eq!(CODE_MARGIN, Margin::same(12));
     }
 
     #[test]

@@ -25,12 +25,12 @@ pub fn show(app: &mut App, ui: &mut Ui) {
     };
     let loading = app.detail_loading.contains(&key);
     let saved = crate::views::set_thumb_fills(ui, p);
-    // No edge fade: the pane ends flush on the hint bar's rule (the fade dimmed its last ~19 px).
+    // The list's thumb: round-ended, inset, and shown at rest when the pane overflows (K1, C1).
+    crate::views::floating_thumb(&mut ui.spacing_mut().scroll);
+    // egui's own fade dimmed the last ~19 px; the pane paints the list's short fade instead (below).
     crate::views::no_scroll_fade(ui);
-    // The viewport stops BAR_CLEARANCE above the hint bar, so a partly scrolled line's ascenders never show
-    // against the bar's rule (C5).
-    let view_h = (ui.available_height() - BAR_CLEARANCE).max(0.0);
-    egui::ScrollArea::vertical().auto_shrink([false, false]).max_height(view_h).show(ui, |ui| {
+    // The viewport runs to the hint bar; a scrolled line is cut there under the fade, never snapped (E1 ruling).
+    let out = egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
         crate::views::restore_fills(ui, saved);
         // The pane has no right margin: the bar sits in this inset, clear of the content.
         ui.set_max_width(ui.available_width() - DETAIL_RIGHT);
@@ -64,7 +64,8 @@ pub fn show(app: &mut App, ui: &mut Ui) {
         ui.label(RichText::new(&issue.summary).font(theme::bold(22.0)).color(p.text));
         ui.add_space(TITLE_TO_PILLS);
         ui.horizontal_wrapped(|ui| {
-            ui.spacing_mut().item_spacing = vec2(6.0, 4.0);
+            // The list rows' pill gap (E3; 6 measured 6.5–7).
+            ui.spacing_mut().item_spacing = vec2(super::issues::PILL_GAP, 4.0);
             let st = theme::status_tint(&issue.status.name, &issue.status.category, p, &app.cfg.issues.status_colors);
             pill(ui, &issue.status.name, st.bg, st.fg);
             if let crate::filter::TeamScope::Label(l) = &app.filter.team
@@ -138,6 +139,13 @@ pub fn show(app: &mut App, ui: &mut Ui) {
         });
         ui.add_space(24.0);
     });
+    let view = out.inner_rect;
+    if let Some((top, bottom)) = super::issues::detail_fade(view.bottom(), out.content_size.y - out.state.offset.y - view.height(), ui.ctx().pixels_per_point())
+    {
+        let r = egui::Rect::from_x_y_ranges(view.x_range(), top..=bottom);
+        let fade = p.surface.gamma_multiply(super::issues::FADE_STRENGTH);
+        ui.painter().add(egui::Shape::gradient_rect(r, egui::epaint::Direction::BottomUp, [fade, egui::Color32::TRANSPARENT]));
+    }
 }
 
 /// Title → pills.
@@ -156,8 +164,6 @@ const COMPOSER_PAD: f32 = 11.0;
 const COMPOSER_STROKE: f32 = 1.0;
 /// Comment author → date.
 const COMMENT_META_GAP: f32 = 8.0;
-/// The detail viewport's bottom gap above the hint bar.
-pub const BAR_CLEARANCE: f32 = 4.0;
 /// The detail content's right inset, inside the scroll area: the pane's 16 px gutter, which holds the floating
 /// scrollbar (its width + 4 at least).
 pub const DETAIL_RIGHT: f32 = 16.0;
@@ -327,11 +333,12 @@ mod tests {
         assert!(!snapshot_composer() || cfg!(feature = "snapshot"), "never on outside snapshot builds");
         assert_eq!(READ_ONLY_NOTE, "Read-only, comments can't be posted");
         assert_eq!(21.0 - NOTE_LIFT, 17.5, "the note's ink sits where the first card's edge does");
-        let bar = egui::style::ScrollStyle::floating();
+        let mut bar = egui::style::ScrollStyle::floating();
+        crate::views::floating_thumb(&mut bar);
         assert!(DETAIL_RIGHT >= bar.bar_width + bar.bar_outer_margin + 4.0, "the scrollbar sits clear of the content");
         assert_eq!((COMMENT_TIP, COMPOSER_HINT), ("⌘Enter", "Add a comment (⌘Enter to post)"));
         assert_eq!(COMPOSER_PAD + COMPOSER_STROKE, 12.0, "text on the comment cards' 12 px edge");
-        assert_eq!(BAR_CLEARANCE, 4.0, "the viewport stops 4 above the hint bar (C5)");
+        assert_eq!(super::super::issues::PILL_GAP, 8.0, "the detail pill row takes the list rows' gap (E3)");
     }
 
     #[test]

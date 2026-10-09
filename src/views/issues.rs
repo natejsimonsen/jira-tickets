@@ -568,16 +568,23 @@ fn combo(
             ui.spacing_mut().item_spacing.y = 0.0;
             ui.spacing_mut().interact_size.y = POPUP_ROW_H;
             ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
-            let visibility = if bar {
-                ui.spacing_mut().scroll = egui::style::ScrollStyle { bar_outer_margin: POPUP_THUMB_OUTER, ..egui::style::ScrollStyle::solid() };
+            let saved = bar.then(|| {
+                // The floating bars' THUMB_W width and round ends (set_thumb_fills), 4 in from the frame.
+                ui.spacing_mut().scroll =
+                    egui::style::ScrollStyle { bar_outer_margin: POPUP_THUMB_OUTER, bar_width: crate::views::THUMB_W, ..egui::style::ScrollStyle::solid() };
                 // The solid thumb paints in the widgets' `bg_fill` (rows use `weak_bg_fill`, so they keep theirs).
-                crate::views::set_thumb_fills(ui, p);
-                egui::scroll_area::ScrollBarVisibility::AlwaysVisible
-            } else {
-                egui::scroll_area::ScrollBarVisibility::VisibleWhenNeeded
-            };
+                crate::views::set_thumb_fills(ui, p)
+            });
+            let visibility =
+                if bar { egui::scroll_area::ScrollBarVisibility::AlwaysVisible } else { egui::scroll_area::ScrollBarVisibility::VisibleWhenNeeded };
             let row_w = inner - 2.0 * POPUP_ROW_PAD - if bar { ui.spacing().scroll.allocated_width() } else { 0.0 };
-            egui::ScrollArea::vertical().max_height(scroll_h).scroll_bar_visibility(visibility).show(ui, |ui| contents(ui, row_w));
+            egui::ScrollArea::vertical().max_height(scroll_h).scroll_bar_visibility(visibility).show(ui, |ui| {
+                // The rows keep their own corners (the thumb's THUMB_RADIUS is for the bar only).
+                if let Some(saved) = saved {
+                    crate::views::restore_fills(ui, saved);
+                }
+                contents(ui, row_w)
+            });
         });
 }
 
@@ -925,8 +932,8 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
     };
     // egui's own fade dims whatever sits near an edge; the list fades only a row that is really cut (`fade_strip`).
     crate::views::no_scroll_fade(ui);
-    // A thin, faint thumb at rest whenever the list overflows, so "more below" never hides (C4).
-    ui.spacing_mut().scroll.dormant_handle_opacity = LIST_THUMB_REST;
+    // A thin, faint, round-ended thumb at rest whenever the list overflows, so "more below" never hides (C4, C1).
+    crate::views::floating_thumb(&mut ui.spacing_mut().scroll);
     let saved = crate::views::set_thumb_fills(ui, p);
     let mut row_spans: Vec<(f32, f32)> = Vec::with_capacity(rows.len());
     let mut selected_rect: Option<(Rect, usize)> = None;
@@ -1097,13 +1104,16 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
         ui.painter().rect_filled(Rect::from_x_y_ranges(x, top..=bottom), 0.0, row_fill(false, false, p));
         ui.painter().vline(x.min + 0.5, top..=bottom, Stroke::new(1.0, p.border));
     }
-    // More rows below the viewport: a 1 px rule at its bottom edge says so, without dimming any row.
-    if more_below(&row_spans, view.bottom()) {
-        ui.painter().hline(view.x_range(), view.bottom() - 0.5, Stroke::new(1.0, p.border));
-    }
+    // No rule at the viewport's bottom edge: it landed on the hint bar's border as a second 1 px band (C2); the
+    // card fill runs to the bar and the fade says "more".
     let fade = p.bg.gamma_multiply(FADE_STRENGTH);
+    let ppp = ui.ctx().pixels_per_point();
     for (strip, dir, colors) in [
-        (fade_strip(&row_spans, view.bottom(), true), egui::epaint::Direction::BottomUp, [fade, egui::Color32::TRANSPARENT]),
+        (
+            fade_strip(&row_spans, view.bottom(), true).map(|(t, b)| (t, fade_end(b, ppp))),
+            egui::epaint::Direction::BottomUp,
+            [fade, egui::Color32::TRANSPARENT],
+        ),
         (fade_strip(&row_spans, view.top(), false), egui::epaint::Direction::TopDown, [fade, egui::Color32::TRANSPARENT]),
     ] {
         if let Some((top, bottom)) = strip {
@@ -1113,17 +1123,25 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
     }
 }
 
-/// The list thumb's opacity at rest (floating bars default to 0, hidden until hovered): faint, over the
-/// `scroll_thumb` rest colour (`muted` at about half alpha).
-const LIST_THUMB_REST: f32 = 0.5;
-
 /// A row cut by more than this at a viewport edge fades; less, and it reads as whole.
 const CLIP_MIN: f32 = 8.0;
 /// The fade's height at most: a short gradient over the cut row's visible strip only (24 read as the list
 /// fading into the hint bar; round 10: ≤ 8).
 const FADE_MAX: f32 = 8.0;
 /// The fade's strongest alpha, the same in both themes.
-const FADE_STRENGTH: f32 = 0.5;
+pub const FADE_STRENGTH: f32 = 0.5;
+
+/// A bottom fade's last y: one physical pixel row short of the viewport's edge, so the fade never lands on the
+/// hint bar's border row (C2).
+pub fn fade_end(edge: f32, ppp: f32) -> f32 {
+    edge - 1.0 / ppp
+}
+
+/// The detail pane's bottom fade (E1): FADE_MAX over the viewport's bottom, ending a pixel row short of it, while
+/// more than half a point of content lies below (`below`); none at the end of the content.
+pub fn detail_fade(edge: f32, below: f32, ppp: f32) -> Option<(f32, f32)> {
+    (below > 0.5).then(|| (edge - FADE_MAX, fade_end(edge, ppp)))
+}
 
 /// The strip to fade at a viewport edge (`edge`, the bottom when `bottom`, else the top), as (top, bottom):
 /// the visible part of the row the edge cuts, at most FADE_MAX tall at the edge, and only when the row is cut
@@ -1145,11 +1163,6 @@ pub fn sliver_row(rows: &[(f32, f32)], edge: f32) -> Option<usize> {
     (edge - rows[i].0 < CLIP_MIN).then_some(i)
 }
 
-/// Whether any row reaches past the viewport's bottom edge (by more than half a pixel).
-pub fn more_below(rows: &[(f32, f32)], edge: f32) -> bool {
-    rows.last().is_some_and(|(_, b)| *b > edge + 0.5)
-}
-
 /// Between the count row's parts.
 const COUNT_GAP: f32 = 7.0;
 /// The count row: its 12 px line box (the spinner and link fit), so the gaps around it are what they say:
@@ -1163,7 +1176,7 @@ const SEARCH_TO_COUNT: f32 = V_GAP - COUNT_INK_INSET;
 /// Count row → first card (8 from the ink).
 const COUNT_TO_ROWS: f32 = 8.0 - COUNT_INK_INSET;
 /// Space between a row's pills.
-const PILL_GAP: f32 = 8.0;
+pub const PILL_GAP: f32 = 8.0;
 /// The mono key's left side bearing at 12.5: the pill row moves in by it so pills and key share an ink edge.
 const KEY_INK_INSET: f32 = 1.0;
 /// Clearance under the last row: a toast's height (~34) plus its 16 px gap, rounded up.
@@ -1828,11 +1841,15 @@ mod tests {
     }
 
     #[test]
-    fn a_rule_marks_rows_below() {
-        let rows = [(0.0, 44.0), (43.0, 87.0), (86.0, 130.0)];
-        assert!(more_below(&rows, 87.0), "the last row is out of view");
-        assert!(!more_below(&rows, 130.0), "every row is in view");
-        assert!(!more_below(&[], 10.0));
+    fn bottom_fades_stop_a_pixel_short() {
+        // C2: the last pixel row (on the hint bar's border) is never faded; at 2x that is half a point.
+        assert_eq!(fade_end(800.0, 2.0), 799.5);
+        assert_eq!(fade_end(800.0, 1.0), 799.0);
+        // E1: the detail pane fades its bottom 8 while content continues, and not at the end.
+        assert_eq!(detail_fade(800.0, 120.0, 2.0), Some((792.0, 799.5)));
+        assert_eq!(detail_fade(800.0, 0.0, 2.0), None, "scrolled to the end");
+        assert_eq!(detail_fade(800.0, -40.0, 2.0), None, "content shorter than the pane");
+        const { assert!(FADE_MAX <= 8.0, "the E1 ruling: at most 8") };
     }
 
     #[test]
