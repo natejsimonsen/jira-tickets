@@ -89,3 +89,11 @@ These were decided in earlier rounds; raters treat them as correct and do not sc
   the bar always states the focused field's keys, and the note is the in-place cue. Final; raised three times.
 - **Shared light fill.** Help key chips and light dialog fields may share a fill (#ebebe7): the help overlay has no
   fields, so a chip and a field never appear together.
+- **Units.** Criteria values are logical points (pt), not device pixels: at 2x, 1 pt is two device pixels. The
+  scrollbar's track inset is 2 pt.
+- **Muted Enter in the note.** The count-row note's mono "Enter" stays `muted`: the note is a sentence, not a key
+  hint; only the hint bar draws keys in `text`.
+- **Dark placeholder step.** The dark placeholder sits 1.09:1 off dark `muted` (light: 1.19); the smaller step is
+  accepted so the placeholder keeps its 4.5:1 headroom on the dark dialog field.
+- **Epic popup width.** The epic popup is sized to the widest row in the whole list, rows below the fold included,
+  so it never resizes while scrolling.
