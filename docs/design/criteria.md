@@ -71,3 +71,8 @@ These were decided in earlier rounds; raters treat them as correct and do not sc
 - **Dark page field.** The dark list-pane search box is #0c0c0b, 1.09:1 under `bg`; the ruled range for the dark
   page field is 1.09–1.11 (it cannot reach the 1.12 input step short of near-black). Final; raters oscillated between
   "deeper" and "within range".
+- **Empty-field caret.** In every field (search, go-to, pickers, sign-in, composer) an empty field draws its caret
+  2 px left of the text origin; the placeholder and typed text share that one origin. This replaces round 10's
+  "placeholder 2 px right of the caret" in the fields that open focused.
+- **Sign-in aside.** Final wording: "Or export JIRA_API_TOKEN, or set api_token in config.toml, then check again."
+  Two verbs end the comma ambiguity; do not reword.

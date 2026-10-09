@@ -166,7 +166,7 @@ pub const ROW_INSET: f32 = 8.0;
 
 /// The app's one single-line input (`views::input_field`), its text and placeholder at the rows' 8 px inset.
 fn field<'a>(text: &'a mut String, hint: &str, p: &Palette) -> egui::TextEdit<'a> {
-    crate::views::input_field(text, hint, theme::body(14.0), p).margin(crate::views::input_margin(ROW_INSET))
+    crate::views::input_field_in(text, hint, theme::body(14.0), p, crate::views::input_margin(ROW_INSET))
 }
 
 /// A small muted label, 4 px, then the field (full width).

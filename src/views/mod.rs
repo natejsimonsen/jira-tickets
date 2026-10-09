@@ -105,13 +105,21 @@ const TAB_GAP: f32 = 24.0;
 /// Gap from the title to the first tab: 32, a step past TAB_GAP, so the title never reads as a fifth tab
 /// (round-10 ruling, final).
 const TITLE_GAP: f32 = 32.0;
-/// Gap between the signed-in name and "Read-only": a muted "·" centred in it, 8 either side.
-const NAME_GAP: f32 = 20.0;
+/// Between the header's labels (the name, "·", "Read-only"): separate labels at the 8 item spacing (round 11 A1;
+/// one 20 gap with a centred dot read ~10 a side).
+const LABEL_GAP: f32 = 8.0;
+/// The labels → the sync button: 12, a step wider than the 8 between the buttons, so the text reads as its own group.
+const LABELS_TO_BUTTONS: f32 = 12.0;
 /// The longest the signed-in name may grow leftward, in "m" glyphs of the 12 px name font; longer names are cut.
 const NAME_MAX_M: f32 = 20.0;
 /// The header's 32×32 buttons and the gap between the right cluster's parts.
 const HEADER_BUTTON: f32 = 32.0;
 const HEADER_GAP: f32 = 8.0;
+
+/// The header's "Read-only" label colour: `text` (the name beside it stays `muted`).
+pub fn read_only_color(p: &Palette) -> Color32 {
+    p.text
+}
 
 /// The name's width cap: a run of "m" glyphs. It only cuts very long names; it never reserves space.
 pub fn name_cap(m_w: f32) -> f32 {
@@ -119,8 +127,9 @@ pub fn name_cap(m_w: f32) -> f32 {
 }
 
 /// The header's right cluster, laid out from the bar's right edge (inside the 16 px margin), right to left:
-/// "?" outermost, sync 8 left of it, then the labels 8 left of sync ("Read-only" nearest, "·", the name growing
-/// leftward). The buttons' x depends only on `right` (round-8 A1 ruling); the labels follow the buttons.
+/// "?" outermost, sync 8 left of it, then the labels 12 left of sync ("Read-only" nearest, then "·" and the name,
+/// LABEL_GAP apart, the name growing leftward). The buttons' x depends only on `right` (round-8 A1 ruling); the
+/// labels follow the buttons.
 #[derive(Debug, PartialEq)]
 pub struct HeaderRight {
     pub help: f32,
@@ -130,20 +139,22 @@ pub struct HeaderRight {
     /// The labels' total width.
     pub labels_w: f32,
     pub read_only: Option<f32>,
-    pub dot_centre: Option<f32>,
+    /// The "·" label's left edge, between the name and "Read-only" when both show.
+    pub dot: Option<f32>,
     pub name: Option<f32>,
 }
 
-pub fn header_right(right: f32, name_w: Option<f32>, read_only_w: Option<f32>) -> HeaderRight {
+/// `dot_w` is the "·" label's width.
+pub fn header_right(right: f32, name_w: Option<f32>, read_only_w: Option<f32>, dot_w: f32) -> HeaderRight {
     let help = right - HEADER_BUTTON;
     let sync = help - HEADER_GAP - HEADER_BUTTON;
-    let labels_right = sync - HEADER_GAP;
+    let labels_right = sync - LABELS_TO_BUTTONS;
     let read_only = read_only_w.map(|w| labels_right - w);
-    let name_right = read_only.map_or(labels_right, |x| x - NAME_GAP);
+    let dot = read_only.filter(|_| name_w.is_some()).map(|x| x - LABEL_GAP - dot_w);
+    let name_right = dot.map_or(labels_right, |x| x - LABEL_GAP);
     let name = name_w.map(|w| name_right - w);
-    let dot_centre = read_only.filter(|_| name.is_some()).map(|x| x - NAME_GAP / 2.0);
     let labels_w = labels_right - name.or(read_only).unwrap_or(labels_right);
-    HeaderRight { help, sync, labels_right, labels_w, read_only, dot_centre, name }
+    HeaderRight { help, sync, labels_right, labels_w, read_only, dot, name }
 }
 
 /// The y of a galley's first baseline, from its top.
@@ -223,7 +234,8 @@ fn header(app: &mut App, ui: &mut Ui, p: &Palette) -> (egui::Rect, Option<egui::
                     (painter.layout_no_wrap(shown, theme::body(12.0), p.muted), me.display_name.clone())
                 });
                 let ro = read_only.then(|| painter.layout_no_wrap("Read-only".into(), theme::body(12.0), p.muted));
-                let at = header_right(right, name.as_ref().map(|(g, _)| g.size().x), ro.as_ref().map(|g| g.size().x));
+                let dot = painter.layout_no_wrap("·".into(), theme::body(12.0), p.muted);
+                let at = header_right(right, name.as_ref().map(|(g, _)| g.size().x), ro.as_ref().map(|g| g.size().x), dot.size().x);
                 let help = icons::icon_button(ui, icons::Icon::Help, "Keyboard help (?)", p);
                 if help.clicked() {
                     app.actions.push(Action::ToggleHelp);
@@ -236,7 +248,8 @@ fn header(app: &mut App, ui: &mut Ui, p: &Palette) -> (egui::Rect, Option<egui::
                     app.actions.push(Action::Refresh);
                 }
                 if at.labels_w > 0.0 {
-                    ui.allocate_exact_size(vec2(at.labels_w, 32.0), Sense::hover());
+                    // The labels' width plus the 4 their gap to sync adds over the buttons' 8 item spacing.
+                    ui.allocate_exact_size(vec2(at.labels_w + LABELS_TO_BUTTONS - HEADER_GAP, 32.0), Sense::hover());
                 }
                 if let (Some((g, full)), Some(x)) = (name, at.name) {
                     let r = egui::Rect::from_min_size(egui::pos2(x, top_for_baseline(line, baseline(&g))), g.size());
@@ -248,15 +261,14 @@ fn header(app: &mut App, ui: &mut Ui, p: &Palette) -> (egui::Rect, Option<egui::
                         }
                     });
                 }
-                if let Some(c) = at.dot_centre {
-                    // A muted "·" between the name and "Read-only", so they read as two labels.
-                    let dot = painter.layout_no_wrap("·".into(), theme::body(12.0), p.muted);
-                    let x = c - dot.size().x / 2.0;
+                if let Some(x) = at.dot {
+                    // A muted "·" label between the name and "Read-only", so they read as two labels.
                     ui.painter().galley(egui::pos2(x, top_for_baseline(line, baseline(&dot))), dot, p.muted);
                 }
                 if let (Some(g), Some(x)) = (ro, at.read_only) {
+                    // "Read-only" in `text`, the name muted: a hierarchy without a new colour (A1).
                     let r = egui::Rect::from_min_size(egui::pos2(x, top_for_baseline(line, baseline(&g))), g.size());
-                    ui.painter().galley(r.min, g, p.muted);
+                    ui.painter().galley(r.min, g, read_only_color(p));
                     tooltip(ui.interact(r, egui::Id::new("header-read-only"), Sense::hover()), "Writes are blocked (JIRA_TICKETS_READONLY)");
                 }
             });
@@ -302,7 +314,8 @@ fn sign_in_aside(p: &Palette) -> egui::text::LayoutJob {
 }
 
 /// Alternating prose and identifiers.
-pub const SIGN_IN_ASIDE: [&str; 7] = ["Or set ", "JIRA_API_TOKEN", " or ", "api_token", " in ", "config.toml", ", then check again."];
+/// Final wording (round 11 J1): two verbs, so neither identifier reads as the other's alternative name.
+pub const SIGN_IN_ASIDE: [&str; 7] = ["Or export ", "JIRA_API_TOKEN", ", or set ", "api_token", " in ", "config.toml", ", then check again."];
 
 /// The sign-in panel's top padding: 16 less the 22 px title's ~4 of leading above its ink, so the panel reads
 /// 16 above the title's ink as below "Check again" (round 8 measured 21.5 top, 17.5 bottom).
@@ -372,7 +385,7 @@ pub fn sign_in(app: &mut App, ui: &mut Ui) {
                 ui.add(egui::Label::new(aside).extend());
                 ui.add_space(ASIDE_TO_FIELD);
                 ui.visuals_mut().text_edit_bg_color = Some(theme::input_fill(p.surface, p));
-                let r = ui.add(focused_input_field(&mut app.token_input, "API token", theme::body(14.0), p).id(egui::Id::new("token-input")).password(true));
+                let r = ui.add(input_field(&mut app.token_input, "API token", theme::body(14.0), p).id(egui::Id::new("token-input")).password(true));
                 if ui.memory(|m| m.focused().is_none()) {
                     r.request_focus();
                 }
@@ -386,8 +399,9 @@ pub fn sign_in(app: &mut App, ui: &mut Ui) {
                 }
                 ui.add_space(SIGN_IN_TO_AGAIN);
                 // Only as tall as its text, so the panel's 16 bottom padding is all that shows under it.
-                // `text`, so it reads as a control beside the muted aside.
-                let again = egui::Button::new(RichText::new("Check again").color(p.text).size(14.0)).frame(false);
+                // `text`, so it reads as a control beside the muted aside; the standard hover fill when pointed at
+                // (J2), no frame at rest.
+                let again = egui::Button::new(RichText::new("Check again").color(p.text).size(14.0)).frame_when_inactive(false);
                 let again_h = ui.fonts_mut(|f| f.row_height(&theme::body(14.0)));
                 ui.spacing_mut().button_padding.y = 0.0;
                 if tooltip(ui.add_sized([w, again_h], again), "Look for JIRA_API_TOKEN or the config api_token again").clicked() {
@@ -607,20 +621,27 @@ pub fn field_hint(text: &str, font: egui::FontId, p: &Palette) -> egui::text::La
     field_hint_at(text, font, p, 0.0)
 }
 
-/// `field_hint` moved `lead` right: HINT_CARET_GAP for the fields that open focused (sign-in, go-to), whose caret
-/// touched the placeholder.
+/// `field_hint` moved `lead` right.
 pub fn field_hint_at(text: &str, font: egui::FontId, p: &Palette, lead: f32) -> egui::text::LayoutJob {
     let mut job = egui::text::LayoutJob::default();
     job.append(text, lead, egui::TextFormat { font_id: font, color: theme::placeholder(p), ..Default::default() });
     job
 }
 
-/// The gap between the caret and the placeholder in an empty, focused-on-open field.
-pub const HINT_CARET_GAP: f32 = 2.0;
+/// How far left of the text origin an empty field's caret sits (round 11 I1, every field; it replaces round 10's
+/// placeholder 2 right of the caret in the focused-on-open fields).
+pub const CARET_LEAD: i8 = 2;
 
-/// `input_field` for a field that opens focused: its placeholder HINT_CARET_GAP right of the caret.
-pub fn focused_input_field<'a>(text: &'a mut String, hint: &str, font: egui::FontId, p: &Palette) -> egui::TextEdit<'a> {
-    input_field(text, hint, font.clone(), p).hint_text(field_hint_at(hint, font, p, HINT_CARET_GAP))
+/// A field's margin for its content: an empty field's text origin moves CARET_LEAD left (so egui draws, and
+/// blinks, its caret there) while its placeholder is led back CARET_LEAD right (`empty_field_hint`), so the
+/// placeholder and typed text share one origin; the first keystroke restores the margin.
+pub fn caret_margin(m: Margin, empty: bool) -> Margin {
+    if empty { Margin { left: m.left - CARET_LEAD, ..m } } else { m }
+}
+
+/// The placeholder for a field laid out with `caret_margin`: shown only while empty, so always led CARET_LEAD.
+pub fn empty_field_hint(text: &str, font: egui::FontId, p: &Palette) -> egui::text::LayoutJob {
+    field_hint_at(text, font, p, f32::from(CARET_LEAD))
 }
 
 /// Every dialog field's text (and placeholder) inset: 8, aligned with the dialog's rows (round 8: sign-in read 10,
@@ -635,11 +656,17 @@ pub const INPUT_H: f32 = BUTTON_H;
 /// The one single-line input: 8 px side margin (typed text and placeholder both start 8 in), INPUT_H tall, full width, `font` for text and placeholder. Focus draws the theme's one
 /// 1 px accent stroke.
 pub fn input_field<'a>(text: &'a mut String, hint: &str, font: egui::FontId, p: &Palette) -> egui::TextEdit<'a> {
+    input_field_in(text, hint, font, p, INPUT_MARGIN)
+}
+
+/// `input_field` with its own margin (the search box's, a picker's row inset), the empty-field caret rule applied.
+pub fn input_field_in<'a>(text: &'a mut String, hint: &str, font: egui::FontId, p: &Palette, margin: Margin) -> egui::TextEdit<'a> {
+    let empty = text.is_empty();
     egui::TextEdit::singleline(text)
         .font(font.clone())
-        .hint_text(field_hint(hint, font, p))
+        .hint_text(empty_field_hint(hint, font, p))
         .desired_width(f32::INFINITY)
-        .margin(INPUT_MARGIN)
+        .margin(caret_margin(margin, empty))
         .min_size(vec2(0.0, INPUT_H))
         // The text row (and caret, and placeholder) centred in the box, not riding at the top margin.
         .vertical_align(egui::Align::Center)
@@ -992,10 +1019,20 @@ mod widget_tests {
         assert!(super::hint_bar_shown(false, false), "the sign-in form");
         assert!(!super::hint_bar_shown(false, true), "still looking for a token");
         assert!(super::hint_bar_shown(true, false));
-        let job = super::field_hint("API token", crate::theme::body(14.0), &crate::theme::LIGHT);
-        assert_eq!(job.sections[0].leading_space, 0.0, "the placeholder starts at the typed text's origin");
-        let job = super::field_hint_at("API token", crate::theme::body(14.0), &crate::theme::LIGHT, super::HINT_CARET_GAP);
-        assert_eq!(job.sections[0].leading_space, 2.0, "J2: fields that open focused keep 2 off the caret");
+    }
+
+    #[test]
+    fn an_empty_fields_caret_sits_left_of_the_origin() {
+        // I1: empty, the content origin moves CARET_LEAD left (egui's caret goes there) and the placeholder is
+        // led back, so placeholder and typed text start at one x, in every field.
+        let m = super::input_margin(12.0);
+        let empty = super::caret_margin(m, true);
+        assert_eq!(empty.left, m.left - 2, "caret 2 left of the text origin");
+        assert_eq!((empty.right, empty.top, empty.bottom), (m.right, m.top, m.bottom));
+        assert_eq!(super::caret_margin(m, false), m, "typed text keeps the origin");
+        let job = super::empty_field_hint("API token", crate::theme::body(14.0), &crate::theme::LIGHT);
+        assert_eq!(f32::from(empty.left) + job.sections[0].leading_space, f32::from(m.left), "placeholder on the typed text's origin");
+        assert_eq!(super::caret_margin(egui::Margin::ZERO, true).left, -2, "the composer's zero margin too");
     }
 
     use super::*;
@@ -1112,7 +1149,7 @@ mod widget_tests {
 
     #[test]
     fn sign_in_aside_reads_as_one_sentence() {
-        assert_eq!(SIGN_IN_ASIDE.concat(), "Or set JIRA_API_TOKEN or api_token in config.toml, then check again.");
+        assert_eq!(SIGN_IN_ASIDE.concat(), "Or export JIRA_API_TOKEN, or set api_token in config.toml, then check again.");
         assert_eq!(SIGN_IN_TOP, 16.0 - 4.0, "title top leading trimmed");
         assert_eq!(sign_in_width(300.0), 480.0);
         assert_eq!(sign_in_width(451.0), 480.0, "round 6: 480 so the aside has margin");
@@ -1260,27 +1297,33 @@ mod widget_tests {
         assert_eq!(long.chars().count(), 40);
         let names = [None, Some(measure("Shawn")), Some(measure(&truncate_text(long, name_cap(m_w), measure)))];
         for ro in [None, Some(52.0)] {
-            let first = header_right(edge, None, ro);
+            let first = header_right(edge, None, ro, 4.0);
             assert_eq!(first.help, edge - 32.0, "? at the 16 px edge");
             assert_eq!(first.sync, first.help - 40.0, "sync 8 left of ?");
             for name_w in names {
-                let at = header_right(edge, name_w, ro);
+                let at = header_right(edge, name_w, ro, 4.0);
                 assert_eq!((at.help, at.sync), (first.help, first.sync), "ro={ro:?} name_w={name_w:?}");
-                // The text nearest sync (Read-only, else the name) ends 8 left of it: no void.
+                // The text nearest sync (Read-only, else the name) ends 12 left of it (A1).
                 let nearest_right = match (at.read_only, at.name) {
                     (Some(x), _) => x + ro.unwrap(),
                     (None, Some(x)) => x + name_w.unwrap(),
                     (None, None) => continue,
                 };
-                assert!(at.sync - nearest_right <= 8.0, "gap {}", at.sync - nearest_right);
+                assert_eq!(at.sync - nearest_right, 12.0, "gap {}", at.sync - nearest_right);
                 if let (Some(n), Some(r)) = (at.name, at.read_only) {
-                    assert_eq!(r - (n + name_w.unwrap()), NAME_GAP, "name grows leftward from the ·");
-                    assert_eq!(at.dot_centre, Some(r - NAME_GAP / 2.0));
+                    let d = at.dot.expect("a dot between them");
+                    assert_eq!(r - (d + 4.0), LABEL_GAP, "· 8 before Read-only");
+                    assert_eq!(d - (n + name_w.unwrap()), LABEL_GAP, "name 8 before the ·, growing leftward");
+                } else {
+                    assert_eq!(at.dot, None);
                 }
             }
         }
         assert!(measure(&truncate_text(long, name_cap(m_w), measure)) <= name_cap(m_w), "a long name is cut to the cap");
-        assert_eq!(header_right(edge, None, None).labels_w, 0.0);
+        assert_eq!(header_right(edge, None, None, 4.0).labels_w, 0.0);
+        for p in [&theme::LIGHT, &theme::DARK] {
+            assert_eq!(read_only_color(p), p.text, "Read-only in text, the name muted");
+        }
     }
 
     #[test]

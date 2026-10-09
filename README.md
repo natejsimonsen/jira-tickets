@@ -54,7 +54,7 @@ Only a token you paste is saved. Signing out deletes that file.
 | `t` | Transition |
 | `a` | Assign |
 | `s` | Sprint |
-| `e` | Edit labels, priority, story points |
+| `e` | Edit labels, priority, or story points |
 | `l` | Add the picked team's label |
 | `m` | Toggle Roadmap filter |
 | `J/K` | Move down or up in rank |

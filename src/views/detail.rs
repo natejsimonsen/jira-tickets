@@ -230,14 +230,15 @@ fn composer(app: &mut App, ui: &mut Ui, p: &Palette, key: &str) {
         // 11 + the 1 px stroke: the comment cards' 12 to the text on every side.
         .inner_margin(Margin::same(COMPOSER_PAD as i8))
         .show(ui, |ui| {
-            ui.add_sized(
-                [ui.available_width(), COMPOSER_H - 2.0 * (COMPOSER_PAD + COMPOSER_STROKE)],
+            ui.add_sized([ui.available_width(), COMPOSER_H - 2.0 * (COMPOSER_PAD + COMPOSER_STROKE)], {
+                // The empty-field caret rule (I1): caret CARET_LEAD left of the origin, placeholder on it.
+                let empty = draft.is_empty();
                 egui::TextEdit::multiline(draft)
                     .id(id)
                     .frame(Frame::new())
-                    .margin(vec2(0.0, 0.0))
-                    .hint_text(RichText::new(COMPOSER_HINT).color(theme::placeholder(p))),
-            )
+                    .margin(crate::views::caret_margin(Margin::ZERO, empty))
+                    .hint_text(crate::views::empty_field_hint(COMPOSER_HINT, theme::body(14.0), p))
+            })
         })
         .inner;
     // Clicking the frame's padding focuses the box too.
