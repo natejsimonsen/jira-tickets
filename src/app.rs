@@ -183,6 +183,8 @@ pub struct App {
     pub lists: HashMap<ListId, Loaded>,
     pub screen: Screen,
     pub me: Option<User>,
+    /// The header name slot's width, fixed on the first header frame (`views::name_slot_for`).
+    pub name_slot: Option<f32>,
     pub login: Option<Login>,
     pub finding_token: bool,
     pub token_input: String,
@@ -306,6 +308,7 @@ impl App {
             lists: HashMap::new(),
             screen: Screen::Issues,
             me: None,
+            name_slot: None,
             login: None,
             finding_token: true,
             token_input: String::new(),
@@ -572,6 +575,7 @@ impl App {
                 self.token_error = (!errors.is_empty()).then(|| errors.join("\n"));
             }
             Msg::Me(Ok(u)) => {
+                self.store.me_name = Some(u.display_name.clone());
                 self.me = Some(u);
                 // A pasted token is saved only once Jira accepted it.
                 if let Some(login) = &self.login
@@ -825,6 +829,8 @@ impl App {
                 self.client = None;
                 self.login = None;
                 self.me = None;
+                self.store.me_name = None;
+                self.name_slot = None;
             }
             Action::Toast(t, e) => self.toast(t, e),
             Action::SetEpic(e) => {

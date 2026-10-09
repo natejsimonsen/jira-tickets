@@ -257,6 +257,9 @@ pub fn hints_panel(app: &App, ui: &mut Ui, p: &Palette) {
     ui.painter().hline(r.x_range(), r.top() + 0.5, Stroke::new(1.0, p.border));
 }
 
+/// Both panes' top inset under the header rule.
+pub const PANE_TOP: f32 = 12.0;
+
 pub fn show(app: &mut App, ui: &mut Ui) {
     let p = theme::palette(ui.ctx());
     track_epics(app);
@@ -265,7 +268,7 @@ pub fn show(app: &mut App, ui: &mut Ui) {
         .resizable(true)
         .default_size(list_w)
         .size_range(list_range)
-        .frame(Frame::new().fill(p.bg).inner_margin(Margin { left: 16, right: 16, top: 12, bottom: 0 }))
+        .frame(Frame::new().fill(p.bg).inner_margin(Margin { left: 16, right: 16, top: PANE_TOP as i8, bottom: 0 }))
         .show(ui, |ui| {
             // The filter block's gaps are explicit (all V_GAP), so no implicit item spacing is added on top.
             ui.spacing_mut().item_spacing.y = 0.0;
@@ -278,7 +281,8 @@ pub fn show(app: &mut App, ui: &mut Ui) {
     let pane = ui.available_rect_before_wrap();
     app.detail_x = Some((pane.left(), pane.right()));
     egui::CentralPanel::default()
-        .frame(Frame::new().fill(p.surface).inner_margin(Margin { left: 16, right: 16, top: 16, bottom: 0 }))
+        // The same 12 top inset as the list pane, so the detail buttons' row is level with the combo row.
+        .frame(Frame::new().fill(p.surface).inner_margin(Margin { left: 16, right: 16, top: PANE_TOP as i8, bottom: 0 }))
         .show(ui, |ui| super::detail::show(app, ui));
     goto_box(app, ui.ctx(), p);
 }

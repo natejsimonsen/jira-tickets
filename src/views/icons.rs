@@ -62,8 +62,8 @@ pub fn icon_button(ui: &mut Ui, icon: Icon, tip: &str, p: &Palette) -> Response 
 pub fn text_button(ui: &mut Ui, text: &str, tip: &str, p: &Palette) -> Response {
     let (rect, resp) = ui.allocate_exact_size(Vec2::splat(BUTTON), Sense::click());
     button_frame(ui, rect, resp.hovered(), p);
-    // Bold 15, so "?" carries the sync glyph's weight beside it.
-    ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, text, crate::theme::bold(15.0), p.text);
+    // Regular 15, matching the sync icon's regular stroke beside it.
+    ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, text, crate::theme::body(15.0), p.text);
     resp.on_hover_text(tip)
 }
 

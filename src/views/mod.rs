@@ -13,7 +13,7 @@ use egui::{Color32, Frame, Margin, RichText, Sense, Stroke, Ui, vec2};
 
 pub fn main(app: &mut App, ui: &mut Ui) {
     let p = theme::palette(ui.ctx());
-    let bar = header(app, ui, p);
+    let (bar, active_tab) = header(app, ui, p);
     // Every signed-in screen keeps the hint bar.
     issues::hints_panel(app, ui, p);
     if app.offline {
@@ -25,10 +25,20 @@ pub fn main(app: &mut App, ui: &mut Ui) {
         Screen::Team => placeholder(ui, p, "Team"),
         Screen::Roadmap => placeholder(ui, p, "Roadmap"),
     }
-    // One 1 px rule just under the 48 px bar (so the buttons sit 8/8 and the 2 px underline sits on the rule,
-    // not under it), painted after the panels below so their fills do not cover it; modals are other layers.
-    ui.painter().hline(bar.x_range(), header_rule_y(bar.bottom()), Stroke::new(1.0, p.border));
+    // One 1 px rule, the header panel's own last point under its 48 px bar (egui's separator line is off, so
+    // nothing stacks on it), then the active tab's 2 px accent bar over the rule's y-range. Painted after the
+    // panels below; modals are other layers.
+    let rule = header_rule(bar);
+    ui.painter().rect_filled(rule, 0.0, p.border);
+    if let Some(x) = active_tab {
+        ui.painter().rect_filled(underline_rect(x, rule), 0.0, p.accent);
+    }
 }
+
+/// The header: the 48 px bar plus its 1 px rule.
+pub const HEADER_H: f32 = 49.0;
+/// The bar above the rule.
+const BAR_H: f32 = HEADER_H - 1.0;
 
 /// "<Tab> is coming soon", named as the tab is.
 pub fn placeholder_text(tab: &str) -> String {
@@ -78,14 +88,16 @@ pub fn tab_width(label_w: f32) -> f32 {
     label_w.ceil()
 }
 
-/// The header rule's centre line: the first point under the bar, so the bar keeps its full 48.
-pub fn header_rule_y(bar_bottom: f32) -> f32 {
-    bar_bottom + 0.5
+/// The header rule: the header panel's last whole point, under the 48 px bar.
+pub fn header_rule(header: egui::Rect) -> egui::Rect {
+    let bottom = header.bottom().round();
+    egui::Rect::from_x_y_ranges(header.x_range(), bottom - 1.0..=bottom)
 }
 
-/// The active tab's 2.0 underline, 7 below the tab slot, on whole points.
-pub fn underline_rect(tab: egui::Rect) -> egui::Rect {
-    egui::Rect::from_min_size(egui::pos2(tab.left(), (tab.bottom() + 6.0).round()), vec2(tab.width(), 2.0))
+/// The active tab's 2 px accent bar across the tab's width, its bottom on the rule's bottom, so it covers the
+/// rule there and shows whole (1 px above it, 1 px on it).
+pub fn underline_rect(tab_x: egui::Rangef, rule: egui::Rect) -> egui::Rect {
+    egui::Rect::from_x_y_ranges(tab_x, rule.bottom() - 2.0..=rule.bottom())
 }
 
 /// Gap between tabs.
@@ -101,6 +113,13 @@ const NAME_SLOT_M: f32 = 20.0;
 /// the same x before and after the user record arrives (round-6 D2). Longer names are cut to it.
 pub fn name_slot(m_w: f32) -> f32 {
     (m_w * NAME_SLOT_M).ceil()
+}
+
+/// The name slot for this session: the last signed-in name's width when the cache knows it (so the buttons
+/// sit 8 left of the name, with no void), else the fixed `name_slot`. The header fixes it on its first frame,
+/// so the buttons never move when the user record lands.
+pub fn name_slot_for(known_name_w: Option<f32>, m_w: f32) -> f32 {
+    known_name_w.map_or_else(|| name_slot(m_w), |w| w.ceil().min(name_slot(m_w)))
 }
 
 /// The right-hand label cluster: its width (name slot, then "Read-only" when shown; the buttons sit left of
@@ -141,8 +160,12 @@ pub fn spinner_slots(lists_syncing: bool, search_pending: bool, search_from_refr
     (lists_syncing || (search_pending && search_from_refresh), search_pending && !search_from_refresh)
 }
 
-fn header(app: &mut App, ui: &mut Ui, p: &Palette) -> egui::Rect {
-    let panel = egui::Panel::top("header").exact_size(48.0).frame(Frame::new().fill(p.surface).inner_margin(Margin::symmetric(16, 0))).show(ui, |ui| {
+/// The header bar; returns the header's rect (bar and rule) and the active tab's x-range.
+fn header(app: &mut App, ui: &mut Ui, p: &Palette) -> (egui::Rect, Option<egui::Rangef>) {
+    let mut active_tab = None;
+    // The rule is the panel's last point (bottom margin 1), so the bar keeps its 48 and the buttons sit 8/8.
+    let frame = Frame::new().fill(p.surface).inner_margin(Margin { left: 16, right: 16, top: 0, bottom: (HEADER_H - BAR_H) as i8 });
+    let panel = egui::Panel::top("header").exact_size(HEADER_H).show_separator_line(false).frame(frame).show(ui, |ui| {
         ui.horizontal_centered(|ui| {
             ui.spacing_mut().item_spacing.x = TAB_GAP;
             // The title and the tabs share the tabs' baseline (the 15 bold title sat 1 px below it).
@@ -161,8 +184,8 @@ fn header(app: &mut App, ui: &mut Ui, p: &Palette) -> egui::Rect {
                 let pos = egui::pos2(rect.left(), top_for_baseline(line, baseline(&galley)));
                 ui.painter().galley(pos, galley, p.text);
                 if active {
-                    // A filled 2.0 bar on whole points, not a stroke centred on a line, so it is exactly 2 tall.
-                    ui.painter().rect_filled(underline_rect(rect), 0.0, p.accent);
+                    // Painted by `main` after the rule (see `underline_rect`).
+                    active_tab = Some(rect.x_range());
                 }
                 let r = r.on_hover_text(format!("{name} (⌘{})", i + 1));
                 if r.clicked() {
@@ -176,9 +199,11 @@ fn header(app: &mut App, ui: &mut Ui, p: &Palette) -> egui::Rect {
                 let read_only = crate::jira::READ_ONLY.load(std::sync::atomic::Ordering::Relaxed);
                 let painter = ui.painter().clone();
                 let m_w = painter.layout_no_wrap("m".into(), theme::body(12.0), p.muted).size().x;
-                let slot = name_slot(m_w);
-                // The name is cut to its slot and right-aligned in it, beside "Read-only"; the slot is reserved
-                // before the user record loads, so the buttons to its left never move.
+                // Laid out right to left: "Read-only" at the 16 px edge, "·", the name right-aligned in its slot,
+                // then the buttons 8 left of the slot. The slot is fixed for the session (`name_slot_for`), so
+                // the buttons never move; a longer name than the slot is cut to it.
+                let known = app.store.me_name.as_ref().map(|n| painter.layout_no_wrap(n.clone(), theme::body(12.0), p.muted).size().x);
+                let slot = *app.name_slot.get_or_insert_with(|| name_slot_for(known, m_w));
                 let name = app.me.as_ref().map(|me| {
                     let shown = truncate_text(&me.display_name, slot, |t| painter.layout_no_wrap(t.to_string(), theme::body(12.0), p.muted).size().x);
                     (painter.layout_no_wrap(shown, theme::body(12.0), p.muted), me.display_name.clone())
@@ -225,7 +250,7 @@ fn header(app: &mut App, ui: &mut Ui, p: &Palette) -> egui::Rect {
             });
         });
     });
-    panel.response.rect
+    (panel.response.rect, active_tab)
 }
 
 fn offline_banner(app: &mut App, ui: &mut Ui, p: &Palette) {
@@ -768,15 +793,15 @@ mod widget_tests {
 
     #[test]
     fn tab_underline_is_two_points_on_whole_points() {
-        let r = underline_rect(egui::Rect::from_min_max(egui::pos2(10.0, 8.3), egui::pos2(60.0, 40.3)));
-        assert_eq!(r.height(), 2.0);
-        assert_eq!(r.top(), r.top().round());
-        assert_eq!(r.width(), 50.0);
-        // In the 48 bar the 32 tab slot ends at 40: the underline fills 46..48 and the rule draws 48..49, so
-        // none of the underline is covered (round 6 measured 1 lp when the rule sat at 47..48).
-        let u = underline_rect(egui::Rect::from_min_max(egui::pos2(0.0, 8.0), egui::pos2(50.0, 40.0)));
-        assert_eq!((u.top(), u.bottom()), (46.0, 48.0));
-        assert!(header_rule_y(48.0) - 0.5 >= u.bottom());
+        // Round 7 measured a 2 pt rule (egui's panel separator stacked on ours) and the underline 1 pt above it.
+        let header = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1440.0, HEADER_H));
+        let rule = header_rule(header);
+        assert_eq!((rule.top(), rule.bottom(), rule.width()), (48.0, 49.0, 1440.0), "one 1 pt rule under the 48 bar");
+        assert_eq!(header_rule(header.translate(vec2(0.0, 0.3))), rule, "on whole points");
+        let u = underline_rect(egui::Rangef::new(10.0, 60.0), rule);
+        assert_eq!((u.top(), u.bottom(), u.width()), (47.0, 49.0, 50.0), "2 pt, over the rule's y-range");
+        assert!(u.top() < rule.top() && u.bottom() == rule.bottom());
+        assert_eq!(BAR_H, 48.0);
         assert_eq!(TITLE_GAP, TAB_GAP);
     }
 
@@ -845,6 +870,19 @@ mod widget_tests {
         assert!(backdrop_alpha(&theme::DARK) > backdrop_alpha(&theme::LIGHT));
         assert_eq!(dialog_fill(&theme::DARK), theme::DARK_DIALOG);
         assert_eq!(dialog_fill(&theme::LIGHT), theme::LIGHT.surface);
+    }
+
+    #[test]
+    fn a_known_name_sizes_its_slot() {
+        assert_eq!(name_slot_for(Some(95.4), 10.0), 96.0, "the cached name's width: no void before the buttons");
+        assert_eq!(name_slot_for(Some(400.0), 10.0), 200.0, "never wider than the fixed slot");
+        assert_eq!(name_slot_for(None, 10.0), name_slot(10.0), "a fresh cache reserves the fixed slot");
+        // The buttons' x is the edge minus the cluster: the same with the name pending and loaded.
+        let slot = name_slot_for(Some(95.4), 10.0);
+        let edge = 1424.0;
+        let button_x = |name: Option<f32>| edge - header_labels(slot, name, Some(52.0)).0;
+        assert_eq!(button_x(None), button_x(Some(95.4)));
+        assert_eq!(header_labels(slot, Some(95.4), Some(52.0)).1, Some(slot - 95.4), "the name fills its slot");
     }
 
     #[test]
