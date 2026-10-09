@@ -60,3 +60,7 @@ These were decided in earlier rounds; raters treat them as correct and do not sc
   draft); it is not a contrast defect.
 - **Field insets.** The list pane's search box insets its text 12, like the combos and chips on the rows above
   it; dialog fields (go-to, pickers, sign-in) inset 8 to line up with their dialog rows. Both are correct.
+- **Title gap.** The app title sits 32 px before the first tab (tabs are 24 apart), so it never reads as a fifth
+  tab. Final; it oscillated 24 ↔ 32 across rounds.
+- **Help button glyph.** The header "?" is a painted glyph with the sync icon's 1.5 px stroke (not a font glyph),
+  so the two buttons weigh the same. Final; it oscillated bold ↔ regular across rounds.

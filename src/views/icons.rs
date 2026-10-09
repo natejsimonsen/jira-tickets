@@ -8,6 +8,8 @@ use egui::{Color32, Painter, Pos2, Rect, Response, Sense, Shape, Stroke, Ui, Vec
 pub enum Icon {
     /// Two circling arrows, for Refresh.
     Sync,
+    /// A question mark, for keyboard help: painted with the sync icon's stroke so the two buttons weigh the same.
+    Help,
 }
 
 /// `n + 1` points along the arc of radius `r` around `center`, from `start` to `end` radians.
@@ -36,7 +38,23 @@ pub fn paint(p: &Painter, rect: Rect, icon: Icon, color: Color32) {
             line(&[(12.6, 1.8), (12.7, 4.7), (9.9, 4.9)]);
             line(&[(3.4, 14.2), (3.3, 11.3), (6.1, 11.1)]);
         }
+        Icon::Help => {
+            let (hook, dot) = help_glyph();
+            p.add(Shape::line(hook.iter().map(|q| at(q.x, q.y)).collect(), stroke));
+            // The dot: a disc the stroke's width across.
+            p.circle_filled(at(dot.x, dot.y), stroke.width * 0.6, color);
+        }
     }
+}
+
+/// The "?" on the 16 grid: its hook (an arc over the top, then the stem down the middle) and the dot's centre.
+/// Its ink sits in the sync glyph's 12 px box (2..14).
+pub fn help_glyph() -> (Vec<Pos2>, Pos2) {
+    use std::f32::consts::PI;
+    let mut hook = arc_points(pos2(8.0, 5.75), 3.0, PI, PI * 2.4, 16);
+    hook.push(pos2(8.0, 9.25));
+    hook.push(pos2(8.0, 10.25));
+    (hook, pos2(8.0, 13.0))
 }
 
 const BUTTON: f32 = 32.0;
@@ -58,20 +76,11 @@ pub fn icon_button(ui: &mut Ui, icon: Icon, tip: &str, p: &Palette) -> Response 
     resp.on_hover_text(tip)
 }
 
-/// The 32×32 frame with a short text glyph (e.g. "?") in place of an icon; bold, to match the icon's weight.
-pub fn text_button(ui: &mut Ui, text: &str, tip: &str, p: &Palette) -> Response {
-    let (rect, resp) = ui.allocate_exact_size(Vec2::splat(BUTTON), Sense::click());
-    button_frame(ui, rect, resp.hovered(), p);
-    // Regular 15, matching the sync icon's regular stroke beside it.
-    ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, text, crate::theme::body(15.0), p.text);
-    resp.on_hover_text(tip)
-}
-
 /// The same 32×32 frame with a spinner the size of the sync glyph it replaces, so nothing grows on ⌘R.
 pub fn spinner_button(ui: &mut Ui, p: &Palette) -> Response {
     let (rect, resp) = ui.allocate_exact_size(Vec2::splat(BUTTON), Sense::hover());
     let glyph = button_frame(ui, rect, false, p);
-    // `text`, like the idle sync glyph it replaces, on the glyph's own 5.5/16 arc radius.
+    // `text`, like the idle sync glyph it replaces, its ring in the glyph's 12 px ink box (`spinner_arc`).
     paint_spinner(ui, Rect::from_center_size(glyph.center(), Vec2::splat(spinner_box(GLYPH))), p.text);
     resp
 }
@@ -94,6 +103,16 @@ pub fn spinner(ui: &mut Ui, size: f32, p: &Palette) -> Response {
     resp
 }
 
+/// The sync glyph's ink box at 16 px: its 5.5 arc and 1.5 stroke, 12 across.
+pub const ICON_INK: f32 = 12.0;
+
+/// Every spinner's ring as (radius, stroke): the sync glyph's 1.5 stroke, its ink exactly ICON_INK across
+/// (it was 12.75 with a 1.75 stroke on a 5.5 radius), centred in whatever slot holds it.
+pub fn spinner_arc() -> (f32, f32) {
+    let width = 1.5;
+    ((ICON_INK - width) / 2.0, width)
+}
+
 /// A three-quarter ring turning once a second, centred in `rect`, the same in both themes.
 fn paint_spinner(ui: &Ui, rect: Rect, color: Color32) {
     if !ui.is_rect_visible(rect) {
@@ -102,9 +121,9 @@ fn paint_spinner(ui: &Ui, rect: Rect, color: Color32) {
     ui.ctx().request_repaint();
     let t = ui.input(|i| i.time) as f32;
     let start = t * std::f32::consts::TAU;
-    let r = rect.width().min(rect.height()) / 2.0 - 1.0;
+    let (r, width) = spinner_arc();
     let pts = arc_points(rect.center(), r, start, start + std::f32::consts::TAU * 0.75, 24);
-    ui.painter().add(Shape::line(pts, Stroke::new(1.75, color)));
+    ui.painter().add(Shape::line(pts, Stroke::new(width, color)));
 }
 
 #[cfg(test)]
@@ -128,8 +147,25 @@ mod tests {
 
     #[test]
     fn header_spinner_matches_the_sync_glyph() {
-        // paint_spinner's radius is box / 2 − 1: the glyph's 5.5 px arc at 16 px.
-        assert_eq!(spinner_box(GLYPH) / 2.0 - 1.0, 5.5);
-        assert_eq!(spinner_box(GLYPH), INLINE_SPINNER, "one spinner size");
+        // The slot stays 13 (nothing moves); the ring's ink is the icon's 12 px box.
+        assert_eq!(spinner_box(GLYPH), INLINE_SPINNER, "one spinner slot");
+        let (r, w) = spinner_arc();
+        assert_eq!(2.0 * r + w, ICON_INK, "ring ink across");
+        assert!(2.0 * r + w <= INLINE_SPINNER, "inside its slot");
+        assert_eq!(w, 1.5, "the icon's stroke");
+    }
+
+    #[test]
+    fn help_glyph_sits_in_the_icon_box() {
+        let (hook, dot) = help_glyph();
+        let half = 0.75;
+        let top = hook.iter().map(|q| q.y).fold(f32::INFINITY, f32::min) - half;
+        let bottom = dot.y + 1.5 * 0.6;
+        assert!(top >= 2.0 - 1e-3 && bottom <= 14.0, "{top} {bottom}");
+        assert!(hook.iter().all(|q| (2.0..=14.0).contains(&q.x)));
+        // The stem ends above the dot with a clear gap, both on the glyph's centre line.
+        let stem = hook.last().unwrap();
+        assert_eq!((stem.x, dot.x), (8.0, 8.0));
+        assert!(dot.y - stem.y >= 2.0);
     }
 }

@@ -225,7 +225,7 @@ pub fn hints(c: HintContext) -> &'static [Hint] {
             &[K("⌘O"), W("open")],
             &[K("?"), W("help")],
         ],
-        HintContext::Placeholder => &[&[K("⌘1"), W("issues")], &[K("?"), W("help")]],
+        HintContext::Placeholder => &[&[K("⌘1"), W("Issues")], &[K("?"), W("help")]],
         HintContext::SignIn => &[&[K("Enter"), W("sign in")]],
         HintContext::Browse => &[&[K("j/k"), W("or"), K("↑/↓"), W("move")], &[K("⌘K"), W("go to")], &[K("⌘F"), W("search")], &[K("?"), W("help")]],
         HintContext::BrowseSearch => {
@@ -311,7 +311,7 @@ mod tests {
         assert_eq!(hint_context(search(true)), SelectedSearch, "a search on screen keeps Esc clear after the box blurs");
         assert_eq!(hint_context(search(false)), BrowseSearch);
         let soon = HintState { placeholder: true, ..HintState::new(Focus::None) };
-        assert_eq!(hint_text(hints(hint_context(soon))), "⌘1 issues · ? help");
+        assert_eq!(hint_text(hints(hint_context(soon))), "⌘1 Issues · ? help");
         assert_eq!(hint_context(HintState { help_open: true, ..soon }), Help, "help still wins");
         assert_eq!(hint_text(hints(BrowseSearch)), "j/k or ↑/↓ move · Esc clear · ⌘K go to · ⌘F search · ? help");
         assert!(hint_text(hints(SelectedSearch)).starts_with("j/k or ↑/↓ move · Esc clear · t transition"));

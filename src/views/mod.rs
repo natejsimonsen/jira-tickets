@@ -102,8 +102,9 @@ pub fn underline_rect(tab_x: egui::Rangef, rule: egui::Rect) -> egui::Rect {
 
 /// Gap between tabs.
 const TAB_GAP: f32 = 24.0;
-/// Gap from the title to the first tab: TAB_GAP (round-6 ruling); the title's weight sets it apart.
-const TITLE_GAP: f32 = 24.0;
+/// Gap from the title to the first tab: 32, a step past TAB_GAP, so the title never reads as a fifth tab
+/// (round-10 ruling, final).
+const TITLE_GAP: f32 = 32.0;
 /// Gap between the signed-in name and "Read-only": a muted "·" centred in it, 8 either side.
 const NAME_GAP: f32 = 20.0;
 /// The longest the signed-in name may grow leftward, in "m" glyphs of the 12 px name font; longer names are cut.
@@ -223,7 +224,7 @@ fn header(app: &mut App, ui: &mut Ui, p: &Palette) -> (egui::Rect, Option<egui::
                 });
                 let ro = read_only.then(|| painter.layout_no_wrap("Read-only".into(), theme::body(12.0), p.muted));
                 let at = header_right(right, name.as_ref().map(|(g, _)| g.size().x), ro.as_ref().map(|g| g.size().x));
-                let help = icons::text_button(ui, "?", "Keyboard help (?)", p);
+                let help = icons::icon_button(ui, icons::Icon::Help, "Keyboard help (?)", p);
                 if help.clicked() {
                     app.actions.push(Action::ToggleHelp);
                 }
@@ -989,7 +990,7 @@ mod widget_tests {
         assert_eq!((u.top(), u.bottom(), u.width()), (47.0, 49.0, 50.0), "2 pt, over the rule's y-range");
         assert!(u.top() < rule.top() && u.bottom() == rule.bottom());
         assert_eq!(BAR_H, 48.0);
-        assert_eq!(TITLE_GAP, TAB_GAP);
+        assert_eq!((TITLE_GAP, TAB_GAP), (32.0, 24.0), "32 after the title (final ruling)");
     }
 
     #[test]
