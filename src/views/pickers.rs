@@ -154,9 +154,12 @@ pub fn note_gap(block_h: f32, rows_h: f32, note_h: f32) -> f32 {
     (block_h - rows_h - note_h).max(0.0)
 }
 
-/// The app's one single-line input (`views::input_field`): text and placeholder from the same 12 px inset.
+/// A picker row's text inset (its frame margin): fields in pickers share it.
+pub const ROW_INSET: f32 = 8.0;
+
+/// The app's one single-line input (`views::input_field`), its text and placeholder at the rows' 8 px inset.
 fn field<'a>(text: &'a mut String, hint: &str, p: &Palette) -> egui::TextEdit<'a> {
-    crate::views::input_field(text, hint, theme::body(14.0), p)
+    crate::views::input_field(text, hint, theme::body(14.0), p).margin(crate::views::input_margin(ROW_INSET))
 }
 
 /// A small muted label, 4 px, then the field (full width).
@@ -204,7 +207,7 @@ fn rows(ui: &mut egui::Ui, p: &Palette, names: Vec<Row>, confirm: &mut bool, cur
             row_list(ui, p, &names, confirm, cursor);
             if let Some(note) = note {
                 ui.add_space(note_gap(h, ui.cursor().top() - top, ROW_H));
-                Frame::new().inner_margin(Margin::symmetric(8, 6)).show(ui, |ui| {
+                Frame::new().inner_margin(Margin::symmetric(ROW_INSET as i8, 6)).show(ui, |ui| {
                     ui.set_min_height(ROW_H - 12.0);
                     ui.label(RichText::new(note).size(12.0).color(p.muted));
                 });
@@ -224,7 +227,7 @@ fn row_list(ui: &mut egui::Ui, p: &Palette, names: &[Row], confirm: &mut bool, c
             let r = Frame::new()
                 .fill(fill)
                 .corner_radius(4)
-                .inner_margin(Margin::symmetric(8, 6))
+                .inner_margin(Margin::symmetric(ROW_INSET as i8, 6))
                 .show(ui, |ui| {
                     ui.set_width(ui.available_width());
                     ui.set_min_height(ROW_H - 12.0);
@@ -255,6 +258,12 @@ mod tests {
         assert_eq!(super::note_gap(300.0, 60.0, 30.0), 210.0, "two rows: the note drops to the block's bottom");
         assert_eq!(super::note_gap(300.0, 270.0, 30.0), 0.0, "a full list: right under the rows");
         assert_eq!(super::note_gap(300.0, 290.0, 30.0), 0.0);
+    }
+
+    #[test]
+    fn picker_fields_share_the_row_inset() {
+        assert_eq!(crate::views::input_margin(super::ROW_INSET).left, 8);
+        assert_eq!(crate::views::input_margin(crate::views::INPUT_PAD_X).left, 12, "page inputs keep 12");
     }
 
     #[test]

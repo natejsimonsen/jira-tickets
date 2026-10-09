@@ -384,10 +384,9 @@ pub fn hint_bar_height(app: &App) -> Option<f32> {
     app.client.is_some().then_some(issues::HINT_BAR_H)
 }
 
-/// The toast's edge: none in light (the shadow separates the dark fill from the page; a `border` rim read as a
-/// halo); in dark a warm step lighter than the fill so it separates from the near-black page.
-pub fn toast_stroke(p: &Palette) -> Stroke {
-    if p.dark { Stroke::new(1.0, Color32::from_rgb(0x63, 0x62, 0x5b)) } else { Stroke::NONE }
+/// The toast's edge: none in either theme; its shadow separates it from the page.
+pub fn toast_stroke(_p: &Palette) -> Stroke {
+    Stroke::NONE
 }
 
 /// How far the toast's bottom sits above the window bottom: 16 px above the hint bar when one shows, else 24 px.
@@ -397,7 +396,7 @@ pub fn toast_offset(hint_bar: Option<f32>) -> f32 {
 
 /// The toast's dot marks its type only: green for done, red for failures, none for a notice (read-only
 /// refusals, "No changes"). The toast is a dark fill in both themes, so the dot takes the dark palette's tokens.
-/// The failure dot: off_track lifted a step, so it holds 3:1 on the dark toast fill (#57564f).
+/// The failure dot: off_track lifted a step, so it holds 3:1 on the dark toast fill (#575753).
 const TOAST_ERROR_DOT: Color32 = Color32::from_rgb(0xf4, 0x8a, 0x83);
 
 pub fn toast_dot(kind: crate::app::ToastKind) -> Option<Color32> {
@@ -459,7 +458,8 @@ pub const BUTTON_H: f32 = 28.0;
 
 /// The page dimming behind a modal: light needs much less to read as "behind" (100 dimmed it 2.78:1).
 pub fn backdrop_alpha(p: &Palette) -> u8 {
-    if p.dark { 110 } else { 64 }
+    // Dark 110 is a final ruling; light 48 leaves the page about #c9c9c5.
+    if p.dark { 110 } else { 48 }
 }
 
 /// A dialog's cursor row: `selected_row` in light; #4a4a47 in dark, where selected_row sat 1.16:1 off the
@@ -533,7 +533,12 @@ pub fn input_field<'a>(text: &'a mut String, hint: &str, font: egui::FontId, p: 
 
 /// An input's margin: 12 either side; 2 above and 5 below, so the centred line box (whose leading sits under
 /// the glyphs) puts the text's ink, not its box, on the field's centre (it read 1.5 px low at 4/4).
-const INPUT_MARGIN: Margin = Margin { left: INPUT_PAD_X as i8, right: INPUT_PAD_X as i8, top: 2, bottom: 5 };
+const INPUT_MARGIN: Margin = input_margin(INPUT_PAD_X);
+
+/// An input's margin for a text inset of `pad_x` (12 on the page, the picker rows' 8 in picker dialogs).
+pub const fn input_margin(pad_x: f32) -> Margin {
+    Margin { left: pad_x as i8, right: pad_x as i8, top: 2, bottom: 5 }
+}
 
 /// A modal dialog's fill: plain surface in light; in dark #333331, a step past surface_2, so the dialog lifts
 /// off the dimmed page about as far as the light one does (the backdrop stays at 110).
@@ -923,8 +928,15 @@ mod widget_tests {
                 assert!(theme::contrast(c, p.tooltip) >= 3.0, "dark={} {k:?}: {:.2}", p.dark, theme::contrast(c, p.tooltip));
             }
         }
-        let warm = theme::DARK.tooltip;
-        assert!(warm.r() >= warm.b(), "the dark toast fill is a warm neutral");
+        let fill = theme::DARK.tooltip;
+        let (b, f) = (theme::DARK.border, fill);
+        // Neutral like `border`: R = G, B a touch lower in the same ratio.
+        assert_eq!(f.r(), f.g());
+        assert!(((f32::from(f.b()) / f32::from(f.r())) - (f32::from(b.b()) / f32::from(b.r()))).abs() < 0.01, "{f:?}");
+        assert!(theme::contrast(theme::DARK.tooltip_text, fill) >= 6.0, "{:.2}", theme::contrast(theme::DARK.tooltip_text, fill));
+        for p in [&theme::LIGHT, &theme::DARK] {
+            assert_eq!(toast_stroke(p), Stroke::NONE, "shadow only (dark={})", p.dark);
+        }
     }
 
     #[test]
