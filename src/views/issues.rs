@@ -213,7 +213,8 @@ pub fn shorten_epic(name: &str, max_chars: usize) -> String {
         out = out[..out.len() - last.len()].trim_end().to_string();
     }
     if out.is_empty() {
-        out = base.chars().take(room).collect();
+        let kept: String = base.chars().take(room).collect();
+        out = crate::views::pill_back_off(&kept, &base[kept.len()..]).unwrap_or(&kept).to_string();
     }
     format!("{}…", out.trim_end())
 }
@@ -350,8 +351,8 @@ fn text_focus(ui: &Ui, app: &App) -> crate::keys::Focus {
 /// Below this window width the list pane takes a 45% share, held back so the description keeps 400 px.
 const NARROW: f32 = 1200.0;
 /// What the detail pane needs beside the list below NARROW: its 16 + 16 margins, a 400 px description
-/// column, the 16 px gutter and the 140 px fields column (`detail::detail_columns`).
-const NARROW_DETAIL_MIN: f32 = 32.0 + 400.0 + 16.0 + 140.0;
+/// column, the 24 px gutter and the 132 px fields column (`detail::detail_columns`).
+pub const NARROW_DETAIL_MIN: f32 = 32.0 + 400.0 + 24.0 + 132.0;
 
 /// The list pane's default width and the range it may be dragged in: 42% of the window (360–720) when
 /// wide; below NARROW 45% of the window, but never so wide that the description column drops under 400.
@@ -716,7 +717,11 @@ fn filters(app: &mut App, ui: &mut Ui, p: &Palette) {
             app.actions.push(Action::RunSearch(String::new()));
         }
     }
-    let r = ui.add(crate::views::input_field(&mut app.filter.text, SEARCH_HINT, theme::body(14.0), p).id(id));
+    let r = ui.add(
+        crate::views::input_field(&mut app.filter.text, SEARCH_HINT, theme::body(14.0), p)
+            .margin(crate::views::input_margin(crate::views::SEARCH_PAD_X))
+            .id(id),
+    );
     if r.changed() {
         app.text_edited = Some(std::time::Instant::now());
     }
@@ -878,6 +883,7 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
     ui.spacing_mut().scroll.fade = egui::style::ScrollFadeStyle { strength: 0.0, size: 0.0 };
     let mut row_spans: Vec<(f32, f32)> = Vec::with_capacity(rows.len());
     let mut selected_rect: Option<(Rect, usize)> = None;
+    let mut row_x: Option<egui::Rangef> = None;
     let out = egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
         ui.spacing_mut().item_spacing.y = ROW_GAP;
         for (idx, i) in rows.iter().enumerate() {
@@ -952,7 +958,7 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
                             let text = if *kind == PillKind::Epic {
                                 fit_epic(&source, w - pad, measure)
                             } else {
-                                crate::views::truncate_text(&source, w - pad, measure)
+                                crate::views::truncate_pill(&source, w - pad, measure)
                             };
                             let r = match look {
                                 PillLook::Tint(bg, fg) => pill_outlined(ui, &text, *bg, *fg),
@@ -973,12 +979,17 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
                 });
             let rect = r.response.rect;
             row_spans.push((rect.top(), rect.bottom()));
+            row_x = Some(rect.x_range());
             let mut r = ui.interact(rect, row_id(&i.key), Sense::click());
             if let Some(tip) = r.hover_pos().and_then(|at| tips.iter().find(|(t, _)| t.contains(at))).map(|(_, t)| t.clone()) {
                 r = r.on_hover_text(tip);
             }
             let fill = row_fill(is_sel, r.hovered(), p);
             ui.painter().set(bg, egui::epaint::RectShape::filled(rect, corners, fill));
+            if RIGHT_EDGE_OPEN {
+                let (x, top, bottom) = right_border_cover(rect);
+                ui.painter().vline(x, top..=bottom, Stroke::new(1.0, fill));
+            }
             if let Some(t) = epic {
                 // Over the card's left border, on whole physical pixels, so no sliver of the page shows between
                 // the stripe and the fill.
@@ -1005,15 +1016,20 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
         if let Some((rect, idx)) = selected_rect {
             let edge = crate::views::selected_edge(p);
             for (y, inset) in selected_dividers(rect, idx, rows.len()) {
-                ui.painter().hline(rect.x_range().shrink(inset), y, Stroke::new(1.0, edge));
+                ui.painter().hline(egui::Rangef::new(rect.left() + inset, rect.right()), y, Stroke::new(1.0, edge));
             }
         }
         // Room under the last row, so a toast (anchored above the hint bar) never covers it.
         ui.add_space(LIST_BOTTOM_PAD);
     });
     let view = out.inner_rect;
+    // A row showing less than CLIP_MIN at the bottom is hidden: the list ends on the last whole row's border.
+    let sliver = bottom_sliver(&row_spans, view.bottom());
+    if let (Some((top, bottom)), Some(x)) = (sliver, row_x) {
+        ui.painter().rect_filled(Rect::from_x_y_ranges(x, top..=bottom), 0.0, p.bg);
+    }
     // More rows below the viewport: a 1 px rule at its bottom edge says so, without dimming any row.
-    if more_below(&row_spans, view.bottom()) {
+    if sliver.is_none() && more_below(&row_spans, view.bottom()) {
         ui.painter().hline(view.x_range(), view.bottom() - 0.5, Stroke::new(1.0, p.border));
     }
     let fade = p.bg.gamma_multiply(FADE_STRENGTH);
@@ -1041,6 +1057,13 @@ const FADE_STRENGTH: f32 = 0.5;
 pub fn fade_strip(rows: &[(f32, f32)], edge: f32, bottom: bool) -> Option<(f32, f32)> {
     let &(top, bot) = rows.iter().find(|(t, b)| *t < edge && edge < *b)?;
     if bottom { (bot - edge > CLIP_MIN).then(|| (top.max(edge - FADE_MAX), edge)) } else { (edge - top > CLIP_MIN).then(|| (edge, bot.min(edge + FADE_MAX))) }
+}
+
+/// The strip to hide at the viewport's bottom: a row showing less than CLIP_MIN there, from just under the
+/// previous row's border (rows share their 1 px seam) to the edge, as (top, bottom).
+pub fn bottom_sliver(rows: &[(f32, f32)], edge: f32) -> Option<(f32, f32)> {
+    let &(top, _) = rows.iter().find(|(t, b)| *t < edge && edge < *b)?;
+    (edge - top < CLIP_MIN).then_some((top + 1.0, edge))
 }
 
 /// Whether any row reaches past the viewport's bottom edge (by more than half a pixel).
@@ -1088,7 +1111,8 @@ pub fn stripe_rect(row: Rect, ppp: f32) -> Rect {
 }
 
 /// The selected row's two rules, as (centre y, inset from each end): its top and bottom dividers in the
-/// selected-row edge, on the list frame too at the outer edges (inset by the corner radius).
+/// selected-row edge, on the list frame too at the outer edges (inset by the corner radius on the left; the right
+/// side is square).
 pub fn selected_dividers(rect: Rect, idx: usize, n: usize) -> Vec<(f32, f32)> {
     // An outer edge (the first row's top, the last row's bottom) is the list frame's rounded border: the rule
     // goes over it too, stopping where the corners start.
@@ -1113,11 +1137,21 @@ pub fn status_fill(t: &theme::Tint, p: &Palette, selected: bool) -> egui::Color3
 /// A neutral status fill must stand this far off the selected row, or it steps (`status_fill`).
 const SELECTED_PILL_STEP: f32 = 1.12;
 
-/// The list's outer corners are rounded (6); the seams between rows are square.
+/// The list's outer left corners are rounded (6); the seams between rows are square, and so is the right side,
+/// which has no border (`RIGHT_EDGE_OPEN`): the pane divider 16 px away is the one rule there (K3).
 pub fn row_corners(idx: usize, n: usize) -> CornerRadius {
     let r = theme::RADIUS;
     let (top, bottom) = (if idx == 0 { r } else { 0 }, if idx + 1 == n { r } else { 0 });
-    CornerRadius { nw: top, ne: top, sw: bottom, se: bottom }
+    CornerRadius { nw: top, ne: 0, sw: bottom, se: 0 }
+}
+
+/// The list card draws no right border (two parallel rules 16 apart with the pane divider read as noise).
+pub const RIGHT_EDGE_OPEN: bool = true;
+
+/// The span over a row's right border to paint in the row's fill, as (x, top, bottom): the 1 px column inside
+/// its right edge, between the top and bottom borders, so those still run to the edge.
+pub fn right_border_cover(rect: Rect) -> (f32, f32, f32) {
+    (rect.right() - 0.5, rect.top() + 1.0, rect.bottom() - 1.0)
 }
 
 fn row_id(key: &str) -> egui::Id {
@@ -1485,6 +1519,7 @@ mod tests {
         assert_eq!(shorten_epic("Cost Insights & Analytics", 12), "Cost…");
         assert_eq!(shorten_epic("Observability and dashboards", 20), "Observability…", "no dangling connector");
         assert_eq!(shorten_epic("Supercalifragilistic", 8), "Superca…", "one long word: cut as a last resort");
+        assert_eq!(shorten_epic("secondary-Environment", 12), "secondary…", "no hyphen stub (K2)");
         assert!(shorten_epic("Cluster (on-prem migration) upgrades", 12).ends_with('…'));
         let m = |t: &str| t.chars().count() as f32 * 7.0;
         assert_eq!(fit_epic("Cluster (on-prem)", 100.0, m), "Cluster");
@@ -1543,10 +1578,13 @@ mod tests {
     #[test]
     fn only_the_list_ends_are_rounded() {
         let r = |nw, ne, sw, se| CornerRadius { nw, ne, sw, se };
-        assert_eq!(row_corners(0, 1), r(6, 6, 6, 6));
-        assert_eq!(row_corners(0, 3), r(6, 6, 0, 0));
+        assert_eq!(row_corners(0, 1), r(6, 0, 6, 0));
+        assert_eq!(row_corners(0, 3), r(6, 0, 0, 0));
         assert_eq!(row_corners(1, 3), r(0, 0, 0, 0));
-        assert_eq!(row_corners(2, 3), r(0, 0, 6, 6));
+        assert_eq!(row_corners(2, 3), r(0, 0, 6, 0));
+        // No right border: the cover sits on its 1 px column, inside the top and bottom borders.
+        let rect = Rect::from_min_max(egui::pos2(0.0, 10.0), egui::pos2(300.0, 52.0));
+        assert_eq!(right_border_cover(rect), (299.5, 11.0, 51.0));
     }
 
     #[test]
@@ -1566,6 +1604,15 @@ mod tests {
         assert_eq!(fade_strip(&rows, 200.0, true), None, "nothing at the edge");
         assert_eq!(fade_strip(&rows, 20.0, false), Some((20.0, 44.0)), "the same rule at the top");
         assert_eq!(fade_strip(&rows, 5.0, false), None);
+    }
+
+    #[test]
+    fn a_bottom_sliver_is_hidden() {
+        let rows = [(0.0, 44.0), (43.0, 87.0), (86.0, 130.0)];
+        assert_eq!(bottom_sliver(&rows, 92.0), Some((87.0, 92.0)), "6 px of the next row: hidden under the seam");
+        assert_eq!(bottom_sliver(&rows, 100.0), None, "14 px shows (and fades)");
+        assert_eq!(bottom_sliver(&rows, 130.0), None, "every row whole");
+        assert_eq!(bottom_sliver(&rows, 87.0), Some((87.0, 87.0)), "only the shared seam: nothing to cover");
     }
 
     #[test]

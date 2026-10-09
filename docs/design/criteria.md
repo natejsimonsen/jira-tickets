@@ -58,3 +58,5 @@ These were decided in earlier rounds; raters treat them as correct and do not sc
   their left and grow leftward, so the buttons never move whatever the name.
 - **Disabled buttons.** One disabled style: the neutral fill with a `muted` label (e.g. Comment with an empty
   draft); it is not a contrast defect.
+- **Field insets.** The list pane's search box insets its text 12, like the combos and chips on the rows above
+  it; dialog fields (go-to, pickers, sign-in) inset 8 to line up with their dialog rows. Both are correct.

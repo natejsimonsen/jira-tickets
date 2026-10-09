@@ -536,8 +536,11 @@ pub fn field_hint(text: &str, font: egui::FontId, p: &Palette) -> egui::text::La
     job
 }
 
-/// Every input's text (and placeholder) inset: 8, one input padding (round 8: sign-in read 10, pickers 8).
+/// Every dialog field's text (and placeholder) inset: 8, aligned with the dialog's rows (round 8: sign-in read 10,
+/// pickers 8).
 pub const INPUT_PAD_X: f32 = 8.0;
+/// The list pane's search box inset: 12, like the combos and chips on the rows above it (B2 ruling).
+pub const SEARCH_PAD_X: f32 = 12.0;
 
 /// Height of every single-line input (search, go-to, token, picker fields): BUTTON_H, like every control.
 pub const INPUT_H: f32 = BUTTON_H;
@@ -607,6 +610,12 @@ pub fn chip_width(label_w: f32) -> f32 {
     (2.0 * CHIP_PAD + label_w).ceil()
 }
 
+/// `rect` moved onto whole points, keeping its size (at least BUTTON_H tall), so a chip on a half-point row
+/// draws 28 px edges, not 27 and a blurred half (B3).
+pub fn whole_points(rect: egui::Rect) -> egui::Rect {
+    egui::Rect::from_min_size(rect.min.round(), vec2(rect.width(), rect.height().max(BUTTON_H)))
+}
+
 /// A config name in sentence case for a chip: words after the first are lowercased unless they are
 /// acronyms (two or more capitals, e.g. "PLAT", "JQL"). "Only Opened" → "Only opened", "To Do" → "To do".
 pub fn sentence_case(name: &str) -> String {
@@ -629,6 +638,7 @@ pub fn toggle_chip(ui: &mut Ui, text: &str, active: bool, p: &Palette) -> egui::
     let w = chip_width(label.size().x);
     let (rect, resp) = ui.allocate_exact_size(vec2(w, BUTTON_H), Sense::click());
     resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, active, text));
+    let rect = whole_points(rect);
     if ui.is_rect_visible(rect) {
         let (fill, stroke) = match (active, resp.hovered()) {
             (true, _) => (active_chip_fill(p), active_chip_fill(p)),
@@ -759,17 +769,48 @@ pub fn pill_sized(ui: &mut Ui, text: &str, bg: Color32, fg: Color32, stroke: Str
 
 /// `text` cut to fit `max_w` (as `measure` lays it out) with "…"; trailing whitespace is trimmed before the
 /// ellipsis. Unchanged when it already fits.
-/// `truncate_text` for titles: a cut that leaves a word fragment of 3 characters or fewer ("…to PR c…") backs
-/// up to the end of the previous word instead ("…to PR…").
+/// `truncate_text` for titles: a cut inside a word (a run of letters, digits and `/-_`) always backs up to the
+/// last whitespace ("…reusable workflo…" → "…reusable…"); only a single word that fills the column is cut
+/// mid-word. Trailing `,;:` go before the "…" ("sign-ins,…" → "sign-ins…").
 pub fn truncate_title(text: &str, max_w: f32, measure: impl Fn(&str) -> f32) -> String {
     let cut = truncate_text(text, max_w, measure);
     let Some(kept) = cut.strip_suffix('…') else { return cut };
-    // Mid-word: the original continues with a letter or digit right after what was kept.
-    let mid_word = text[kept.len()..].starts_with(|c: char| c.is_alphanumeric());
-    match kept.rfind(char::is_whitespace) {
-        Some(at) if mid_word && kept[at..].trim().chars().count() <= 3 && !kept[..at].trim().is_empty() => format!("{}…", kept[..at].trim_end()),
-        _ => cut,
+    let word = |c: char| c.is_alphanumeric() || matches!(c, '/' | '-' | '_');
+    // Mid-word: the kept text ends inside a word that the original continues.
+    let mid_word = kept.ends_with(|c: char| !c.is_whitespace()) && text[kept.len()..].starts_with(word);
+    let kept = match kept.rfind(char::is_whitespace) {
+        Some(at) if mid_word && !kept[..at].trim().is_empty() => &kept[..at],
+        _ => kept,
+    };
+    format!("{}…", trim_trailing_punctuation(kept))
+}
+
+/// `kept` without trailing whitespace and `,;:`, so an ellipsis never follows a dangling comma.
+fn trim_trailing_punctuation(kept: &str) -> &str {
+    let t = kept.trim_end_matches(|c: char| c.is_whitespace() || matches!(c, ',' | ';' | ':'));
+    if t.is_empty() { kept.trim_end() } else { t }
+}
+
+/// `truncate_text` for pills: a cut leaving a word fragment of 3 characters or fewer after the last space or
+/// hyphen ("secondary-E…") backs up to that boundary ("secondary…").
+pub fn truncate_pill(text: &str, max_w: f32, measure: impl Fn(&str) -> f32) -> String {
+    let cut = truncate_text(text, max_w, measure);
+    let Some(kept) = cut.strip_suffix('…') else { return cut };
+    match pill_back_off(kept, &text[kept.len()..]) {
+        Some(k) => format!("{k}…"),
+        None => cut,
     }
+}
+
+/// The pill cut rule (`truncate_pill`): `kept` backed up to its last space or hyphen when it ends in a fragment
+/// of ≤ 3 characters that `rest` continues; None when the cut stands.
+pub fn pill_back_off<'a>(kept: &'a str, rest: &str) -> Option<&'a str> {
+    if !rest.starts_with(char::is_alphanumeric) || !kept.ends_with(char::is_alphanumeric) {
+        return None;
+    }
+    let at = kept.rfind(|c: char| c.is_whitespace() || c == '-')?;
+    let prefix = kept[..at].trim_end_matches(|c: char| c.is_whitespace() || c == '-');
+    (kept[at..].trim_start_matches(|c: char| c.is_whitespace() || c == '-').chars().count() <= 3 && !prefix.is_empty()).then_some(prefix)
 }
 
 pub fn truncate_text(text: &str, max_w: f32, measure: impl Fn(&str) -> f32) -> String {
@@ -820,7 +861,10 @@ mod widget_tests {
     fn chips_pad_12_either_side() {
         assert_eq!(chip_width(40.0), 64.0);
         assert_eq!(chip_width(40.2), 65.0);
-        assert_eq!(INPUT_PAD_X, 8.0, "one input padding");
+        assert_eq!(INPUT_PAD_X, 8.0, "dialog fields");
+        assert_eq!(SEARCH_PAD_X, CHIP_PAD, "the search box lines up with the chips and combos");
+        let r = whole_points(egui::Rect::from_min_size(egui::pos2(10.5, 40.5), vec2(64.0, BUTTON_H)));
+        assert_eq!((r.min, r.height()), (egui::pos2(11.0, 41.0), 28.0), "whole points, 28 tall");
         assert_eq!(INPUT_H, BUTTON_H, "one control height");
     }
 
@@ -843,8 +887,24 @@ mod widget_tests {
         assert_eq!(truncate_text("ééééé", 3.0, w), "éé…", "char boundaries");
         assert_eq!(truncate_title("Move the chart to PR checks", 23.0, w), "Move the chart to PR…", "a 1-letter fragment backs up a word");
         assert_eq!(truncate_title("Move the chart to PR checks", 21.0, w), "Move the chart to PR…", "an exact word end stays");
-        assert_eq!(truncate_title("Move the chart to PR checks", 26.0, w), "Move the chart to PR chec…", "a 4-letter fragment stays");
+        assert_eq!(truncate_title("Move the chart to PR checks", 26.0, w), "Move the chart to PR…", "any fragment backs up a word");
         assert_eq!(truncate_title("Supercalifragilistic", 3.0, w), "Su…", "one long word is still cut");
+        assert_eq!(truncate_title("Build a reusable workflow for it", 25.0, w), "Build a reusable…");
+        assert_eq!(truncate_title("Move secondary-Environment checks", 20.0, w), "Move…", "a hyphen run is one word");
+        assert_eq!(truncate_title("Fix ci/cd-pipeline_steps now", 12.0, w), "Fix…", "/ and _ too");
+        assert_eq!(truncate_title("Support sign-ins, logins and more", 18.0, w), "Support sign-ins…", "a trailing comma goes");
+        assert_eq!(truncate_title("One: two three", 6.0, w), "One…", "a trailing colon goes");
+        assert_eq!(truncate_title("Alpha beta", 8.0, w), "Alpha…");
+    }
+
+    #[test]
+    fn pill_cuts_back_up_to_a_space_or_hyphen() {
+        let w = |t: &str| t.chars().count() as f32;
+        assert_eq!(truncate_pill("secondary-Environment", 12.0, w), "secondary…", "hyphen is a boundary for pills");
+        assert_eq!(truncate_pill("secondary-Environment", 15.0, w), "secondary-Envi…", "a 4-letter fragment stays");
+        assert_eq!(truncate_pill("Platform Team", 11.0, w), "Platform…");
+        assert_eq!(truncate_pill("Supercalifragilistic", 5.0, w), "Supe…", "one word is still cut");
+        assert_eq!(truncate_pill("short", 10.0, w), "short");
     }
 
     #[test]

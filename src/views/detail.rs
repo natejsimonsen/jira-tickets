@@ -269,14 +269,17 @@ const FIELDS_GUTTER: f32 = 24.0;
 /// The description column's widest measure (about 75 characters of 14 px text).
 const MAIN_MAX: f32 = 520.0;
 
-/// (main column, fields column) widths: fields are at least 220 wide, or 140 below a 1200 px window so the
+/// (main column, fields column) widths: fields are at least 220 wide, or 132 below a 1200 px window so the
 /// description keeps its measure; the main column takes the rest (300 to MAIN_MAX), and any room past
 /// MAIN_MAX goes to the fields column.
 pub fn detail_columns(window_w: f32, available: f32) -> (f32, f32) {
-    let fields_min = if window_w < 1200.0 { 140.0 } else { 220.0 };
+    let fields_min = if window_w < 1200.0 { NARROW_FIELDS } else { 220.0 };
     let main = (available - fields_min - FIELDS_GUTTER).clamp(300.0, MAIN_MAX);
     (main, (available - main - FIELDS_GUTTER).max(fields_min))
 }
+
+/// The fields column below a 1200 px window: 132, so the description keeps 400 with the 24 gutter (K1).
+pub const NARROW_FIELDS: f32 = 132.0;
 
 /// Composer box → Comment button.
 const BOX_TO_BUTTON: f32 = 12.0;
@@ -301,7 +304,9 @@ mod tests {
     #[test]
     fn fields_column_narrows_below_1200() {
         assert_eq!(detail_columns(1440.0, 800.0), (520.0, 256.0), "main capped; the rest to the fields");
-        assert_eq!(detail_columns(1000.0, 580.0), (416.0, 140.0));
+        assert_eq!(detail_columns(1000.0, 580.0), (424.0, 132.0));
+        // The narrow pane's reserve holds a 400 description beside the 132 fields and the 24 gutter.
+        assert_eq!(detail_columns(1000.0, crate::views::issues::NARROW_DETAIL_MIN - 32.0), (400.0, NARROW_FIELDS));
         assert_eq!(detail_columns(1000.0, 300.0).0, 300.0, "floor");
         assert_eq!(detail_columns(2560.0, 1800.0).0, MAIN_MAX);
     }
