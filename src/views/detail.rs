@@ -73,6 +73,8 @@ pub fn show(app: &mut App, ui: &mut Ui) {
         ui.add_space(SECTION_GAP);
         let window_w = ui.ctx().content_rect().width();
         ui.horizontal_top(|ui| {
+            // The gutter is FIELDS_GUTTER exactly: no item spacing either side of it.
+            ui.spacing_mut().item_spacing.x = 0.0;
             let (main_w, fields_w) = detail_columns(window_w, ui.available_width());
             ui.allocate_ui_with_layout(vec2(main_w, 0.0), egui::Layout::top_down(egui::Align::Min), |ui| {
                 ui.set_width(main_w);
@@ -89,19 +91,16 @@ pub fn show(app: &mut App, ui: &mut Ui) {
                 // The comment cards and the composer sit 16 below their label (8 already given).
                 ui.add_space(LABEL_TO_BOX - 8.0 - ui.spacing().item_spacing.y);
                 for c in &issue.comments {
-                    // surface_2 with a 1 px border in both themes; code inside steps off it (`chip_fill_on`).
-                    Frame::new().fill(p.surface_2).stroke(Stroke::new(1.0, p.border)).corner_radius(theme::RADIUS).inner_margin(Margin::same(12)).show(
-                        ui,
-                        |ui| {
-                            ui.set_width(ui.available_width());
-                            ui.horizontal(|ui| {
-                                ui.label(RichText::new(&c.author).font(theme::bold(13.5)));
-                                ui.label(RichText::new(short_date(&c.created)).color(p.muted).size(12.0));
-                            });
-                            ui.add_space(4.0);
-                            adf_view::show_value(ui, &c.body, p, p.surface_2);
-                        },
-                    );
+                    // surface_2, fill only (like code blocks), in both themes; code inside steps off it (`chip_fill_on`).
+                    Frame::new().fill(p.surface_2).corner_radius(theme::RADIUS).inner_margin(Margin::same(12)).show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        ui.horizontal(|ui| {
+                            ui.label(RichText::new(&c.author).font(theme::bold(13.5)));
+                            ui.label(RichText::new(short_date(&c.created)).color(p.muted).size(12.0));
+                        });
+                        ui.add_space(4.0);
+                        adf_view::show_value(ui, &c.body, p, p.surface_2);
+                    });
                     ui.add_space(COMMENT_GAP - ui.spacing().item_spacing.y);
                 }
                 // After the cards, 16 to the composer (12 + 4); with no cards it sits 16 below the label like one.
@@ -204,8 +203,8 @@ fn field(ui: &mut Ui, p: &Palette, name: &str, value: &str) {
     ui.add_space(16.0);
 }
 
-/// Gap between the description column and the fields column.
-const FIELDS_GUTTER: f32 = 16.0;
+/// Gap between the description column and the fields column (24; it measured 33 with item spacing on top).
+const FIELDS_GUTTER: f32 = 24.0;
 
 /// The description column's widest measure (about 75 characters of 14 px text).
 const MAIN_MAX: f32 = 520.0;
@@ -247,8 +246,8 @@ mod tests {
 
     #[test]
     fn fields_column_narrows_below_1200() {
-        assert_eq!(detail_columns(1440.0, 800.0), (520.0, 264.0), "main capped; the rest to the fields");
-        assert_eq!(detail_columns(1000.0, 580.0), (424.0, 140.0));
+        assert_eq!(detail_columns(1440.0, 800.0), (520.0, 256.0), "main capped; the rest to the fields");
+        assert_eq!(detail_columns(1000.0, 580.0), (416.0, 140.0));
         assert_eq!(detail_columns(1000.0, 300.0).0, 300.0, "floor");
         assert_eq!(detail_columns(2560.0, 1800.0).0, MAIN_MAX);
     }

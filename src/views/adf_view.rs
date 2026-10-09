@@ -22,7 +22,7 @@ const LIST_ITEM_GAP: f32 = 4.0;
 /// Above a later block (a second paragraph, a nested list) inside one list item.
 const LIST_BLOCK_GAP: f32 = 8.0;
 const BODY: f32 = 14.0;
-/// The bullet's slot: about a numeral's width, so bulleted and numbered text line up.
+/// The bullet's slot at the right of the marker slot: about a numeral's width.
 const BULLET_W: f32 = 10.0;
 /// Inline code is this fraction of the surrounding size, exactly, capped at 0.9× body (so a heading's code
 /// is never the largest mono on screen).
@@ -35,6 +35,29 @@ const CODE_PAD_Y: f32 = 1.0;
 const KEY_SCALE: f32 = 12.5 / 14.0;
 /// Code block line height: 1.48 × mono 12.5.
 const CODE_LINE_H: f32 = 18.5;
+/// A code block's inner margin: 12 to the glyphs on every side. The 18.5 line box carries ~2.5 of leading
+/// above the first line and ~4.5 below the last, so the frame gives 10 / 8 there (measured 14.5 / 16.5 at 12).
+const CODE_MARGIN: Margin = Margin { left: 12, right: 12, top: 10, bottom: 8 };
+/// The marker gutter: list text starts this far from the list's left edge, for bullets and numbers alike.
+const LIST_GUTTER: f32 = 24.0;
+/// Marker → item text.
+const MARKER_GAP: f32 = 6.0;
+
+/// Body line height for a text size: 20 at body 14 (≈1.43, so wrapped lines and their code chips breathe);
+/// the same ratio for headings and table text.
+pub fn line_height(size: f32) -> f32 {
+    (size * 20.0 / BODY).round()
+}
+
+/// The heading sizes: h1–h2 15 bold, h3–h6 14 bold, on the type scale (no 18–22 headings under the 22 title).
+pub fn heading_size(level: u8) -> f32 {
+    if level <= 2 { 15.0 } else { 14.0 }
+}
+
+/// The marker slot (left of MARKER_GAP): fixed so text starts LIST_GUTTER in, unless a number is wider.
+pub fn marker_slot(widest_number: f32) -> f32 {
+    (LIST_GUTTER - MARKER_GAP).max(widest_number.ceil())
+}
 
 /// Space above a heading: 24 except at the top, where the section heading already spaced it.
 pub fn heading_space_above(first: bool) -> f32 {
@@ -64,13 +87,7 @@ fn block(ui: &mut Ui, b: &Block, p: &Palette, size: f32, chip: egui::Color32) {
     match b {
         Block::Paragraph(s) => spans(ui, s, p, size, false, chip),
         Block::Heading { level, spans: s } => {
-            let sz = match level {
-                1 => 22.0,
-                2 => 18.0,
-                3 => 16.0,
-                _ => 14.5,
-            };
-            spans(ui, s, p, sz, true, chip);
+            spans(ui, s, p, heading_size(*level), true, chip);
         }
         Block::List { ordered, items } => {
             for (i, item) in items.iter().enumerate() {
@@ -78,21 +95,19 @@ fn block(ui: &mut Ui, b: &Block, p: &Palette, size: f32, chip: egui::Color32) {
                     ui.add_space(LIST_ITEM_GAP);
                 }
                 ui.horizontal_top(|ui| {
-                    ui.spacing_mut().item_spacing.x = 6.0;
-                    ui.add_space(8.0);
-                    // The marker is body size and muted whatever the item's own font (mono items included).
-                    let line_h = ui.fonts_mut(|f| f.row_height(&theme::body(BODY)));
+                    ui.spacing_mut().item_spacing.x = MARKER_GAP;
+                    // The marker is body size and muted whatever the item's own font (mono items included),
+                    // in a fixed slot so every list's text starts LIST_GUTTER in.
+                    let line_h = line_height(BODY);
+                    let measure = |n: usize| ui.painter().layout_no_wrap(format!("{n}."), theme::body(BODY), p.muted).size().x;
+                    let widest = if *ordered { (1..=items.len()).map(measure).fold(0.0, f32::max) } else { 0.0 };
+                    let (rect, _) = ui.allocate_exact_size(egui::vec2(marker_slot(widest), line_h), egui::Sense::hover());
                     if *ordered {
-                        // Numbers right-aligned in one gutter as wide as the list's widest, so "2." and "10."
-                        // items start on one edge.
-                        let measure = |n: usize| ui.painter().layout_no_wrap(format!("{n}."), theme::body(BODY), p.muted).size().x;
-                        let gutter = number_gutter((1..=items.len()).map(measure));
+                        // Numbers right-aligned against the gap, so "2." and "10." items start on one edge.
                         let g = ui.painter().layout_no_wrap(format!("{}.", i + 1), theme::body(BODY), p.muted);
-                        let (rect, _) = ui.allocate_exact_size(egui::vec2(gutter, line_h), egui::Sense::hover());
-                        ui.painter().galley(egui::pos2(rect.right() - g.size().x, rect.top()), g, p.muted);
+                        ui.painter().galley(egui::pos2(rect.right() - g.size().x, (rect.center().y - g.size().y / 2.0).round()), g, p.muted);
                     } else {
-                        let (rect, _) = ui.allocate_exact_size(egui::vec2(BULLET_W, line_h), egui::Sense::hover());
-                        ui.painter().circle_filled(rect.center(), 2.5, p.muted);
+                        ui.painter().circle_filled(egui::pos2(rect.right() - BULLET_W / 2.0, rect.center().y), 2.5, p.muted);
                     }
                     ui.vertical(|ui| {
                         ui.spacing_mut().item_spacing.y = 0.0;
@@ -107,7 +122,7 @@ fn block(ui: &mut Ui, b: &Block, p: &Palette, size: f32, chip: egui::Color32) {
             }
         }
         Block::Code { text, .. } => {
-            Frame::new().fill(chip).corner_radius(theme::RADIUS).inner_margin(Margin::same(12)).show(ui, |ui| {
+            Frame::new().fill(chip).corner_radius(theme::RADIUS).inner_margin(CODE_MARGIN).show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 ui.label(RichText::new(text).font(theme::mono(12.5)).line_height(Some(CODE_LINE_H)).color(p.text));
             });
@@ -159,13 +174,21 @@ fn block(ui: &mut Ui, b: &Block, p: &Palette, size: f32, chip: egui::Color32) {
 /// in dark). A smart-link issue key is mono like keys elsewhere. Inline code is mono at exactly 0.9× the
 /// surrounding size; its chip is painted under it by `spans` (see `code_runs`).
 fn span_format(sp: &Span, p: &Palette, size: f32, heading: bool) -> TextFormat {
-    let mut fmt = TextFormat { font_id: if sp.bold || heading { theme::bold(size) } else { theme::body(size) }, color: p.text, ..Default::default() };
+    let mut fmt = TextFormat {
+        font_id: if sp.bold || heading { theme::bold(size) } else { theme::body(size) },
+        color: p.text,
+        line_height: Some(line_height(size)),
+        ..Default::default()
+    };
     if sp.code {
+        // Its own natural line box (the row keeps the body's 20), so the chip hugs the glyphs.
+        fmt.line_height = None;
         fmt.font_id = theme::mono(code_size(size));
         // Centre the smaller mono run on the surrounding text's line.
         fmt.valign = egui::Align::Center;
     }
     if is_key_link(sp) {
+        fmt.line_height = None;
         fmt.font_id = theme::mono(size * KEY_SCALE);
         fmt.valign = egui::Align::Center;
     }
@@ -190,11 +213,6 @@ pub fn code_size(size: f32) -> f32 {
 /// A smart link that shows an issue key (an inlineCard to /browse/KEY).
 fn is_key_link(sp: &Span) -> bool {
     sp.link.as_deref().and_then(adf::browse_key) == Some(sp.text.as_str())
-}
-
-/// The ordered-list number gutter: the widest "N." in the list, at least the bullet's slot.
-pub fn number_gutter(widths: impl IntoIterator<Item = f32>) -> f32 {
-    widths.into_iter().fold(BULLET_W, f32::max).ceil()
 }
 
 /// One glyph on a laid-out row, for `code_runs`: (char, in inline code, left, right, top, bottom).
@@ -463,10 +481,22 @@ mod tests {
     }
 
     #[test]
-    fn numbers_share_one_gutter() {
-        assert_eq!(number_gutter([7.0, 8.2]), BULLET_W.max(8.2).ceil());
-        assert_eq!(number_gutter([7.0, 8.0, 15.4]), 16.0, "the widest number sets it");
-        assert_eq!(number_gutter([]), BULLET_W);
+    fn lists_share_one_24_px_gutter() {
+        assert_eq!(marker_slot(0.0) + MARKER_GAP, LIST_GUTTER, "bullets");
+        assert_eq!(marker_slot(15.4) + MARKER_GAP, LIST_GUTTER, "1.–9.");
+        assert_eq!(marker_slot(17.6) + MARKER_GAP, LIST_GUTTER, "10.");
+        assert_eq!(marker_slot(30.2), 31.0, "only a very wide number pushes the text");
+    }
+
+    #[test]
+    fn body_rhythm_and_heading_sizes() {
+        assert_eq!(line_height(14.0), 20.0);
+        assert_eq!(line_height(15.0), 21.0);
+        assert_eq!((heading_size(1), heading_size(2), heading_size(3), heading_size(6)), (15.0, 15.0, 14.0, 14.0));
+        let sp = |code: bool| Span { text: "x".into(), bold: false, italic: false, code, strike: false, link: None };
+        let p = palette();
+        assert_eq!(span_format(&sp(false), &p, 14.0, false).line_height, Some(20.0));
+        assert_eq!(span_format(&sp(true), &p, 14.0, false).line_height, None, "code keeps its natural box");
     }
 
     #[test]
