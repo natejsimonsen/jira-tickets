@@ -457,10 +457,11 @@ pub fn combo_widths(team_full_nat: f32, team_short_nat: f32, sprint_nat: f32, ep
 }
 
 /// A combo popup's outer width, one rule for all three: the combo's width, or the widest option plus its
-/// row padding either side (`row_pad`), the popup frame and 2 px of rounding room when that is wider;
-/// never past `cap`, the list pane's width.
-pub fn popup_width(combo_w: f32, widest_text: f32, row_pad: f32, cap: f32) -> f32 {
-    (widest_text + 2.0 * row_pad + POPUP_FRAME + 2.0).ceil().max(combo_w).min(cap.max(combo_w))
+/// row padding either side (`row_pad`), the scrollbar's room when it shows (`bar_w`; round 13 B1: without it the
+/// widest row was cut and the popup ran to the cap), the popup frame and 2 px of rounding room when that is
+/// wider; never past `cap`, the list pane's width.
+pub fn popup_width(combo_w: f32, widest_text: f32, row_pad: f32, bar_w: f32, cap: f32) -> f32 {
+    (widest_text + 2.0 * row_pad + bar_w + POPUP_FRAME + 2.0).ceil().max(combo_w).min(cap.max(combo_w))
 }
 
 /// A popup's left edge: under its combo, shifted left only as far as it must to end at the pane's right
@@ -546,7 +547,9 @@ fn combo(
         painter.add(egui::Shape::line(pts, Stroke::new(CHEVRON_STROKE, p.muted)));
     }
     let ppp = ui.ctx().pixels_per_point();
-    let pop_w = snap_px(popup_width(w, widest, POPUP_ROW_PAD, pane.1 - pane.0), ppp);
+    let (scroll_h, bar) = popup_scroll(n_rows);
+    let bar_w = if bar { popup_bar_style().allocated_width() } else { 0.0 };
+    let pop_w = snap_px(popup_width(w, widest, POPUP_ROW_PAD, bar_w, pane.1 - pane.0), ppp);
     let left = match edge {
         PopupEdge::Start => popup_left(rect.left(), pop_w, pane.0, pane.1),
         PopupEdge::End => popup_left_end(rect.right(), pop_w, pane.0),
@@ -554,7 +557,6 @@ fn combo(
     // On whole physical pixels, so the frame's edges are crisp and its 4 margins measure 4 (round 12 B1).
     let anchor = snap_rect(Rect::from_min_max(egui::pos2(left, rect.top()), egui::pos2(left + pop_w, rect.bottom())), ppp);
     let inner = pop_w - POPUP_FRAME;
-    let (scroll_h, bar) = popup_scroll(n_rows);
     egui::Popup::menu(&resp)
         .id(popup_id)
         .frame(Frame::menu(ui.style()).inner_margin(Margin::symmetric(POPUP_MARGIN, POPUP_MARGIN_Y)))
@@ -572,15 +574,15 @@ fn combo(
             ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
             let saved = bar.then(|| {
                 // The floating bars' THUMB_W width and round ends (set_thumb_fills), 4 in from the frame.
-                ui.spacing_mut().scroll =
-                    egui::style::ScrollStyle { bar_outer_margin: POPUP_THUMB_OUTER, bar_width: crate::views::THUMB_W, ..egui::style::ScrollStyle::solid() };
+                ui.spacing_mut().scroll = popup_bar_style();
                 // The solid thumb paints in the widgets' `bg_fill` (rows use `weak_bg_fill`, so they keep theirs).
                 crate::views::set_thumb_fills(ui, p)
             });
             let visibility =
                 if bar { egui::scroll_area::ScrollBarVisibility::AlwaysVisible } else { egui::scroll_area::ScrollBarVisibility::VisibleWhenNeeded };
             let row_w = inner - 2.0 * POPUP_ROW_PAD - if bar { ui.spacing().scroll.allocated_width() } else { 0.0 };
-            egui::ScrollArea::vertical().max_height(scroll_h).scroll_bar_visibility(visibility).show(ui, |ui| {
+            let track = crate::views::thumb_track(Rect::from_min_size(ui.cursor().min, vec2(ui.available_width(), scroll_h)));
+            egui::ScrollArea::vertical().max_height(scroll_h).scroll_bar_visibility(visibility).scroll_bar_rect(track).show(ui, |ui| {
                 // The rows keep their own corners (the thumb's THUMB_RADIUS is for the bar only).
                 if let Some(saved) = saved {
                     crate::views::restore_fills(ui, saved);
@@ -588,6 +590,11 @@ fn combo(
                 contents(ui, row_w)
             });
         });
+}
+
+/// A popup's solid bar: the floating bars' THUMB_W width, POPUP_THUMB_OUTER from the frame's margin.
+fn popup_bar_style() -> egui::style::ScrollStyle {
+    egui::style::ScrollStyle { bar_outer_margin: POPUP_THUMB_OUTER, bar_width: crate::views::THUMB_W, ..egui::style::ScrollStyle::solid() }
 }
 
 /// `v` rounded to a whole physical pixel.
@@ -958,7 +965,9 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
     let mut selected_rect: Option<(Rect, usize)> = None;
     let mut row_x: Option<egui::Rangef> = None;
     let mut stripes: Vec<(usize, Rect, CornerRadius, egui::Color32)> = Vec::new();
-    let out = egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+    let mut painted_stripes: Vec<(Rect, egui::Color32)> = Vec::new();
+    let track = crate::views::thumb_track(ui.available_rect_before_wrap());
+    let out = egui::ScrollArea::vertical().auto_shrink([false, false]).scroll_bar_rect(track).show(ui, |ui| {
         crate::views::restore_fills(ui, saved);
         ui.spacing_mut().item_spacing.y = ROW_GAP;
         for (idx, i) in rows.iter().enumerate() {
@@ -1113,6 +1122,7 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
         for (idx, r, corners, color) in stripes {
             if Some(idx) != hidden {
                 ui.painter().rect_filled(r, corners, color);
+                painted_stripes.push((r, color));
             }
         }
         // Room under the last row, so a toast (anchored above the hint bar) never covers it.
@@ -1141,6 +1151,19 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
         if let Some((top, bottom)) = strip {
             let r = Rect::from_x_y_ranges(view.x_range(), top..=bottom);
             ui.painter().add(egui::Shape::gradient_rect(r, dir, colors));
+            // The bottom fade dims the cut row's content, not its card: the left border and stripe go back on
+            // top, so the card's edge runs unbroken to the bar (round 13 K3).
+            if dir == egui::epaint::Direction::BottomUp
+                && let Some(x) = row_x
+            {
+                ui.painter().vline(x.min + 0.5, top..=bottom, Stroke::new(1.0, p.border));
+                for (s, color) in &painted_stripes {
+                    let part = s.intersect(r);
+                    if part.is_positive() {
+                        ui.painter().rect_filled(part, 0.0, *color);
+                    }
+                }
+            }
         }
     }
 }
@@ -1741,11 +1764,13 @@ mod tests {
     #[test]
     fn one_popup_width_rule() {
         // Rows pad POPUP_ROW_PAD (7) either side; the frame is 10 (4 + stroke 1, each side); 2 px rounding room.
-        assert_eq!(popup_width(190.0, 100.0, POPUP_ROW_PAD, 500.0), 190.0, "the combo's width when the options fit");
-        assert_eq!(popup_width(120.0, 100.0, POPUP_ROW_PAD, 500.0), 126.0, "the widest option is never cut");
-        assert_eq!(popup_width(190.0, 300.0, POPUP_ROW_PAD, 500.0), 326.0, "grows for a wide option");
-        assert_eq!(popup_width(190.0, 900.0, POPUP_ROW_PAD, 500.0), 500.0, "capped at the pane's right edge");
-        assert_eq!(popup_width(190.0, 900.0, POPUP_ROW_PAD, 100.0), 190.0, "never narrower than the combo");
+        assert_eq!(popup_width(190.0, 100.0, POPUP_ROW_PAD, 0.0, 500.0), 190.0, "the combo's width when the options fit");
+        assert_eq!(popup_width(120.0, 100.0, POPUP_ROW_PAD, 0.0, 500.0), 126.0, "the widest option is never cut");
+        assert_eq!(popup_width(190.0, 300.0, POPUP_ROW_PAD, 0.0, 500.0), 326.0, "grows for a wide option");
+        let bar = popup_bar_style().allocated_width();
+        assert_eq!(popup_width(190.0, 300.0, POPUP_ROW_PAD, bar, 500.0), (326.0 + bar).ceil(), "B1: room for the bar, so the widest row is never cut");
+        assert_eq!(popup_width(190.0, 900.0, POPUP_ROW_PAD, 0.0, 500.0), 500.0, "capped at the pane's right edge");
+        assert_eq!(popup_width(190.0, 900.0, POPUP_ROW_PAD, 0.0, 100.0), 190.0, "never narrower than the combo");
         assert_eq!(POPUP_ROW_PAD + POPUP_FRAME / 2.0, INNER_X, "popup text starts where the combo's does");
     }
 

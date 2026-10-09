@@ -30,7 +30,8 @@ pub fn show(app: &mut App, ui: &mut Ui) {
     // egui's own fade dimmed the last ~19 px; the pane paints the list's short fade instead (below).
     crate::views::no_scroll_fade(ui);
     // The viewport runs to the hint bar; a scrolled line is cut there under the fade, never snapped (E1 ruling).
-    let out = egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+    let track = crate::views::thumb_track(ui.available_rect_before_wrap());
+    let out = egui::ScrollArea::vertical().auto_shrink([false, false]).scroll_bar_rect(track).show(ui, |ui| {
         crate::views::restore_fills(ui, saved);
         // The pane has no right margin: the bar sits in this inset, clear of the content.
         ui.set_max_width(ui.available_width() - DETAIL_RIGHT);

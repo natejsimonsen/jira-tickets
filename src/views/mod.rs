@@ -957,10 +957,12 @@ pub fn selected_pill_edge(p: &Palette) -> Color32 {
     if p.dark { selected_edge(p) } else { Color32::from_rgb(0x77, 0x76, 0x6f) }
 }
 
-/// A scrollbar thumb at rest and hovered: `muted` at about half alpha (2.5–3:1 off the surface: 60 % in light,
-/// 50 % in dark), then `muted` itself. `border` read 1.5:1 (round 8).
+/// A scrollbar thumb at rest and hovered: at rest the tone `muted` at about half alpha, at THUMB_REST, made on the
+/// surface (60 % in light, 50 % in dark, as before), but opaque, so row separators never show through it (round 13
+/// K2); hovered `muted` itself. `border` read 1.5:1 (round 8).
 pub fn scroll_thumb(p: &Palette) -> (Color32, Color32) {
-    (p.muted.gamma_multiply(if p.dark { 0.5 } else { 0.6 }), p.muted)
+    let rest = p.muted.gamma_multiply((if p.dark { 0.5 } else { 0.6 }) * THUMB_REST);
+    (theme::over(rest, p.surface), p.muted)
 }
 
 /// The scrollbar thumb's width at rest (round 12 C1: the 2 px flush bar read as a partial right border).
@@ -969,16 +971,26 @@ pub const THUMB_W: f32 = 4.0;
 pub const THUMB_INSET: f32 = 2.0;
 /// The thumb's corner radius: round ends at THUMB_W.
 pub const THUMB_RADIUS: u8 = 2;
-/// The floating thumbs' opacity at rest (floating bars default to 0, hidden until hovered): faint, over the
-/// `scroll_thumb` rest colour, so an overflowing list or detail pane always shows "more" (C4, round 12 K1).
+/// How faint the thumb's rest tone is (floating bars default to hidden until hovered), so an overflowing list or
+/// detail pane always shows "more" (C4, round 12 K1). Folded into the opaque `scroll_thumb` rest colour.
 pub const THUMB_REST: f32 = 0.5;
+/// The thumb's track stops this far short of its viewport's top and bottom, so its round ends never sit on a
+/// card's border (round 13 K1, C3).
+pub const THUMB_TRACK_INSET: f32 = 2.0;
 
 /// The thumb style for the floating bars (the list and the detail pane): THUMB_W wide at rest, THUMB_INSET in
-/// from the edge, shown at THUMB_REST when the area overflows. Call before the ScrollArea, with `set_thumb_fills`.
+/// from the edge, shown whenever the area overflows, opaque (the rest tone is in `scroll_thumb`). Call before the
+/// ScrollArea, with `set_thumb_fills` and `thumb_track`.
 pub fn floating_thumb(scroll: &mut egui::style::ScrollStyle) {
     scroll.floating_width = THUMB_W;
     scroll.bar_outer_margin = THUMB_INSET;
-    scroll.dormant_handle_opacity = THUMB_REST;
+    scroll.dormant_handle_opacity = 1.0;
+    scroll.active_handle_opacity = 1.0;
+}
+
+/// The rect a scroll area's bar runs in: its viewport less THUMB_TRACK_INSET at the top and bottom.
+pub fn thumb_track(viewport: egui::Rect) -> egui::Rect {
+    viewport.shrink2(vec2(0.0, THUMB_TRACK_INSET))
 }
 
 /// What `set_thumb_fills` replaced: the inactive, hovered and active widget visuals.
@@ -1567,7 +1579,10 @@ mod widget_tests {
             assert!((3.0..=4.0).contains(&THUMB_W) && f32::from(THUMB_RADIUS) * 2.0 <= THUMB_W);
             let mut bar = egui::style::ScrollStyle::floating();
             floating_thumb(&mut bar);
-            assert_eq!((bar.floating_width, bar.bar_outer_margin, bar.dormant_handle_opacity), (THUMB_W, THUMB_INSET, THUMB_REST));
+            assert_eq!((bar.floating_width, bar.bar_outer_margin, bar.dormant_handle_opacity), (THUMB_W, THUMB_INSET, 1.0), "opaque at rest");
+            assert_eq!(scroll_thumb(p).0.a(), 255, "K2: separators never show through");
+            let t = thumb_track(egui::Rect::from_min_max(egui::pos2(0.0, 100.0), egui::pos2(10.0, 500.0)));
+            assert_eq!((t.top(), t.bottom()), (100.0 + THUMB_TRACK_INSET, 500.0 - THUMB_TRACK_INSET), "K1: inset both ends");
             restore_fills(ui, saved);
             assert!(ui.spacing().scroll.foreground_color, "content keeps egui's default");
         });
@@ -1576,12 +1591,14 @@ mod widget_tests {
     #[test]
     fn scroll_thumbs_show_but_stay_quiet() {
         for p in [&theme::LIGHT, &theme::DARK] {
+            // The rest tone is the old translucent thumb at its THUMB_REST opacity, made opaque on the surface the
+            // thumbs float over (the list's cards, the detail pane, popups).
             let (rest, hover) = scroll_thumb(p);
-            for fill in [p.surface, p.bg] {
-                let c = theme::contrast(theme::over(rest, fill), fill);
-                assert!((2.5..=3.0).contains(&c), "dark={} on {fill:?}: {c:.2}", p.dark);
-                assert!(theme::contrast(hover, fill) > c);
-            }
+            let old = theme::over(p.muted.gamma_multiply((if p.dark { 0.5 } else { 0.6 }) * THUMB_REST), p.surface);
+            assert_eq!(rest, old, "dark={}", p.dark);
+            let c = theme::contrast(rest, p.surface);
+            assert!((1.3..=2.0).contains(&c), "dark={}: {c:.2}", p.dark);
+            assert!(theme::contrast(hover, p.surface) > c);
         }
     }
 
