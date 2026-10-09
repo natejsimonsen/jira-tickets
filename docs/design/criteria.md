@@ -44,7 +44,8 @@ These were decided in earlier rounds; raters treat them as correct and do not sc
   `text` when the result lands.
 - **Backdrop.** The dark modal backdrop alpha is 110 and final; light is 48.
 - **Placeholders.** Every placeholder uses the `placeholder` token, a step dimmer than `muted`, in both themes, so
-  an empty field never reads as filled in.
+  an empty field never reads as filled in. No light-theme exception: light `muted` is #585753 and the light placeholder #63625e
+  (1.19:1 apart, 4.79:1 on the #e4e4df input).
 - **"Only opened"** mirrors the Jira board's quick filter of that name; the wording stays.
 - **Dialog edge.** One dialog edge token is shared by every modal, the go-to box included; it may differ from
   `border`.

@@ -926,7 +926,7 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
                         let (kind, look) = match (c.as_str(), epic) {
                             ("status", _) => {
                                 let t = theme::status_tint(&i.status.name, &i.status.category, p, status_colors);
-                                (PillKind::Status, PillLook::Tint(status_fill(&t, p), t.fg))
+                                (PillKind::Status, PillLook::Tint(status_fill(&t, p, is_sel), t.fg))
                             }
                             ("parent.summary" | "parent.key", Some(t)) => (PillKind::Epic, PillLook::Epic(t.fg, t.stripe)),
                             ("parent.summary" | "parent.key", None) => (PillKind::Epic, PillLook::Outline),
@@ -1097,10 +1097,21 @@ pub fn selected_dividers(rect: Rect, idx: usize, n: usize) -> Vec<(f32, f32)> {
 }
 
 /// A status pill's fill: its wash resolved over the plain row, so the pill is one opaque colour on every row
-/// (a wash composited over the selection shifted its colour, round 8).
-pub fn status_fill(t: &theme::Tint, p: &Palette) -> egui::Color32 {
-    theme::over(t.bg, p.surface)
+/// (a wash composited over the selection shifted its colour, round 8). On a selected row a neutral wash that
+/// would melt into the selection (the grey "New", 1.03:1 light, 1.10 dark) steps one notch (light #d2d1cb, dark
+/// #4a4a47), so the pill keeps a fill.
+pub fn status_fill(t: &theme::Tint, p: &Palette, selected: bool) -> egui::Color32 {
+    let fill = theme::over(t.bg, p.surface);
+    let spread = fill.r().max(fill.g()).max(fill.b()) - fill.r().min(fill.g()).min(fill.b());
+    if selected && spread <= 6 && theme::contrast(fill, p.selected_row) < SELECTED_PILL_STEP {
+        if p.dark { egui::Color32::from_rgb(0x4a, 0x4a, 0x47) } else { egui::Color32::from_rgb(0xd2, 0xd1, 0xcb) }
+    } else {
+        fill
+    }
 }
+
+/// A neutral status fill must stand this far off the selected row, or it steps (`status_fill`).
+const SELECTED_PILL_STEP: f32 = 1.12;
 
 /// The list's outer corners are rounded (6); the seams between rows are square.
 pub fn row_corners(idx: usize, n: usize) -> CornerRadius {
@@ -1655,10 +1666,25 @@ mod tests {
         for p in [&theme::LIGHT, &theme::DARK] {
             for s in statuses {
                 let t = theme::status_tint(s, "indeterminate", p, &Default::default());
-                let fill = status_fill(&t, p);
-                assert_eq!(fill.a(), 255);
-                assert!(theme::contrast(t.fg, fill) >= 4.5, "dark={} {s}: {:.2}", p.dark, theme::contrast(t.fg, fill));
+                for sel in [false, true] {
+                    let fill = status_fill(&t, p, sel);
+                    assert_eq!(fill.a(), 255);
+                    assert!(theme::contrast(t.fg, fill) >= 4.5, "dark={} {s} sel={sel}: {:.2}", p.dark, theme::contrast(t.fg, fill));
+                }
             }
+        }
+    }
+
+    #[test]
+    fn new_pill_keeps_a_fill_on_a_selected_row() {
+        for (p, step) in [(&theme::LIGHT, egui::Color32::from_rgb(0xd2, 0xd1, 0xcb)), (&theme::DARK, egui::Color32::from_rgb(0x4a, 0x4a, 0x47))] {
+            let new = theme::status_tint("New", "new", p, &Default::default());
+            assert_eq!(status_fill(&new, p, true), step, "dark={}", p.dark);
+            assert_eq!(status_fill(&new, p, false), theme::over(new.bg, p.surface), "plain rows keep the wash");
+            assert!(theme::contrast(step, p.selected_row) >= SELECTED_PILL_STEP);
+            // A hued wash keeps its colour on the selection.
+            let ip = theme::status_tint("In Progress", "indeterminate", p, &Default::default());
+            assert_eq!(status_fill(&ip, p, true), status_fill(&ip, p, false), "dark={}", p.dark);
         }
     }
 
