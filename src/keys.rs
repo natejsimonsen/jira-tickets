@@ -113,6 +113,8 @@ pub enum HintContext {
     Picker,
     Selected,
     Browse,
+    /// A screen still to come: the way back and help.
+    Placeholder,
     /// Selected, with a server search (text or JQL) on screen: Esc clears it.
     SelectedSearch,
     /// Browse, with a server search on screen.
@@ -154,18 +156,21 @@ pub struct HintState {
     pub search_shown: bool,
     /// Writes are blocked (JIRA_TICKETS_READONLY).
     pub read_only: bool,
+    /// A screen that is not built yet (Grooming, Team, Roadmap).
+    pub placeholder: bool,
 }
 
 impl HintState {
     pub fn new(focus: Focus) -> Self {
-        HintState { help_open: false, goto_open: false, picker: None, has_selection: false, focus, search_shown: false, read_only: false }
+        HintState { help_open: false, goto_open: false, picker: None, has_selection: false, focus, search_shown: false, read_only: false, placeholder: false }
     }
 }
 
 pub fn hint_context(s: HintState) -> HintContext {
-    let HintState { help_open, goto_open, picker, has_selection, focus, search_shown, read_only } = s;
+    let HintState { help_open, goto_open, picker, has_selection, focus, search_shown, read_only, placeholder } = s;
     match (help_open, goto_open, picker) {
         (true, _, _) => HintContext::Help,
+        _ if placeholder => HintContext::Placeholder,
         (_, _, Some(PickerHint::Edit)) => HintContext::EditPicker,
         (_, _, Some(PickerHint::Assign)) => HintContext::AssignPicker,
         (_, _, Some(PickerHint::Other)) => HintContext::Picker,
@@ -223,6 +228,7 @@ pub fn hints(c: HintContext) -> &'static [Hint] {
             &[K("⌘O"), W("open")],
             &[K("?"), W("help")],
         ],
+        HintContext::Placeholder => &[&[K("⌘1"), W("issues")], &[K("?"), W("help")]],
         HintContext::Browse => &[&[K("j/k"), W("move")], &[K("⌘K"), W("go to")], &[K("⌘F"), W("search")], &[K("?"), W("help")]],
         HintContext::BrowseSearch => &[&[K("j/k"), W("move")], &[K("Esc"), W("clear")], &[K("⌘K"), W("go to")], &[K("⌘F"), W("search")], &[K("?"), W("help")]],
     }
@@ -299,6 +305,9 @@ mod tests {
         let search = |sel| HintState { has_selection: sel, search_shown: true, ..HintState::new(Focus::None) };
         assert_eq!(hint_context(search(true)), SelectedSearch, "a search on screen keeps Esc clear after the box blurs");
         assert_eq!(hint_context(search(false)), BrowseSearch);
+        let soon = HintState { placeholder: true, ..HintState::new(Focus::None) };
+        assert_eq!(hint_text(hints(hint_context(soon))), "⌘1 issues · ? help");
+        assert_eq!(hint_context(HintState { help_open: true, ..soon }), Help, "help still wins");
         assert_eq!(hint_text(hints(BrowseSearch)), "j/k move · Esc clear · ⌘K go to · ⌘F search · ? help");
         assert!(hint_text(hints(SelectedSearch)).starts_with("j/k move · Esc clear · t transition"));
         assert_eq!(hint_context(st(true, true, Some(PickerHint::Other), true, Focus::OtherText)), Help, "help wins");

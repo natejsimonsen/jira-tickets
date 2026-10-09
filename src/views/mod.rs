@@ -14,6 +14,8 @@ use egui::{Color32, Frame, Margin, RichText, Sense, Stroke, Ui, vec2};
 pub fn main(app: &mut App, ui: &mut Ui) {
     let p = theme::palette(ui.ctx());
     header(app, ui, p);
+    // Every signed-in screen keeps the hint bar.
+    issues::hints_panel(app, ui, p);
     if app.offline {
         offline_banner(app, ui, p);
     }
@@ -31,10 +33,16 @@ pub fn placeholder_text(tab: &str) -> String {
 }
 
 fn placeholder(ui: &mut Ui, p: &Palette, tab: &str) {
-    centred(ui, "placeholder", |ui| {
-        ui.label(RichText::new(placeholder_text(tab)).color(p.muted).size(14.0));
-    });
+    centred(ui, "placeholder", |ui| empty_state(ui, p, &placeholder_text(tab)));
 }
+
+/// The one empty-state line (placeholders, "Select an issue"): body 14, muted, a label without a period.
+pub fn empty_state(ui: &mut Ui, p: &Palette, text: &str) {
+    ui.label(RichText::new(text).color(p.muted).size(EMPTY_STATE_SIZE));
+}
+
+/// The empty-state text size.
+pub const EMPTY_STATE_SIZE: f32 = 14.0;
 
 /// The top space that centres `content_h` in `avail_h` (never negative).
 pub fn centre_top(avail_h: f32, content_h: f32) -> f32 {
@@ -215,7 +223,10 @@ fn sign_in_aside(p: &Palette) -> egui::text::LayoutJob {
 }
 
 /// Alternating prose and identifiers.
-pub const SIGN_IN_ASIDE: [&str; 7] = ["Or set ", "JIRA_API_TOKEN", ", or ", "api_token", " in ", "config.toml", "."];
+pub const SIGN_IN_ASIDE: [&str; 7] = ["Or set ", "JIRA_API_TOKEN", " or ", "api_token", " in ", "config.toml", ", then check again."];
+
+/// Sign in → "Check again": the 8 the text button's own 28 px box used to add, now explicit at 12.
+const SIGN_IN_TO_AGAIN: f32 = 12.0;
 
 /// The sign-in aside → token field, in code (see the comment at its use).
 const ASIDE_TO_FIELD: f32 = 15.0;
@@ -283,9 +294,12 @@ pub fn sign_in(app: &mut App, ui: &mut Ui) {
                 if ui.add_sized([w, INPUT_H], primary_button("Sign in", p)).clicked() {
                     app.actions.push(Action::SubmitToken);
                 }
-                ui.add_space(8.0);
+                ui.add_space(SIGN_IN_TO_AGAIN);
+                // Only as tall as its text, so the panel's 16 bottom padding is all that shows under it.
                 let again = egui::Button::new(RichText::new("Check again").color(p.muted).size(14.0)).frame(false);
-                if ui.add_sized([w, BUTTON_H], again).on_hover_text("Look for JIRA_API_TOKEN or the config api_token again").clicked() {
+                let again_h = ui.fonts_mut(|f| f.row_height(&theme::body(14.0)));
+                ui.spacing_mut().button_padding.y = 0.0;
+                if ui.add_sized([w, again_h], again).on_hover_text("Look for JIRA_API_TOKEN or the config api_token again").clicked() {
                     app.actions.push(Action::FindToken);
                 }
             });
@@ -293,9 +307,9 @@ pub fn sign_in(app: &mut App, ui: &mut Ui) {
     });
 }
 
-/// The hint bar's height when it shows (signed in, on Issues), else None.
+/// The hint bar's height when it shows (signed in, on any screen), else None.
 pub fn hint_bar_height(app: &App) -> Option<f32> {
-    (app.client.is_some() && app.screen == Screen::Issues).then_some(issues::HINT_BAR_H)
+    app.client.is_some().then_some(issues::HINT_BAR_H)
 }
 
 /// The toast's edge: `border` in light; in dark a warm step lighter than the fill so it separates from the page.
@@ -674,9 +688,14 @@ mod widget_tests {
 
     #[test]
     fn sign_in_aside_reads_as_one_sentence() {
-        assert_eq!(SIGN_IN_ASIDE.concat(), "Or set JIRA_API_TOKEN, or api_token in config.toml.");
+        assert_eq!(SIGN_IN_ASIDE.concat(), "Or set JIRA_API_TOKEN or api_token in config.toml, then check again.");
         assert_eq!(sign_in_width(300.0), 380.0);
         assert_eq!(sign_in_width(452.3), 453.0, "the aside fits on one line");
+    }
+
+    #[test]
+    fn one_empty_state_size() {
+        assert_eq!(EMPTY_STATE_SIZE, 14.0);
     }
 
     #[test]

@@ -14,7 +14,7 @@ pub fn show(app: &mut App, ui: &mut Ui) {
         }
         ui.vertical_centered(|ui| {
             ui.add_space(120.0);
-            ui.label(RichText::new("Select an issue").color(p.muted).size(16.0));
+            crate::views::empty_state(ui, p, "Select an issue");
         });
         return;
     };

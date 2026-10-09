@@ -187,11 +187,10 @@ pub fn hint_bar_fill(p: &Palette) -> egui::Color32 {
     p.surface_2
 }
 
-pub fn show(app: &mut App, ui: &mut Ui) {
-    let p = theme::palette(ui.ctx());
-    track_epics(app);
-    let (list_w, list_range) = list_pane_width(ui.available_width());
-    // First, so the strip spans the full width under both panels.
+/// The hint bar, on every signed-in screen. Drawn before the screen's panels, so the strip spans the full
+/// width under them.
+pub fn hints_panel(app: &App, ui: &mut Ui, p: &Palette) {
+    let placeholder = app.screen != crate::app::Screen::Issues;
     let bar = egui::Panel::bottom("hints")
         .exact_size(HINT_BAR_H)
         .frame(Frame::new().fill(hint_bar_fill(p)).inner_margin(Margin::symmetric(HINT_INSET as i8, 0)))
@@ -211,6 +210,7 @@ pub fn show(app: &mut App, ui: &mut Ui) {
                     focus,
                     search_shown: esc_clears_search(app.search_active, app.typed_search, app.text_search.is_some()),
                     read_only: crate::jira::READ_ONLY.load(std::sync::atomic::Ordering::Relaxed),
+                    placeholder,
                 });
                 hint_bar(ui, crate::keys::hints(c), p);
             });
@@ -218,6 +218,12 @@ pub fn show(app: &mut App, ui: &mut Ui) {
     // A top rule only, like the header's bottom rule.
     let r = bar.response.rect;
     ui.painter().hline(r.x_range(), r.top() + 0.5, Stroke::new(1.0, p.border));
+}
+
+pub fn show(app: &mut App, ui: &mut Ui) {
+    let p = theme::palette(ui.ctx());
+    track_epics(app);
+    let (list_w, list_range) = list_pane_width(ui.available_width());
     egui::Panel::left("issue-list")
         .resizable(true)
         .default_size(list_w)
