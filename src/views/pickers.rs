@@ -148,10 +148,10 @@ fn title(ui: &mut egui::Ui, p: &Palette, text: &str) {
     ui.add_space(TITLE_GAP);
 }
 
-/// The space above Assign's note row, so the note ("N matches", "Type to see more") sits at the bottom of its
-/// fixed block, just above the buttons, however few rows the filter leaves.
-pub fn note_gap(block_h: f32, rows_h: f32, note_h: f32) -> f32 {
-    (block_h - rows_h - note_h).max(0.0)
+/// Assign's fixed block: the note row ("N matches", "Type to see more") right after the last row, then the
+/// space that keeps the block one height however few rows the filter leaves. Returns (note top, space after).
+pub fn assign_block(block_h: f32, rows_h: f32, note_h: f32) -> (f32, f32) {
+    (rows_h, (block_h - rows_h - note_h).max(0.0))
 }
 
 /// A picker row's text inset (its frame margin): fields in pickers share it.
@@ -206,11 +206,13 @@ fn rows(ui: &mut egui::Ui, p: &Palette, names: Vec<Row>, confirm: &mut bool, cur
             let top = ui.cursor().top();
             row_list(ui, p, &names, confirm, cursor);
             if let Some(note) = note {
-                ui.add_space(note_gap(h, ui.cursor().top() - top, ROW_H));
+                // Right under the rows, then the rest of the block, so the buttons stay where they are.
+                let (_, after) = assign_block(h, ui.cursor().top() - top, ROW_H);
                 Frame::new().inner_margin(Margin::symmetric(ROW_INSET as i8, 6)).show(ui, |ui| {
                     ui.set_min_height(ROW_H - 12.0);
                     ui.label(RichText::new(note).size(12.0).color(crate::views::dialog_muted(p)));
                 });
+                ui.add_space(after);
             }
         });
         return;
@@ -254,10 +256,10 @@ fn row_list(ui: &mut egui::Ui, p: &Palette, names: &[Row], confirm: &mut bool, c
 #[cfg(test)]
 mod tests {
     #[test]
-    fn assign_note_sits_above_the_buttons() {
-        assert_eq!(super::note_gap(300.0, 60.0, 30.0), 210.0, "two rows: the note drops to the block's bottom");
-        assert_eq!(super::note_gap(300.0, 270.0, 30.0), 0.0, "a full list: right under the rows");
-        assert_eq!(super::note_gap(300.0, 290.0, 30.0), 0.0);
+    fn assign_count_follows_the_rows() {
+        assert_eq!(super::assign_block(300.0, 60.0, 30.0), (60.0, 210.0), "two rows: the count right after them, the rest below");
+        assert_eq!(super::assign_block(300.0, 270.0, 30.0), (270.0, 0.0), "a full list");
+        assert_eq!(super::assign_block(300.0, 290.0, 30.0), (290.0, 0.0));
     }
 
     #[test]
