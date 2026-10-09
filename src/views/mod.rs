@@ -981,7 +981,7 @@ pub fn backdrop(ctx: &egui::Context, id: &str, order: egui::Order, hint_bar: Opt
 
 pub fn button(text: &str, p: &Palette) -> egui::Button<'static> {
     egui::Button::new(RichText::new(text.to_string()).color(p.text).size(14.0))
-        .fill(p.surface_2)
+        .fill(theme::button_fill(p))
         .stroke(Stroke::new(1.0, p.border))
         .corner_radius(theme::RADIUS)
         .min_size(vec2(0.0, BUTTON_H))
@@ -1029,7 +1029,7 @@ pub fn toggle_chip(ui: &mut Ui, text: &str, active: bool, p: &Palette) -> egui::
         let (fill, stroke) = match (active, resp.hovered()) {
             (true, _) => (active_chip_fill(p), active_chip_fill(p)),
             (false, true) => (theme::control_hover(p), p.border),
-            (false, false) => (p.surface_2, p.border),
+            (false, false) => (theme::button_fill(p), p.border),
         };
         ui.painter().rect(rect, f32::from(theme::RADIUS), fill, Stroke::new(1.0, stroke), egui::StrokeKind::Inside);
         // One device pixel up, like the combos' text (round 15 B1).
@@ -1080,14 +1080,17 @@ fn link_in(ui: &mut Ui, galley: std::sync::Arc<egui::Galley>, color: Color32, tr
     resp.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
-/// A primary button that, when disabled, is drawn quiet (surface_2, muted, border) and ignores clicks,
+/// A primary button that, when disabled, is drawn quiet (`button_fill`, muted, border) and ignores clicks,
 /// rather than a faded accent.
 pub fn primary_button_if(text: &str, enabled: bool, p: &Palette) -> egui::Button<'static> {
     let b = if enabled {
         let (fill, fg) = primary_colors(p);
         egui::Button::new(RichText::new(text.to_string()).color(fg).size(14.0)).fill(fill).stroke(Stroke::new(1.0, fill))
     } else {
-        egui::Button::new(RichText::new(text.to_string()).color(p.muted).size(14.0)).fill(p.surface_2).stroke(Stroke::new(1.0, p.border)).sense(Sense::hover())
+        egui::Button::new(RichText::new(text.to_string()).color(p.muted).size(14.0))
+            .fill(theme::button_fill(p))
+            .stroke(Stroke::new(1.0, p.border))
+            .sense(Sense::hover())
     };
     b.corner_radius(theme::RADIUS).min_size(vec2(0.0, BUTTON_H))
 }
@@ -1112,10 +1115,11 @@ pub fn outline_pill_selected(ui: &mut Ui, text: &str, p: &Palette, margin: egui:
 }
 
 /// A neutral pill's outline on a selected row: light #77766f (≥ 3.3:1 on the #dfdfda selection; the
-/// `selected_edge` rule tone read 2.88), dark #868580 (2.95:1 on the #3d3d3a selection, still 1.75 off the pill
-/// text; #7a7974 read 2.50, round 14 L2).
+/// `selected_edge` rule tone read 2.88), dark #888782: 3.03:1 on the #3d3d3a selection and 1.70 off the pill text
+/// (round 15 L1: #868580 read 2.95; the suggested #8f8e89 reached 3.32 but fell to 1.55 off the text, and the
+/// text's 5.13 on the selection leaves no tone with 3.0 and 1.7 both above about #888782).
 pub fn selected_pill_edge(p: &Palette) -> Color32 {
-    if p.dark { Color32::from_rgb(0x86, 0x85, 0x80) } else { Color32::from_rgb(0x77, 0x76, 0x6f) }
+    if p.dark { Color32::from_rgb(0x88, 0x87, 0x82) } else { Color32::from_rgb(0x77, 0x76, 0x6f) }
 }
 
 /// A scrollbar thumb at rest and hovered: at rest an opaque quiet neutral, so row separators never show through it

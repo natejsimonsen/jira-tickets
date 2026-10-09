@@ -89,8 +89,10 @@ pub const DARK: Palette = Palette {
     muted: hex(0xa3a29d),
     accent: hex(0x6b98e6),
     on_accent: hex(0x171716),
-    on_track: hex(0x5cc28a),
-    at_risk: hex(0xe6b04a),
+    // Round 15 L3: a step quieter (#5cc28a / #e6b04a read 8–9:1 against light's 5.7); 6.1 / 7.1 on surface, 5.3 /
+    // 6.3 on a card.
+    on_track: hex(0x4cb07a),
+    at_risk: hex(0xd9a23c),
     off_track: hex(0xf48a83),
     no_health: hex(0x7d7b76),
     done: hex(0xa3a29d),
@@ -320,8 +322,8 @@ fn visuals(p: &Palette) -> Visuals {
     v.weak_text_color = Some(placeholder(p));
     v.selection.bg_fill = p.selected_row;
     v.widgets.noninteractive.bg_stroke = Stroke::new(1.0, p.border);
-    v.widgets.inactive.bg_fill = p.surface_2;
-    v.widgets.inactive.weak_bg_fill = p.surface_2;
+    v.widgets.inactive.bg_fill = button_fill(p);
+    v.widgets.inactive.weak_bg_fill = button_fill(p);
     v.widgets.hovered.bg_fill = control_hover(p);
     v.widgets.hovered.weak_bg_fill = control_hover(p);
     v.widgets.active.bg_fill = p.selected_row;
@@ -330,8 +332,8 @@ fn visuals(p: &Palette) -> Visuals {
     v.widgets.inactive.bg_stroke = Stroke::new(1.0, p.border);
     v.widgets.hovered.bg_stroke = Stroke::new(1.0, p.border);
     v.widgets.open.bg_stroke = Stroke::new(1.0, p.border);
-    v.widgets.open.bg_fill = p.surface_2;
-    v.widgets.open.weak_bg_fill = p.surface_2;
+    v.widgets.open.bg_fill = button_fill(p);
+    v.widgets.open.weak_bg_fill = button_fill(p);
     v.widgets.active.bg_stroke = Stroke::new(1.0, p.accent);
     v.selection.stroke = Stroke::new(1.0, p.accent);
     v.window_corner_radius = CornerRadius::same(RADIUS);
@@ -353,7 +355,16 @@ pub fn placeholder(p: &Palette) -> Color32 {
     if p.dark { hex(0x9c9b96) } else { hex(0x63625e) }
 }
 
-/// A hovered control (button, chip, combo) that rests on `surface_2`: in light the old #e6e6e2 step, since the
+/// A resting control's fill (button, chip, combo): `surface_2` in light (1.06:1 on the page); in dark DARK_BUTTON,
+/// a step quieter than `surface_2` (#2a2a28 read 1.25:1 on the page against light's 1.06; round 15 B4).
+pub fn button_fill(p: &Palette) -> Color32 {
+    if p.dark { DARK_BUTTON } else { p.surface_2 }
+}
+
+/// The dark resting control fill: 1.18:1 on the page `bg`; `text` 12.7:1 and `muted` 5.9:1 on it.
+pub const DARK_BUTTON: Color32 = hex(0x262624);
+
+/// A hovered control (button, chip, combo) that rests on `button_fill`: in light the old #e6e6e2 step, since the
 /// lighter list-row `hover_row` (#ebebe8) is only 1.05:1 off surface_2; in dark `hover_row`.
 pub fn control_hover(p: &Palette) -> Color32 {
     if p.dark { p.hover_row } else { hex(0xe6e6e2) }
@@ -1117,6 +1128,21 @@ mod tests {
             }
         }
         assert!(contrast(DARK_DIALOG_CURSOR, DARK_DIALOG) >= 1.25, "{:.2}", contrast(DARK_DIALOG_CURSOR, DARK_DIALOG));
+    }
+
+    #[test]
+    fn dark_buttons_sit_quiet_with_readable_labels() {
+        // Round 15 B4: the dark resting control 1.18:1 on the page (was 1.25); its labels keep 4.5:1.
+        let c = contrast(button_fill(&DARK), DARK.bg);
+        assert!((1.17..=1.19).contains(&c), "{c:.3}");
+        for t in [DARK.text, DARK.muted] {
+            assert!(contrast(t, button_fill(&DARK)) >= 4.5);
+        }
+        assert_eq!(button_fill(&LIGHT), LIGHT.surface_2, "light unchanged");
+        // L3: the dark health colours ≥ 4.5 on the surface and on a card.
+        for h in [DARK.on_track, DARK.at_risk] {
+            assert!(contrast(h, DARK.surface) >= 4.5 && contrast(h, DARK.surface_2) >= 4.5, "{h:?}");
+        }
     }
 
     #[test]
