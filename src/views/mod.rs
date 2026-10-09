@@ -87,16 +87,24 @@ const TABS: [(Screen, &str); 4] = [(Screen::Issues, "Issues"), (Screen::Grooming
 /// Every tab label is regular 14 (the underline marks the active one), so its slot is its label's width whatever
 /// its state and switching tabs never moves anything.
 pub fn tab_origins(ctx: &egui::Context, left: f32, title: &egui::Galley, tabs: &[std::sync::Arc<egui::Galley>]) -> Vec<f32> {
-    // On whole pixels, so each galley paints exactly the raster its ink was measured on; the rasters' visible
-    // coverage, not their boxes (round 15 A1: "Team"'s faint last column read Team → Roadmap 25).
+    // On whole pixels, so each galley paints exactly the raster its ink was measured on. Between tabs, the
+    // rasters' visible coverage (round 15 A1: "Team"'s faint last column read Team → Roadmap 25); the title → first
+    // tab gap keeps the raster boxes it was ruled on (32), so the title and the first tabs never move.
     let ppp = title.pixels_per_point.max(1.0);
-    let ink = |g: &egui::Galley| {
+    let raster = |g: &egui::Galley| {
+        let r = theme::ink_rect(g);
+        if r.is_positive() { (r.left(), r.right()) } else { (0.0, g.size().x) }
+    };
+    let visible = |g: &egui::Galley| {
         let r = theme::visible_ink(ctx, g);
         if r.is_positive() { (r.left(), r.right()) } else { (0.0, g.size().x) }
     };
-    let (tl, tr) = ink(title);
-    let items: Vec<(f32, f32, f32)> =
-        std::iter::once((tl, tr, 0.0)).chain(tabs.iter().enumerate().map(|(i, g)| (ink(g).0, ink(g).1, if i == 0 { TITLE_GAP } else { TAB_GAP }))).collect();
+    let (tl, tr) = raster(title);
+    let mut items = vec![(tl, tr, 0.0)];
+    for (i, g) in tabs.iter().enumerate() {
+        let (l, r) = if i == 0 { (raster(g).0, visible(g).1) } else { visible(g) };
+        items.push((l, r, if i == 0 { TITLE_GAP } else { TAB_GAP }));
+    }
     let (xs, _) = issues::ink_origins(&items);
     // `ink_origins` puts the first ink at 0; the title's galley stays at `left`.
     xs.iter().skip(1).map(|x| issues::snap_px(left + tl + x, ppp)).collect()
@@ -1724,7 +1732,11 @@ mod widget_tests {
                     let r = theme::visible_ink(ui.ctx(), g);
                     egui::Rangef::new(r.left() + x, r.right() + x)
                 };
-                assert!((ink(xs[0], &tabs[0]).min - ink(16.0, &title).max - TITLE_GAP).abs() <= 0.25, "title gap");
+                let raster = |x: f32, g: &egui::Galley| {
+                    let r = theme::ink_rect(g);
+                    egui::Rangef::new(r.left() + x, r.right() + x)
+                };
+                assert!((raster(xs[0], &tabs[0]).min - raster(16.0, &title).max - TITLE_GAP).abs() <= 0.25, "title gap");
                 for i in 1..tabs.len() {
                     let gap = ink(xs[i], &tabs[i]).min - ink(xs[i - 1], &tabs[i - 1]).max;
                     assert!((gap - TAB_GAP).abs() <= 0.5, "tab {i}: {gap}");
