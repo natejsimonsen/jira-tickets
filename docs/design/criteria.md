@@ -50,3 +50,8 @@ These were decided in earlier rounds; raters treat them as correct and do not sc
   `border`.
 - **Read-only composer.** In read-only mode the detail pane shows only the muted line "Read-only, comments can't
   be posted" under Comments; composer captures use `JIRA_TICKETS_SNAPSHOT_COMPOSER=1` (writes still blocked).
+- **Launch revalidation is a sync.** The refresh at launch over cached rows spins the header (like ⌘R) and the
+  count stays full `text` colour: cached rows are real data, not stale filter results.
+- **⌘1–4 and ⌘R** are discoverable through the tab and sync tooltips and the help overlay, not the hint bar.
+- **Header right cluster.** "?" and sync are outermost at the 16 px right edge; the name and "Read-only" sit to
+  their left and grow leftward, so the buttons never move whatever the name.

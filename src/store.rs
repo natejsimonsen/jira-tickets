@@ -20,9 +20,6 @@ pub struct Store {
     pub lists: HashMap<ListId, Vec<String>>,
     /// Unix seconds of the last successful full refresh.
     pub fetched_at: Option<i64>,
-    /// The last signed-in user's display name, so the header can size the name's slot on the first frame.
-    #[serde(default)]
-    pub me_name: Option<String>,
 }
 
 const CACHE_KEY: &str = "store";

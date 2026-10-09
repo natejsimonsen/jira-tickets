@@ -106,28 +106,43 @@ const TAB_GAP: f32 = 24.0;
 const TITLE_GAP: f32 = 24.0;
 /// Gap between the signed-in name and "Read-only": a muted "·" centred in it, 8 either side.
 const NAME_GAP: f32 = 20.0;
-/// The signed-in name's slot, in "m" glyphs of the 12 px name font: reserved before the user record loads.
-const NAME_SLOT_M: f32 = 20.0;
+/// The longest the signed-in name may grow leftward, in "m" glyphs of the 12 px name font; longer names are cut.
+const NAME_MAX_M: f32 = 20.0;
+/// The header's 32×32 buttons and the gap between the right cluster's parts.
+const HEADER_BUTTON: f32 = 32.0;
+const HEADER_GAP: f32 = 8.0;
 
-/// The name's slot width: a fixed run of "m" glyphs, never the name itself, so the header's buttons sit at
-/// the same x before and after the user record arrives (round-6 D2). Longer names are cut to it.
-pub fn name_slot(m_w: f32) -> f32 {
-    (m_w * NAME_SLOT_M).ceil()
+/// The name's width cap: a run of "m" glyphs. It only cuts very long names; it never reserves space.
+pub fn name_cap(m_w: f32) -> f32 {
+    (m_w * NAME_MAX_M).ceil()
 }
 
-/// The name slot for this session: the last signed-in name's width when the cache knows it (so the buttons
-/// sit 8 left of the name, with no void), else the fixed `name_slot`. The header fixes it on its first frame,
-/// so the buttons never move when the user record lands.
-pub fn name_slot_for(known_name_w: Option<f32>, m_w: f32) -> f32 {
-    known_name_w.map_or_else(|| name_slot(m_w), |w| w.ceil().min(name_slot(m_w)))
+/// The header's right cluster, laid out from the bar's right edge (inside the 16 px margin), right to left:
+/// "?" outermost, sync 8 left of it, then the labels 8 left of sync ("Read-only" nearest, "·", the name growing
+/// leftward). The buttons' x depends only on `right` (round-8 A1 ruling); the labels follow the buttons.
+#[derive(Debug, PartialEq)]
+pub struct HeaderRight {
+    pub help: f32,
+    pub sync: f32,
+    /// The labels' right edge.
+    pub labels_right: f32,
+    /// The labels' total width.
+    pub labels_w: f32,
+    pub read_only: Option<f32>,
+    pub dot_centre: Option<f32>,
+    pub name: Option<f32>,
 }
 
-/// The right-hand label cluster: its width (name slot, then "Read-only" when shown; the buttons sit left of
-/// it) and the shown name's left edge from the cluster's left, right-aligned in its slot. The width ignores
-/// the name, so it is the same with `name_w` None (pending) and Some.
-pub fn header_labels(slot: f32, name_w: Option<f32>, read_only_w: Option<f32>) -> (f32, Option<f32>) {
-    let w = (slot + read_only_w.map_or(0.0, |w| w + NAME_GAP)).ceil();
-    (w, name_w.map(|n| (slot - n.min(slot)).max(0.0)))
+pub fn header_right(right: f32, name_w: Option<f32>, read_only_w: Option<f32>) -> HeaderRight {
+    let help = right - HEADER_BUTTON;
+    let sync = help - HEADER_GAP - HEADER_BUTTON;
+    let labels_right = sync - HEADER_GAP;
+    let read_only = read_only_w.map(|w| labels_right - w);
+    let name_right = read_only.map_or(labels_right, |x| x - NAME_GAP);
+    let name = name_w.map(|w| name_right - w);
+    let dot_centre = read_only.filter(|_| name.is_some()).map(|x| x - NAME_GAP / 2.0);
+    let labels_w = labels_right - name.or(read_only).unwrap_or(labels_right);
+    HeaderRight { help, sync, labels_right, labels_w, read_only, dot_centre, name }
 }
 
 /// The y of a galley's first baseline, from its top.
@@ -193,49 +208,24 @@ fn header(app: &mut App, ui: &mut Ui, p: &Palette) -> (egui::Rect, Option<egui::
                 }
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.spacing_mut().item_spacing.x = 8.0;
-                // The name and "Read-only", both small 12 muted so they never compete with the active tab and read
-                // as two labels, share one baseline, NAME_GAP apart.
+                ui.spacing_mut().item_spacing.x = HEADER_GAP;
+                // Right to left (`header_right`): "?" at the 16 px edge, sync, then the labels, which grow leftward,
+                // so the buttons never depend on the name. The name and "Read-only", both small 12 muted so they
+                // never compete with the active tab, sit on the tabs' baseline, NAME_GAP apart.
+                let right = ui.max_rect().right();
                 let read_only = crate::jira::READ_ONLY.load(std::sync::atomic::Ordering::Relaxed);
                 let painter = ui.painter().clone();
                 let m_w = painter.layout_no_wrap("m".into(), theme::body(12.0), p.muted).size().x;
-                // Laid out right to left: "Read-only" at the 16 px edge, "·", the name right-aligned in its slot,
-                // then the buttons 8 left of the slot. The slot is fixed for the session (`name_slot_for`), so
-                // the buttons never move; a longer name than the slot is cut to it.
-                let known = app.store.me_name.as_ref().map(|n| painter.layout_no_wrap(n.clone(), theme::body(12.0), p.muted).size().x);
-                let slot = *app.name_slot.get_or_insert_with(|| name_slot_for(known, m_w));
+                let cap = name_cap(m_w);
                 let name = app.me.as_ref().map(|me| {
-                    let shown = truncate_text(&me.display_name, slot, |t| painter.layout_no_wrap(t.to_string(), theme::body(12.0), p.muted).size().x);
+                    let shown = truncate_text(&me.display_name, cap, |t| painter.layout_no_wrap(t.to_string(), theme::body(12.0), p.muted).size().x);
                     (painter.layout_no_wrap(shown, theme::body(12.0), p.muted), me.display_name.clone())
                 });
                 let ro = read_only.then(|| painter.layout_no_wrap("Read-only".into(), theme::body(12.0), p.muted));
-                let (cluster_w, name_left) = header_labels(slot, name.as_ref().map(|(g, _)| g.size().x), ro.as_ref().map(|g| g.size().x));
-                let (rect, _) = ui.allocate_exact_size(vec2(cluster_w, 32.0), Sense::hover());
-                // One baseline for both labels, from a 12 px line box centred in the slot.
-                let probe = painter.layout_no_wrap("Read-only".into(), theme::body(12.0), p.muted);
-                let line = (rect.center().y - probe.size().y / 2.0).round() + baseline(&probe);
-                if let (Some((g, full)), Some(dx)) = (name, name_left) {
-                    let top = top_for_baseline(line, baseline(&g));
-                    let r = egui::Rect::from_min_size(egui::pos2(rect.left() + dx, top), g.size());
-                    ui.painter().galley(r.min, g, p.muted);
-                    let resp = ui.interact(r, egui::Id::new("header-name"), Sense::click());
-                    resp.on_hover_text(format!("{full} · right-click to sign out")).context_menu(|ui| {
-                        if ui.button("Sign out").clicked() {
-                            app.actions.push(Action::SignOut);
-                        }
-                    });
-                }
-                if let (Some(g), true) = (&ro, name_left.is_some()) {
-                    // A muted "·" between the name and "Read-only", so they read as two labels.
-                    let dot = painter.layout_no_wrap("·".into(), theme::body(12.0), p.muted);
-                    let x = rect.right() - g.size().x - NAME_GAP / 2.0 - dot.size().x / 2.0;
-                    ui.painter().galley(egui::pos2(x, top_for_baseline(line, baseline(&dot))), dot, p.muted);
-                }
-                if let Some(g) = ro {
-                    let top = top_for_baseline(line, baseline(&g));
-                    let r = egui::Rect::from_min_size(egui::pos2(rect.right() - g.size().x, top), g.size());
-                    ui.painter().galley(r.min, g, p.muted);
-                    ui.interact(r, egui::Id::new("header-read-only"), Sense::hover()).on_hover_text("Writes are blocked (JIRA_TICKETS_READONLY)");
+                let at = header_right(right, name.as_ref().map(|(g, _)| g.size().x), ro.as_ref().map(|g| g.size().x));
+                let help = icons::text_button(ui, "?", "Keyboard help (?)", p);
+                if help.clicked() {
+                    app.actions.push(Action::ToggleHelp);
                 }
                 // One fixed 32×32 slot: the spinner replaces the button at the same size.
                 let first_load = app.screen == Screen::Issues && issues::first_load(app);
@@ -244,8 +234,29 @@ fn header(app: &mut App, ui: &mut Ui, p: &Palette) -> (egui::Rect, Option<egui::
                 } else if icons::icon_button(ui, icons::Icon::Sync, "Refresh (⌘R)", p).clicked() {
                     app.actions.push(Action::Refresh);
                 }
-                if icons::text_button(ui, "?", "Keyboard help (?)", p).clicked() {
-                    app.actions.push(Action::ToggleHelp);
+                if at.labels_w > 0.0 {
+                    ui.allocate_exact_size(vec2(at.labels_w, 32.0), Sense::hover());
+                }
+                if let (Some((g, full)), Some(x)) = (name, at.name) {
+                    let r = egui::Rect::from_min_size(egui::pos2(x, top_for_baseline(line, baseline(&g))), g.size());
+                    ui.painter().galley(r.min, g, p.muted);
+                    let resp = ui.interact(r, egui::Id::new("header-name"), Sense::click());
+                    resp.on_hover_text(format!("{full} · right-click to sign out")).context_menu(|ui| {
+                        if ui.button("Sign out").clicked() {
+                            app.actions.push(Action::SignOut);
+                        }
+                    });
+                }
+                if let Some(c) = at.dot_centre {
+                    // A muted "·" between the name and "Read-only", so they read as two labels.
+                    let dot = painter.layout_no_wrap("·".into(), theme::body(12.0), p.muted);
+                    let x = c - dot.size().x / 2.0;
+                    ui.painter().galley(egui::pos2(x, top_for_baseline(line, baseline(&dot))), dot, p.muted);
+                }
+                if let (Some(g), Some(x)) = (ro, at.read_only) {
+                    let r = egui::Rect::from_min_size(egui::pos2(x, top_for_baseline(line, baseline(&g))), g.size());
+                    ui.painter().galley(r.min, g, p.muted);
+                    ui.interact(r, egui::Id::new("header-read-only"), Sense::hover()).on_hover_text("Writes are blocked (JIRA_TICKETS_READONLY)");
                 }
             });
         });
@@ -904,37 +915,35 @@ mod widget_tests {
     }
 
     #[test]
-    fn a_known_name_sizes_its_slot() {
-        assert_eq!(name_slot_for(Some(95.4), 10.0), 96.0, "the cached name's width: no void before the buttons");
-        assert_eq!(name_slot_for(Some(400.0), 10.0), 200.0, "never wider than the fixed slot");
-        assert_eq!(name_slot_for(None, 10.0), name_slot(10.0), "a fresh cache reserves the fixed slot");
-        // The buttons' x is the edge minus the cluster: the same with the name pending and loaded.
-        let slot = name_slot_for(Some(95.4), 10.0);
+    fn header_buttons_are_outermost_and_never_move() {
         let edge = 1424.0;
-        let button_x = |name: Option<f32>| edge - header_labels(slot, name, Some(52.0)).0;
-        assert_eq!(button_x(None), button_x(Some(95.4)));
-        assert_eq!(header_labels(slot, Some(95.4), Some(52.0)).1, Some(slot - 95.4), "the name fills its slot");
-    }
-
-    #[test]
-    fn header_buttons_do_not_move_when_the_name_arrives() {
-        let slot = name_slot(10.0);
-        assert_eq!(slot, 200.0, "20 m glyphs");
+        let m_w = 7.5;
+        let measure = |t: &str| t.chars().count() as f32 * m_w;
+        let long = "Bartholomew Featherstonehaugh-Smythe III"; // 40 chars
+        assert_eq!(long.chars().count(), 40);
+        let names = [None, Some(measure("Shawn")), Some(measure(&truncate_text(long, name_cap(m_w), measure)))];
         for ro in [None, Some(52.0)] {
-            // The buttons sit left of the cluster: its width is the same before (None) and after (Some) the
-            // user record lands, whatever the name's length.
-            let (pending, none_left) = header_labels(slot, None, ro);
-            assert_eq!(none_left, None);
-            for name_w in [40.0, 120.0, 200.0] {
-                let (w, left) = header_labels(slot, Some(name_w), ro);
-                assert_eq!(w, pending, "ro={ro:?} name_w={name_w}");
-                assert_eq!(left, Some(slot - name_w), "right-aligned in its slot, beside Read-only");
+            let first = header_right(edge, None, ro);
+            assert_eq!(first.help, edge - 32.0, "? at the 16 px edge");
+            assert_eq!(first.sync, first.help - 40.0, "sync 8 left of ?");
+            for name_w in names {
+                let at = header_right(edge, name_w, ro);
+                assert_eq!((at.help, at.sync), (first.help, first.sync), "ro={ro:?} name_w={name_w:?}");
+                // The text nearest sync (Read-only, else the name) ends 8 left of it: no void.
+                let nearest_right = match (at.read_only, at.name) {
+                    (Some(x), _) => x + ro.unwrap(),
+                    (None, Some(x)) => x + name_w.unwrap(),
+                    (None, None) => continue,
+                };
+                assert!(at.sync - nearest_right <= 8.0, "gap {}", at.sync - nearest_right);
+                if let (Some(n), Some(r)) = (at.name, at.read_only) {
+                    assert_eq!(r - (n + name_w.unwrap()), NAME_GAP, "name grows leftward from the ·");
+                    assert_eq!(at.dot_centre, Some(r - NAME_GAP / 2.0));
+                }
             }
         }
-        // A long name is cut to the slot, not the slot to the name.
-        let measure = |t: &str| t.chars().count() as f32 * 7.0;
-        let cut = truncate_text("Bartholomew Featherstonehaugh-Smythe the Third", slot, measure);
-        assert!(measure(&cut) <= slot, "{cut}");
+        assert!(measure(&truncate_text(long, name_cap(m_w), measure)) <= name_cap(m_w), "a long name is cut to the cap");
+        assert_eq!(header_right(edge, None, None).labels_w, 0.0);
     }
 
     #[test]
