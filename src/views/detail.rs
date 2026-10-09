@@ -37,15 +37,19 @@ pub fn show(app: &mut App, ui: &mut Ui) {
         // The pane has no right margin: the bar sits in this inset, clear of the content.
         ui.set_max_width(ui.available_width() - DETAIL_RIGHT);
         // One row the buttons' height, everything centred on it, so the key line sits level with the buttons.
-        ui.allocate_ui_with_layout(vec2(ui.available_width(), crate::views::BUTTON_H), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+        let key_ink = ui.allocate_ui_with_layout(vec2(ui.available_width(), crate::views::BUTTON_H), egui::Layout::left_to_right(egui::Align::Center), |ui| {
             ui.set_min_height(crate::views::BUTTON_H);
-            ui.label(RichText::new(&issue.key).font(theme::mono(12.5)).color(p.muted));
+            let r = ui.label(RichText::new(&issue.key).font(theme::mono(12.5)).color(p.muted));
+            let mut lowest = ink_bottom_at(ui, r.rect.top(), &issue.key, &theme::mono(12.5));
             if let (Some(pk), Some(ps)) = (&issue.parent_key, &issue.parent_summary) {
                 ui.label(RichText::new("·").color(p.muted));
                 let epic = theme::epic_tint_in(pk, &app.epic_slots, p, &app.cfg.issues.epic_colors);
                 // In the epic's text colour, underlined on hover like every other link.
                 let tip = super::issues::epic_tip(pk, ps);
-                if crate::views::tooltip(crate::views::text_link(ui, &format!("{pk} {ps}"), theme::body(13.0), epic.fg), tip).clicked() {
+                let text = format!("{pk} {ps}");
+                let link = crate::views::text_link(ui, &text, theme::body(13.0), epic.fg);
+                lowest = lowest.max(ink_bottom_at(ui, link.rect.top(), &text, &theme::body(13.0)));
+                if crate::views::tooltip(link, tip).clicked() {
                     app.actions.push(Action::SetEpic(Some(pk.clone())));
                 }
             }
@@ -61,10 +65,9 @@ pub fn show(app: &mut App, ui: &mut Ui) {
                     crate::views::icons::spinner(ui, crate::views::icons::INLINE_SPINNER, p);
                 }
             });
+            lowest
         });
-        ui.add_space(key_to_title_space(ui, &issue.key));
-        ui.label(RichText::new(&issue.summary).font(theme::bold(22.0)).color(p.text));
-        ui.add_space(TITLE_TO_PILLS);
+        title_block(ui, p, key_ink.inner, &issue.summary);
         let pills = ui.horizontal_wrapped(|ui| {
             // The list rows' pill gap (E3; 6 measured 6.5–7).
             ui.spacing_mut().item_spacing = vec2(super::issues::PILL_GAP, 4.0);
@@ -97,7 +100,12 @@ pub fn show(app: &mut App, ui: &mut Ui) {
             let (main_w, fields_w) = detail_columns(window_w, ui.available_width());
             ui.allocate_ui_with_layout(vec2(main_w, 0.0), egui::Layout::top_down(egui::Align::Min), |ui| {
                 ui.set_width(main_w);
-                section_heading(ui, p, "Description");
+                let below = section_heading(ui, p, "Description");
+                let first = issue
+                    .description
+                    .as_ref()
+                    .map_or_else(|| adf_view::first_ink_top(ui.ctx(), &serde_json::Value::Null), |d| adf_view::first_ink_top(ui.ctx(), d));
+                ui.add_space(label_space(ui, below, first));
                 match &issue.description {
                     Some(d) => adf_view::show_value(ui, d, p, p.surface),
                     None if loading => {
@@ -109,9 +117,11 @@ pub fn show(app: &mut App, ui: &mut Ui) {
                 let body = theme::Ink::of(ui.ctx(), &theme::body(14.0), Some(adf_view::line_height(14.0)));
                 let comments = format!("Comments ({})", issue.comments.len());
                 ui.add_space(section_space(ui, &comments, body.line - body.base - body.descent));
-                section_heading(ui, p, &comments);
-                // The comment cards and the composer sit 16 below their label (8 already given).
-                ui.add_space(LABEL_TO_BOX - 8.0 - ui.spacing().item_spacing.y);
+                let below = section_heading(ui, p, &comments);
+                let composing = composer_shown(crate::jira::READ_ONLY.load(std::sync::atomic::Ordering::Relaxed), snapshot_composer());
+                // A card's or the composer's edge is its ink; the read-only note's is its text's.
+                let first = if !issue.comments.is_empty() || composing { 0.0 } else { theme::Ink::of(ui.ctx(), &theme::body(14.0), None).top };
+                ui.add_space(label_space(ui, below, first));
                 for c in &issue.comments {
                     comment_card(ui, p, &c.author, &short_date(&c.created), &c.body);
                     ui.add_space(COMMENT_GAP - ui.spacing().item_spacing.y);
@@ -120,12 +130,11 @@ pub fn show(app: &mut App, ui: &mut Ui) {
                 if !issue.comments.is_empty() {
                     ui.add_space(4.0);
                 }
-                if composer_shown(crate::jira::READ_ONLY.load(std::sync::atomic::Ordering::Relaxed), snapshot_composer()) {
+                if composing {
                     composer(app, ui, p, &key);
                 } else {
                     // Read-only: one muted line where the box would be; nothing to type into or press. Its ink
                     // starts where a card's edge would.
-                    ui.add_space(-NOTE_LIFT);
                     ui.label(RichText::new(READ_ONLY_NOTE).size(14.0).color(p.muted));
                 }
             });
@@ -162,20 +171,47 @@ pub fn empty_detail_x(pane_left: f32, pane_right: f32, ink_centre: f32) -> f32 {
     (pane_left + pane_right) / 2.0 - ink_centre
 }
 
-/// The key row's baseline → the title's cap ink (round 14 E1: 8 to the boxes read 26–29).
+/// The key row's lowest ink (the epic link's descenders when it shows, else the key) → the title's ink (round 15
+/// E2: from the key's baseline it read 20.5 under a link and 23.5 under a bare key).
 const KEY_TO_TITLE: f32 = 24.0;
+/// The title's last line's ink → the pills' edge, the same with or without descenders (round 15 E7: 12 from the
+/// line box read 19.5 and 23).
+const TITLE_TO_PILLS: f32 = 16.0;
 
-/// The space after the key row (BUTTON_H, the mono key centred in it) for KEY_TO_TITLE from the key's baseline
-/// to the 22 pt title's ink; the layout's item spacing comes on top.
-fn key_to_title_space(ui: &Ui, key: &str) -> f32 {
-    let g = ui.painter().layout_no_wrap(key.to_string(), theme::mono(12.5), egui::Color32::WHITE);
-    let under = crate::views::BUTTON_H - ((crate::views::BUTTON_H - g.size().y) / 2.0 + crate::views::galley_baseline(&g));
-    let title = theme::Ink::of(ui.ctx(), &theme::bold(22.0), None);
-    KEY_TO_TITLE - under - title.top - ui.spacing().item_spacing.y
+/// `v` on the device-pixel grid, as the tessellator places a galley.
+fn snap(ui: &Ui, v: f32) -> f32 {
+    let ppp = ui.ctx().pixels_per_point();
+    (v * ppp).round() / ppp
 }
 
-/// Title → pills.
-const TITLE_TO_PILLS: f32 = 12.0;
+/// The ink bottom of `text` in `font` painted with its line box at `top`.
+fn ink_bottom_at(ui: &Ui, top: f32, text: &str, font: &egui::FontId) -> f32 {
+    let g = ui.painter().layout_no_wrap(text.to_string(), font.clone(), egui::Color32::WHITE);
+    snap(ui, top) + theme::ink_rect(&g).bottom()
+}
+
+/// The ink bottom of a galley's last row, from the galley's origin (pixel-snapped like `theme::ink_rect`).
+pub fn last_row_ink_bottom(g: &egui::Galley) -> f32 {
+    let ppp = g.pixels_per_point.max(1.0);
+    let Some(row) = g.rows.last() else { return 0.0 };
+    row.glyphs
+        .iter()
+        .filter(|gl| !gl.uv_rect.is_nothing() && gl.uv_rect.size.y > 0.0)
+        .map(|gl| row.pos.y + ((gl.pos.y + gl.uv_rect.offset.y) * ppp).round() / ppp + gl.uv_rect.size.y)
+        .fold(0.0, f32::max)
+}
+
+/// The 22 pt title KEY_TO_TITLE under the key row's lowest ink (`key_ink`), then the space for TITLE_TO_PILLS
+/// from its last line's ink to the pill row. Both are set from the laid-out ink, so every issue measures the same.
+fn title_block(ui: &mut Ui, p: &Palette, key_ink: f32, summary: &str) {
+    let g = ui.painter().layout(summary.to_string(), theme::bold(22.0), p.text, ui.available_width());
+    let top = snap(ui, key_ink + KEY_TO_TITLE - theme::ink_rect(&g).top());
+    ui.add_space(top - ui.cursor().top());
+    let foot = last_row_ink_bottom(&g);
+    let r = ui.add(egui::Label::new(g));
+    let pills = snap(ui, snap(ui, r.rect.top()) + foot + TITLE_TO_PILLS);
+    ui.add_space(pills - ui.cursor().top());
+}
 /// Pills → Description and the description's last line → Comments, measured to the ink (round 13 E5: 24 to
 /// the boxes read 34 and 37).
 const SECTION_INK_GAP: f32 = 32.0;
@@ -191,8 +227,15 @@ fn section_space(ui: &Ui, text: &str, below_ink: f32) -> f32 {
 pub fn section_gap_space(below_ink: f32, heading_ink_top: f32, item_spacing_y: f32) -> f32 {
     SECTION_INK_GAP - below_ink - heading_ink_top - item_spacing_y
 }
-/// Section label → the comment cards or composer box.
-const LABEL_TO_BOX: f32 = 16.0;
+/// A section label's ink → the first ink under it: the description's first line, a comment card's or the
+/// composer's edge, the read-only note (round 15 E6/F2: 8 to the label's box read 18.5 and 17).
+const LABEL_INK_GAP: f32 = 16.0;
+
+/// The space after a section label whose box runs `below` past its ink for LABEL_INK_GAP to content whose ink
+/// starts `first` into its box; the layout's item spacing comes on top.
+fn label_space(ui: &Ui, below: f32, first: f32) -> f32 {
+    LABEL_INK_GAP - below - first - ui.spacing().item_spacing.y
+}
 /// Between comment cards: the cards' own 12 px padding.
 const COMMENT_GAP: f32 = 12.0;
 /// The composer's fixed height.
@@ -227,10 +270,6 @@ const COMMENT_META_GAP: f32 = 8.0;
 /// scrollbar (its width + 4 at least).
 pub const DETAIL_RIGHT: f32 = 16.0;
 
-/// The read-only note's line box carries this much more above its ink than a card's edge does (round 8
-/// measured label → note 21 vs label → first card 17.5), so the note moves up by it.
-const NOTE_LIFT: f32 = 3.5;
-
 /// What read-only mode shows instead of the composer.
 pub const READ_ONLY_NOTE: &str = "Read-only, comments can't be posted";
 
@@ -248,10 +287,10 @@ pub fn comment_card(ui: &mut Ui, p: &Palette, author: &str, date: &str, body: &s
         ui.set_width(ui.available_width());
         let header = header_galleys(ui, p, author, date);
         ui.add_space(CARD_PAD - header.ink_top);
-        let under = header.below_baseline();
+        let under = header.below_ink();
         comment_header_row(ui, header);
-        // HEADER_TO_BODY from the header's baseline to the body's first ink (round 14 E2: 4 to the boxes read 15).
-        let body_top = theme::Ink::of(ui.ctx(), &theme::body(14.0), Some(adf_view::line_height(14.0))).top;
+        // HEADER_TO_BODY from the header's lowest ink to the body's first ink.
+        let body_top = adf_view::first_ink_top(ui.ctx(), body);
         ui.add_space(HEADER_TO_BODY - under - body_top - ui.spacing().item_spacing.y);
         adf_view::show_value(ui, body, p, p.surface_2);
         // The layout's item spacing already follows the body.
@@ -287,14 +326,14 @@ pub fn comment_header(ui: &mut Ui, p: &Palette, author: &str, date: &str) -> (eg
 }
 
 impl HeaderGalleys {
-    /// How far the header row's box runs below the author's baseline (neither label has descenders to count).
-    fn below_baseline(&self) -> f32 {
+    /// How far the header row's box runs below its lowest ink (the author's descenders, else the baseline).
+    fn below_ink(&self) -> f32 {
         let row = self.author.size().y.max(self.drop + self.date.size().y);
-        row - crate::views::galley_baseline(&self.author)
+        row - theme::ink_rect(&self.author).bottom().max(self.drop + theme::ink_rect(&self.date).bottom())
     }
 }
 
-/// A comment header's baseline → the body's first ink.
+/// A comment header's lowest ink → the body's first ink (round 15 E3).
 const HEADER_TO_BODY: f32 = 12.0;
 
 fn comment_header_row(ui: &mut Ui, h: HeaderGalleys) -> (egui::Rect, egui::Rect) {
@@ -338,10 +377,13 @@ pub fn composer_read_only() -> bool {
     !composer_shown(crate::jira::READ_ONLY.load(std::sync::atomic::Ordering::Relaxed), snapshot_composer())
 }
 
-/// A section heading; the space above it comes from `section_space`, 8 below.
-fn section_heading(ui: &mut Ui, p: &Palette, text: &str) {
-    ui.label(RichText::new(text).font(theme::bold(12.0)).color(p.muted));
-    ui.add_space(8.0);
+/// A section heading; the space above it comes from `section_space`, the space below from `label_space`.
+/// Returns how far its box runs below its ink (its descenders or parentheses).
+fn section_heading(ui: &mut Ui, p: &Palette, text: &str) -> f32 {
+    let g = ui.painter().layout_no_wrap(text.to_string(), theme::bold(12.0), p.muted);
+    let below = g.size().y - theme::ink_rect(&g).bottom();
+    ui.add(egui::Label::new(g));
+    below
 }
 
 /// The composer's text field id for an issue.
@@ -471,7 +513,6 @@ mod tests {
         assert!(composer_shown(true, true), "the snapshot override draws the writable UI");
         assert!(!snapshot_composer() || cfg!(feature = "snapshot"), "never on outside snapshot builds");
         assert_eq!(READ_ONLY_NOTE, "Read-only, comments can't be posted");
-        assert_eq!(21.0 - NOTE_LIFT, 17.5, "the note's ink sits where the first card's edge does");
         let mut bar = egui::style::ScrollStyle::floating();
         crate::views::floating_thumb(&mut bar);
         assert!(DETAIL_RIGHT >= bar.bar_width + bar.bar_outer_margin + 4.0, "the scrollbar sits clear of the content");
@@ -535,7 +576,7 @@ mod tests {
 
     #[test]
     fn comment_bodies_sit_12_under_their_header() {
-        // Round 14 E2: the header's baseline → the body's first ink, 12.
+        // Round 14 E2: the header's lowest ink → the body's first ink, 12.
         let p = crate::theme::LIGHT;
         let body = serde_json::json!({"type": "doc", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "Looks good"}]}]});
         let shapes = crate::testutil::paint_at2(egui::vec2(800.0, 400.0), |ui| {
@@ -544,22 +585,68 @@ mod tests {
         });
         let (a, b) = (crate::testutil::ink_of(&shapes, "Ada Lovelace"), crate::testutil::ink_of(&shapes, "Looks good"));
         assert!((b.top() - a.bottom() - HEADER_TO_BODY).abs() <= 0.5, "header → body {}", b.top() - a.bottom());
+        // Round 15 E3: an author with descenders measures from them.
+        let shapes = crate::testutil::paint_at2(egui::vec2(800.0, 400.0), |ui| {
+            ui.set_width(400.0);
+            comment_card(ui, &p, "Alan Turing", "2026-07-29 13:28", &body);
+        });
+        let (a, b) = (crate::testutil::ink_of(&shapes, "Alan Turing"), crate::testutil::ink_of(&shapes, "Looks good"));
+        assert!((b.top() - a.bottom() - HEADER_TO_BODY).abs() <= 0.5, "descenders → body {}", b.top() - a.bottom());
     }
 
     #[test]
-    fn the_title_sits_24_under_the_key() {
-        // Round 14 E1: the key row's baseline (its ink's foot: "CI-3778" has no descenders) → the title's ink, 24.
+    fn the_title_sits_24_under_the_key_row_and_16_over_the_pills() {
+        // Round 15 E2 / E7: the key row's lowest ink (the link's descenders, else the key) → the title's ink 24;
+        // the title's last line's ink → the pills 16, with or without descenders. Real fonts, 2x.
         let p = crate::theme::LIGHT;
-        let shapes = crate::testutil::paint_at2(egui::vec2(800.0, 400.0), |ui| {
-            ui.allocate_ui_with_layout(vec2(ui.available_width(), crate::views::BUTTON_H), egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                ui.set_min_height(crate::views::BUTTON_H);
-                ui.label(RichText::new("CI-3778").font(theme::mono(12.5)).color(p.muted));
+        let marker = egui::Color32::from_rgb(1, 2, 3);
+        for (link, title) in [(None, "Dashboards"), (Some("CI-404 Build System (ongoing)"), "Verify the MM/DD x-axis label on the autoscaler daily spend bar chart")]
+        {
+            let shapes = crate::testutil::paint_at2(egui::vec2(800.0, 400.0), |ui| {
+                let lowest = ui
+                    .allocate_ui_with_layout(vec2(ui.available_width(), crate::views::BUTTON_H), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                        ui.set_min_height(crate::views::BUTTON_H);
+                        let r = ui.label(RichText::new("CI-3778").font(theme::mono(12.5)).color(p.muted));
+                        let mut lowest = ink_bottom_at(ui, r.rect.top(), "CI-3778", &theme::mono(12.5));
+                        if let Some(l) = link {
+                            let r = crate::views::text_link(ui, l, theme::body(13.0), p.accent);
+                            lowest = lowest.max(ink_bottom_at(ui, r.rect.top(), l, &theme::body(13.0)));
+                        }
+                        lowest
+                    })
+                    .inner;
+                title_block(ui, &p, lowest, title);
+                crate::views::pill(ui, "New", marker, p.text);
             });
-            ui.add_space(key_to_title_space(ui, "CI-3778"));
-            ui.label(RichText::new("tools/flox/github-auth: pin GitHub host keys").font(theme::bold(22.0)).color(p.text));
+            let k = crate::testutil::ink_of(&shapes, "CI-3778");
+            let low = link.map_or(k.bottom(), |l| k.bottom().max(crate::testutil::ink_of(&shapes, l).bottom()));
+            let t = crate::testutil::ink_of(&shapes, title);
+            assert!((t.top() - low - KEY_TO_TITLE).abs() <= 0.25, "{link:?}: key row → title {}", t.top() - low);
+            let pill = crate::testutil::fills(&shapes).iter().find(|(_, c)| *c == marker).expect("pill").0;
+            assert!((pill.top() - t.bottom() - TITLE_TO_PILLS).abs() <= 0.25, "{title}: title → pills {}", pill.top() - t.bottom());
+        }
+    }
+
+    #[test]
+    fn section_labels_sit_16_over_their_content() {
+        // Round 15 E6 / F2: "Description" → its first line, "Comments" → the first card, 16 to the ink.
+        let p = crate::theme::LIGHT;
+        let v = serde_json::json!({"type": "doc", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "Confirm the bar"}]}]});
+        let shapes = crate::testutil::paint_at2(egui::vec2(800.0, 600.0), |ui| {
+            ui.set_width(400.0);
+            let below = section_heading(ui, &p, "Description");
+            ui.add_space(label_space(ui, below, adf_view::first_ink_top(ui.ctx(), &v)));
+            adf_view::show_value(ui, &v, &p, p.surface);
+            ui.add_space(24.0);
+            let below = section_heading(ui, &p, "Comments (1)");
+            ui.add_space(label_space(ui, below, 0.0));
+            comment_card(ui, &p, "Alan Turing", "2026-07-29 13:28", &v);
         });
-        let (k, t) = (crate::testutil::ink_of(&shapes, "CI-3778"), crate::testutil::ink_of(&shapes, "tools/flox/github-auth: pin GitHub host keys"));
-        assert!((t.top() - k.bottom() - KEY_TO_TITLE).abs() <= 0.5, "key → title {}", t.top() - k.bottom());
+        let gap = crate::testutil::ink_of(&shapes, "Confirm the bar").top() - crate::testutil::ink_of(&shapes, "Description").bottom();
+        assert!((gap - LABEL_INK_GAP).abs() <= 0.5, "Description → text {gap}");
+        let card = crate::testutil::fills(&shapes).iter().find(|(_, c)| *c == p.surface_2).expect("card").0;
+        let gap = card.top() - crate::testutil::ink_of(&shapes, "Comments (1)").bottom();
+        assert!((gap - LABEL_INK_GAP).abs() <= 0.5, "Comments → card {gap}");
     }
 
     #[test]

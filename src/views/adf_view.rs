@@ -21,6 +21,20 @@ pub fn show_value(ui: &mut Ui, v: &serde_json::Value, p: &Palette, container: eg
     show(ui, &doc, p, theme::chip_fill_on(container, p));
 }
 
+/// How far the first block of document `v` puts its ink under its top: a code block's fill is its ink; a
+/// heading's ink sits in its own line; everything else starts with a body line (round 15 E6).
+pub fn first_ink_top(ctx: &egui::Context, v: &serde_json::Value) -> f32 {
+    let doc = adf::parse(v);
+    match doc.blocks.first() {
+        Some(Block::Code { .. }) => 0.0,
+        Some(Block::Heading { level, .. }) => {
+            let size = heading_size(*level);
+            theme::Ink::of(ctx, &theme::bold(size), Some(line_height(size))).top
+        }
+        _ => theme::Ink::of(ctx, &theme::body(BODY), Some(line_height(BODY))).top,
+    }
+}
+
 /// The empty description's line.
 pub const NO_DESCRIPTION: &str = "No description";
 
@@ -68,10 +82,14 @@ pub fn marker_slot(widest_number: f32) -> f32 {
     (LIST_GUTTER - MARKER_GAP).max(widest_number.ceil())
 }
 
-/// Space above a heading: 24 except at the top, where the section heading already spaced it.
+/// Space above a heading: HEADING_ABOVE except at the top, where the section heading already spaced it.
 pub fn heading_space_above(first: bool) -> f32 {
-    if first { 0.0 } else { 24.0 - BLOCK_GAP }
+    if first { 0.0 } else { HEADING_ABOVE - BLOCK_GAP }
 }
+
+/// The line-box gap above a later heading: the body line's leading and the heading's cap leading make it 32 to
+/// the ink, the sections' gap (round 15 E5: 24 read 34).
+const HEADING_ABOVE: f32 = 22.0;
 
 pub fn show(ui: &mut Ui, doc: &adf::Doc, p: &Palette, chip: egui::Color32) {
     ui.scope(|ui| show_blocks(ui, doc, p, chip));
@@ -282,8 +300,17 @@ fn link_underlines(g: &egui::Galley, links: &[(char, bool)]) -> Vec<(egui::Range
                 if link && baseline.is_none() {
                     baseline = Some(row.pos.y + gl.pos.y);
                 }
+                // The glyph's ink, on the pixel grid as `theme::ink_rect` puts it, so a mono key's underline ends
+                // at its ink like a body link's, not at its wide advance box (round 15 E4); a space keeps its
+                // advance (runs drop it at their ends).
                 let lr = gl.logical_rect();
-                (link, gl.chr.is_whitespace(), row.pos.x + lr.left(), row.pos.x + lr.right())
+                if gl.chr.is_whitespace() || gl.uv_rect.is_nothing() || gl.uv_rect.size.x <= 0.0 {
+                    (link, gl.chr.is_whitespace(), row.pos.x + lr.left(), row.pos.x + lr.right())
+                } else {
+                    let ppp = g.pixels_per_point.max(1.0);
+                    let x = row.pos.x + ((gl.pos.x + gl.uv_rect.offset.x) * ppp).round() / ppp;
+                    (link, false, x, x + gl.uv_rect.size.x)
+                }
             })
             .collect();
         if let Some(b) = baseline {
@@ -441,8 +468,9 @@ pub type JunctionGlyph = (bool, f32, f32, f32, f32);
 /// `a` is the glyph before the junction, `b` the one after; `into_code` when `b` starts the code.
 pub fn junction_shift(a: JunctionGlyph, b: JunctionGlyph, into_code: bool) -> f32 {
     if into_code {
-        // The fill starts CODE_PAD_X left of b's ink.
-        let want = if a.0 { a.4 } else { a.2 + CHIP_ABUT };
+        // The fill starts CODE_PAD_X left of b's ink: after a space, its whole advance plus CHIP_ABUT (a word's
+        // own left bearing; round 15 E9: the bare advance read 2.5–3 against 3.5–4.5 between words).
+        let want = if a.0 { a.4 + CHIP_ABUT } else { a.2 + CHIP_ABUT };
         want - (b.1 - CODE_PAD_X)
     } else {
         // The fill ends CODE_PAD_X right of a's ink.
@@ -719,6 +747,27 @@ mod tests {
     }
 
     #[test]
+    fn key_link_underlines_end_at_the_ink() {
+        // Round 15 E4: a smart-link key's underline runs from its mono glyphs' ink, not their advance boxes.
+        let p = palette();
+        let key = Span { link: Some("https://x.atlassian.net/browse/CI-1104".into()), ..span("CI-1104") };
+        let doc = adf::Doc { blocks: vec![Block::Paragraph(vec![key])] };
+        let shapes = crate::testutil::paint_at2(egui::vec2(800.0, 200.0), |ui| show(ui, &doc, &p, p.surface_2));
+        let ink = crate::testutil::ink_of(&shapes, "CI-1104");
+        fn walk(s: &egui::Shape, out: &mut Vec<[egui::Pos2; 2]>) {
+            match s {
+                egui::Shape::LineSegment { points, .. } => out.push(*points),
+                egui::Shape::Vec(v) => v.iter().for_each(|s| walk(s, out)),
+                _ => {}
+            }
+        }
+        let mut lines = Vec::new();
+        shapes.iter().for_each(|c| walk(&c.shape, &mut lines));
+        let [a, b] = *lines.first().expect("an underline");
+        assert!((a.x - ink.left()).abs() <= 0.5 && (b.x - ink.right()).abs() <= 0.5, "underline {}–{} vs ink {}–{}", a.x, b.x, ink.left(), ink.right());
+    }
+
+    #[test]
     fn span_format_maps_marks() {
         let p = palette();
         let plain = span_format(&span("a"), &p, 14.0, false, &FIT);
@@ -769,7 +818,7 @@ mod tests {
         let into = junction_shift((false, 0.0, 5.0, 0.0, 6.0), (false, 10.5, 15.0, 10.0, 16.0), true);
         assert_eq!(into, 5.0 + CHIP_ABUT - (10.5 - CODE_PAD_X), "( then code: the fill starts 1 past the ( ink");
         let spaced = junction_shift((true, 6.0, 9.0, 6.0, 9.0), (false, 10.5, 15.0, 10.0, 16.0), true);
-        assert_eq!(spaced, 9.0 - (10.5 - CODE_PAD_X), "space then code: the fill starts where the space ends");
+        assert_eq!(spaced, 9.0 + CHIP_ABUT - (10.5 - CODE_PAD_X), "space then code: the fill starts CHIP_ABUT past the space's advance");
         let out = junction_shift((false, 0.0, 5.0, 0.0, 6.0), (false, 6.5, 8.0, 6.0, 9.0), false);
         assert_eq!(out, 5.0 + CODE_PAD_X + CHIP_ABUT - 6.5, "code then ,: the comma's ink 1 past the fill");
         let s = |text: &str, code: bool| Span { code, ..span(text) };
@@ -833,6 +882,9 @@ mod tests {
         near(find('x', 0).1 - chips[2].left(), CODE_PAD_X, "x left pad");
         near(chips[2].right() - find('x', 0).2, CODE_PAD_X, "x right pad");
         assert!(find('y', 0).1 - chips[2].right() > 2.0, "the word after keeps its space");
+        // Round 15 E9: a word space before a chip reads like one between words (3.5–4.5 to the ink).
+        let before = chips[1].left() - find('d', 0).2;
+        assert!((3.5..=4.5).contains(&before), "and → known_hosts {before}");
     }
 
     #[test]
@@ -865,9 +917,9 @@ mod tests {
     }
 
     #[test]
-    fn headings_get_24_above_except_first() {
+    fn headings_get_32_to_the_ink_except_first() {
         assert_eq!(heading_space_above(true), 0.0);
-        assert_eq!(heading_space_above(false) + BLOCK_GAP, 24.0);
+        assert_eq!(heading_space_above(false) + BLOCK_GAP, 22.0);
     }
 
     fn with_fonts<R>(f: impl FnOnce(&mut egui::epaint::text::FontsView<'_>) -> R) -> R {
