@@ -47,6 +47,7 @@ Only a token you paste is saved. Signing out deletes that file.
 | `⌘W` | Close the window |
 | `⌘K` | Go to an issue by key, number, or link |
 | `⌘O` | Open in Jira |
+| `Esc` | Cancel or close |
 | `?` or `Esc` | Close this help |
 | **Issues** | |
 | `⌘F` or `/` | Focus search |
@@ -64,7 +65,6 @@ Only a token you paste is saved. Signing out deletes that file.
 | `j/k` or `↑/↓` | Move |
 | `Tab/⇧Tab` | Next or previous field |
 | `Enter` | Confirm |
-| `Esc` | Cancel or close |
 <!-- keys:end -->
 
 Only `⌘1`–`⌘4`, `⌘R`, `⌘W`, and `?` work on every screen. The rest are bound on the Issues screen only. Plain keys (letters, `/`, `?`) do nothing while a text field has focus. While a picker is open, only `Esc`, the arrow keys (and `j` / `k`, except in the Assign picker), and `Enter` apply (in the Edit dialog, `Tab` and `⇧Tab` move between fields and `Enter` confirms); `?` also works while a picker without a text field is open. Selecting a row shows its detail. `?` (or the "?" button in the header) opens this list in the app, and a bar at the bottom of every screen shows the keys that apply right now. While the help is open only the global keys apply; `?` or `Esc` closes it.
