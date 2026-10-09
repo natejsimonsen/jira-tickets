@@ -301,7 +301,11 @@ fn sign_in_aside(p: &Palette) -> egui::text::LayoutJob {
 }
 
 /// Alternating prose and identifiers.
-pub const SIGN_IN_ASIDE: [&str; 7] = ["Or set ", "JIRA_API_TOKEN", " or ", "api_token", " in ", "config.toml", ", then check again."];
+pub const SIGN_IN_ASIDE: [&str; 7] = ["Or set ", "JIRA_API_TOKEN", ", or ", "api_token", " in ", "config.toml", ", then check again."];
+
+/// The sign-in panel's top padding: 16 less the 22 px title's ~4 of leading above its ink, so the panel reads
+/// 16 above the title's ink as below "Check again" (round 8 measured 21.5 top, 17.5 bottom).
+const SIGN_IN_TOP: f32 = 12.0;
 
 /// Sign in → "Check again": the 8 the text button's own 28 px box used to add, now explicit at 12.
 const SIGN_IN_TO_AGAIN: f32 = 12.0;
@@ -333,7 +337,7 @@ pub fn sign_in(app: &mut App, ui: &mut Ui) {
     let aside = sign_in_aside(p);
     let aside_w = ui.fonts_mut(|f| f.layout_job(aside.clone())).size().x;
     centred(ui, "sign-in", |ui| {
-        Frame::new().fill(p.surface).stroke(Stroke::new(1.0, p.border)).corner_radius(theme::RADIUS).inner_margin(Margin::same(16)).show(ui, |ui| {
+        Frame::new().fill(p.surface).stroke(Stroke::new(1.0, p.border)).corner_radius(theme::RADIUS).inner_margin(Margin { left: 16, right: 16, top: SIGN_IN_TOP as i8, bottom: 16 }).show(ui, |ui| {
             let w = sign_in_width(aside_w);
             ui.set_width(w);
             ui.vertical(|ui| {
@@ -852,7 +856,8 @@ mod widget_tests {
 
     #[test]
     fn sign_in_aside_reads_as_one_sentence() {
-        assert_eq!(SIGN_IN_ASIDE.concat(), "Or set JIRA_API_TOKEN or api_token in config.toml, then check again.");
+        assert_eq!(SIGN_IN_ASIDE.concat(), "Or set JIRA_API_TOKEN, or api_token in config.toml, then check again.");
+        assert_eq!(SIGN_IN_TOP, 16.0 - 4.0, "title top leading trimmed");
         assert_eq!(sign_in_width(300.0), 480.0);
         assert_eq!(sign_in_width(451.0), 480.0, "round 6: 480 so the aside has margin");
         assert_eq!(sign_in_width(470.3), 495.0, "a wider aside keeps 24 of margin");

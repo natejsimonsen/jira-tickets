@@ -278,7 +278,7 @@ pub fn hints_panel(app: &App, ui: &mut Ui, p: &Palette) {
     hint_strip(ui, crate::keys::hints(c), p);
 }
 
-/// The hint bar on the sign-in form: "⏎ sign in".
+/// The hint bar on the sign-in form: "Enter sign in".
 pub fn sign_in_hints(ui: &mut Ui, p: &Palette) {
     hint_strip(ui, crate::keys::hints(crate::keys::HintContext::SignIn), p);
 }

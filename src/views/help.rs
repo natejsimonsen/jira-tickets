@@ -165,12 +165,17 @@ fn chip(ui: &mut egui::Ui, text: &str, p: &Palette) {
     let size = chip_size(ui, text, p);
     let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
     let fill = theme::chip_fill_on(crate::views::dialog_fill(p), p);
-    // In dark the chip (#454542) takes the dialog edge as its outline, one quiet step up.
-    let edge = if p.dark { theme::DARK_EDGE } else { p.border };
-    ui.painter().rect(rect, 4.0, fill, Stroke::new(1.0, edge), egui::StrokeKind::Inside);
+    ui.painter().rect(rect, 4.0, fill, chip_stroke(p), egui::StrokeKind::Inside);
     // Centred on the glyphs' ink, not their advance box: "⌘" carries extra advance on its right.
     let x = ink_left(rect.center().x, galley.mesh_bounds.center().x);
     ui.painter().galley(egui::pos2(x, rect.center().y - galley.size().y / 2.0), galley, p.text);
+}
+
+/// A help chip's edge: none, since the fill alone stands off the panel (round 8: fill and edge read doubled);
+/// in dark the dialog edge only if the fill were under 1.2:1 off the dialog.
+pub fn chip_stroke(p: &Palette) -> Stroke {
+    let fill = theme::chip_fill_on(crate::views::dialog_fill(p), p);
+    if p.dark && theme::contrast(fill, crate::views::dialog_fill(p)) < 1.2 { Stroke::new(1.0, theme::DARK_EDGE) } else { Stroke::NONE }
 }
 
 /// Where to put a galley so its ink centre (`ink_centre`, from the galley's origin) lands on `centre`.
@@ -183,6 +188,15 @@ mod tests {
     #[test]
     fn chips_centre_the_ink() {
         assert_eq!(super::ink_left(50.0, 6.0), 44.0);
+    }
+
+    #[test]
+    fn chips_are_fill_only() {
+        for p in [&crate::theme::LIGHT, &crate::theme::DARK] {
+            assert_eq!(super::chip_stroke(p), egui::Stroke::NONE, "dark={}", p.dark);
+            let fill = crate::theme::chip_fill_on(crate::views::dialog_fill(p), p);
+            assert!(crate::theme::contrast(fill, crate::views::dialog_fill(p)) >= if p.dark { 1.2 } else { 1.1 }, "dark={}", p.dark);
+        }
     }
 
     #[test]

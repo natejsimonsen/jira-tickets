@@ -45,9 +45,9 @@ Only a token you paste is saved. Signing out deletes that file.
 | `⌘1` to `⌘4` | Issues, Grooming, Team, Roadmap |
 | `⌘R` | Refresh |
 | `⌘W` | Close the window |
-| `?` | Toggle this help |
-| `Esc` | Close this help |
+| `?` or `Esc` | Close this help |
 | `⌘K` | Go to an issue by key, number, or link |
+| `⌘O` | Open in Jira |
 | **Issues** | |
 | `⌘F` or `/` | Focus search |
 | `j/k` or `↑/↓` | Next or previous issue |
@@ -59,10 +59,9 @@ Only a token you paste is saved. Signing out deletes that file.
 | `m` | Toggle Roadmap filter |
 | `J/K` | Move down or up in rank |
 | `c` | Copy the issue link |
-| `⌘O` | Open in Jira |
 | `⌘Enter` | Post the comment |
 | **Pickers** | |
-| `↑/↓` or `j/k` | Move (j/k not in Assign) |
+| `j/k` or `↑/↓` | Move |
 | `Tab/⇧Tab` | Next or previous field in Edit |
 | `Enter` | Confirm |
 | `Esc` | Cancel |
