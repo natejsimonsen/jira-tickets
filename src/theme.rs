@@ -185,14 +185,26 @@ const DARK_WASH: u8 = 84;
 const DARK_STRIPE_MIX: f32 = 0.42;
 /// Dark pill text: a little past halfway to white, so it holds 4.5:1 on the lighter selected row too.
 const DARK_TEXT_MIX: f32 = 0.62;
+/// The grey hue's dark pill text ("New" and other to-do statuses): less far toward white, #cccbc9, 1.36 off body
+/// text instead of 1.27 (#d3d2d0 read as plain text; round 12 L1). The asked-for #c4c3c0 (1.5 off) falls to 4.2:1
+/// on the grey wash over the selected row, so this is the furthest step that keeps every row at 4.5:1 (4.55).
+const DARK_GREY_TEXT_MIX: f32 = 0.56;
+
+/// How far toward white a hue's dark pill text goes.
+fn dark_text_mix(base: Color32) -> f32 {
+    if base == hex(GREY) { DARK_GREY_TEXT_MIX } else { DARK_TEXT_MIX }
+}
 
 /// A translucent wash of the hue behind text in a darker (light theme) or
 /// lighter (dark theme) shade of it, for at least 4.5:1 contrast. The row's edge stripe is the
 /// base hue in light (20% toward black, so it holds 4.5:1 on the row) and DARK_STRIPE_MIX toward white in dark (the text's
 /// halfway tint washes every hue out to the same pale stripe).
 pub fn tint_from_hue(base: Color32, p: &Palette) -> Tint {
-    let (alpha, fg, stripe) =
-        if p.dark { (DARK_WASH, mix(base, 255, DARK_TEXT_MIX), mix(base, 255, DARK_STRIPE_MIX)) } else { (LIGHT_WASH, mix(base, 0, 0.45), mix(base, 0, 0.2)) };
+    let (alpha, fg, stripe) = if p.dark {
+        (DARK_WASH, mix(base, 255, dark_text_mix(base)), mix(base, 255, DARK_STRIPE_MIX))
+    } else {
+        (LIGHT_WASH, mix(base, 0, 0.45), mix(base, 0, 0.2))
+    };
     Tint { bg: Color32::from_rgba_unmultiplied(base.r(), base.g(), base.b(), alpha), fg, stripe }
 }
 
@@ -548,6 +560,21 @@ mod tests {
             let bad = BTreeMap::from([("Blocked".to_string(), "red".to_string())]);
             assert_eq!(status_tint("Blocked", "new", p, &bad), tint_from_hue(hex(RED), p));
         }
+    }
+
+    #[test]
+    fn dark_new_text_steps_off_body_text() {
+        // L1: the grey hue's dark text is #cccbc9, further off `text` than the other hues' 1.27, ≥ 4.5 on its wash
+        // over every row fill, the selection included.
+        let t = tint_from_hue(hex(GREY), &DARK);
+        assert_eq!(t.fg, Color32::from_rgb(0xcc, 0xcb, 0xc9));
+        let off = contrast(t.fg, DARK.text);
+        assert!(off >= 1.35, "{off:.2}");
+        for row in [DARK.surface, DARK.selected_row, DARK.hover_row, DARK.bg] {
+            let c = contrast(t.fg, over(t.bg, row));
+            assert!(c >= 4.5, "{row:?}: {c:.2}");
+        }
+        assert_eq!(tint_from_hue(hex(BLUE), &DARK).fg, mix(hex(BLUE), 255, DARK_TEXT_MIX), "other hues keep theirs");
     }
 
     #[test]
