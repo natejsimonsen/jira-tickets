@@ -85,3 +85,7 @@ These were decided in earlier rounds; raters treat them as correct and do not sc
 - **Scroll clipping.** Scroll areas (the list, the detail pane) clip at the viewport with a bottom fade of at most
   8 px that stops one pixel row short of the edge; they do not snap rows, so a scrolled line or comment card may be
   cut. This replaces round 11's "detail viewport stops 4 pt above the bar".
+- **Before-Enter cue.** The cue that Enter runs JQL appears both in the count-row note and in the hint bar, on purpose:
+  the bar always states the focused field's keys, and the note is the in-place cue. Final; raised three times.
+- **Shared light fill.** Help key chips and light dialog fields may share a fill (#ebebe7): the help overlay has no
+  fields, so a chip and a field never appear together.
