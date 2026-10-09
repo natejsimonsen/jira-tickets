@@ -273,10 +273,14 @@ const SIGN_IN_TO_AGAIN: f32 = 12.0;
 /// The sign-in aside → token field, in code (see the comment at its use).
 const ASIDE_TO_FIELD: f32 = 15.0;
 
-/// The sign-in panel's content width: 380, or the aside's one-line width when wider.
+/// The sign-in panel's content width: 480, or the aside's one-line width plus 24 of margin when wider, so
+/// the aside never fits with only a pixel to spare.
 pub fn sign_in_width(aside_w: f32) -> f32 {
-    aside_w.ceil().max(380.0)
+    (aside_w.ceil() + 24.0).max(480.0)
 }
+
+/// Title → body in code: the 22 px title's line box carries ~5.5 of leading under its ink, so 11 reads as 16.
+const TITLE_TO_BODY: f32 = 11.0;
 
 pub fn sign_in(app: &mut App, ui: &mut Ui) {
     let p = theme::palette(ui.ctx());
@@ -299,7 +303,7 @@ pub fn sign_in(app: &mut App, ui: &mut Ui) {
                 // The aside's mono runs make its line box ~1 px taller than its prose, so 15 reads as 16.
                 ui.spacing_mut().item_spacing.y = 0.0;
                 ui.label(RichText::new("Sign in to Jira").font(theme::bold(22.0)).color(p.text));
-                ui.add_space(16.0);
+                ui.add_space(TITLE_TO_BODY);
                 let (lead, is_error) = sign_in_lead(app.token_error.as_deref());
                 ui.label(RichText::new(lead).size(14.0).color(if is_error { p.off_track } else { p.text }));
                 // A login means Jira rejected it (401): show what was sent.
@@ -496,11 +500,15 @@ pub fn input_field<'a>(text: &'a mut String, hint: &str, font: egui::FontId, p: 
         .font(font.clone())
         .hint_text(field_hint(hint, font, p))
         .desired_width(f32::INFINITY)
-        .margin(vec2(INPUT_PAD_X, 4.0))
+        .margin(INPUT_MARGIN)
         .min_size(vec2(0.0, INPUT_H))
-        // The text row (and caret, and placeholder) centred in the 32 px box, not riding at the top margin.
+        // The text row (and caret, and placeholder) centred in the box, not riding at the top margin.
         .vertical_align(egui::Align::Center)
 }
+
+/// An input's margin: 12 either side; 2 above and 5 below, so the centred line box (whose leading sits under
+/// the glyphs) puts the text's ink, not its box, on the field's centre (it read 1.5 px low at 4/4).
+const INPUT_MARGIN: Margin = Margin { left: INPUT_PAD_X as i8, right: INPUT_PAD_X as i8, top: 2, bottom: 5 };
 
 /// A modal dialog's fill: plain surface in light; in dark #333331, a step past surface_2, so the dialog lifts
 /// off the dimmed page about as far as the light one does (the backdrop stays at 110).
@@ -737,8 +745,9 @@ mod widget_tests {
     #[test]
     fn sign_in_aside_reads_as_one_sentence() {
         assert_eq!(SIGN_IN_ASIDE.concat(), "Or set JIRA_API_TOKEN or api_token in config.toml, then check again.");
-        assert_eq!(sign_in_width(300.0), 380.0);
-        assert_eq!(sign_in_width(452.3), 453.0, "the aside fits on one line");
+        assert_eq!(sign_in_width(300.0), 480.0);
+        assert_eq!(sign_in_width(451.0), 480.0, "round 6: 480 so the aside has margin");
+        assert_eq!(sign_in_width(470.3), 495.0, "a wider aside keeps 24 of margin");
     }
 
     #[test]
