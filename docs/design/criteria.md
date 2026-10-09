@@ -76,6 +76,9 @@ These were decided in earlier rounds; raters treat them as correct and do not sc
   "placeholder 2 px right of the caret" in the fields that open focused.
 - **Sign-in aside.** Final wording: "Or export JIRA_API_TOKEN, or set api_token in config.toml, then check again."
   Two verbs end the comma ambiguity; do not reword.
+- **Spacing is measured to the ink.** Every padding, gap and inset in these criteria is the distance between ink
+  (glyph or stroke edges), not line boxes or layout rects. A fixer sets code spacing so the measured ink gap lands on
+  the scale; raters measure ink. Scroll areas clip at the viewport with an ≤8 px bottom fade and never snap rows.
 - **Chip fills.** Inline code chips and code blocks share one fill, LIGHT_CHIP (#ebebe7) on the light page; a chip
   inside a card takes `chip_fill_on(card)`, one step off whatever it sits on (#dfdfda in a light comment card). The
   page/card difference is intentional.
