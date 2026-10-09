@@ -526,7 +526,7 @@ fn combo(
     edge: PopupEdge,
     p: &Palette,
     contents: impl FnOnce(&mut Ui, f32),
-) {
+) -> egui::Response {
     let (rect, resp) = ui.allocate_exact_size(vec2(w, crate::views::BUTTON_H), Sense::click());
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, true, &text));
     let popup_id = egui::Id::new(("combo-popup", salt));
@@ -590,6 +590,7 @@ fn combo(
                 contents(ui, row_w)
             });
         });
+    resp
 }
 
 /// A popup's solid bar: the floating bars' THUMB_W width, POPUP_THUMB_OUTER from the frame's margin.
@@ -694,13 +695,17 @@ fn filters(app: &mut App, ui: &mut Ui, p: &Palette) {
     let team_text = team_combo_label(&team_label, !team_short).to_string();
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = GAP;
-        combo(ui, "team", (team_text, false), (team_w, team_widest), team_options.len(), pane, PopupEdge::Start, p, |ui, _| {
+        let team = combo(ui, "team", (team_text, false), (team_w, team_widest), team_options.len(), pane, PopupEdge::Start, p, |ui, _| {
             for (scope, l) in &team_options {
                 if ui.selectable_label(app.filter.team == *scope, l).clicked() {
                     app.actions.push(Action::SetTeam(scope.clone()));
                 }
             }
         });
+        // The short label ("PLAT") names its team in full on hover (round 13 B3).
+        if team_short {
+            crate::views::tooltip(team, team_label.clone());
+        }
         combo(
             ui,
             "sprint",
