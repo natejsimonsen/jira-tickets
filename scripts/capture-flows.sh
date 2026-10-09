@@ -83,7 +83,7 @@ flow() {
     done
 }
 
-flow issues-default 'wait:500;shot:01-list.png;key:j;key:j;key:j;key:j;key:j;key:j;key:j;key:j;key:j;key:j;wait:300;shot:02-selected-new.png' \
+flow issues-default 'wait:500;shot:01-list.png;key:j;key:j;key:j;key:j;key:j;key:j;key:j;key:j;key:j;key:j;wait:1500;shot:02-selected-new.png' \
     '01-list.png|Issues list with the default team, sprint, and columns' \
     '02-selected-new.png|Tenth row selected (j×10), a "New" status pill on the selected row'
 flow issues-team-picker 'click:Platform;wait:200;shot:01-open.png' \
