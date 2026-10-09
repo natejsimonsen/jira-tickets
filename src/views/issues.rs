@@ -304,7 +304,7 @@ pub fn show(app: &mut App, ui: &mut Ui) {
             // The filter block's gaps are explicit (all V_GAP), so no implicit item spacing is added on top.
             ui.spacing_mut().item_spacing.y = 0.0;
             ui.scope(|ui| filters(app, ui, p));
-            ui.add_space(V_GAP);
+            ui.add_space(SEARCH_TO_COUNT);
             list(app, ui, p);
         });
     // The toast centres on the whole pane as laid out, not on the panel's response (which grows past the
@@ -442,6 +442,24 @@ pub fn popup_left(combo_left: f32, popup_w: f32, pane_left: f32, pane_right: f32
     combo_left.min(pane_right - popup_w).max(pane_left)
 }
 
+/// The epic popup's left edge: its right edge on the combo's right edge, growing leftward only as far as its
+/// content needs (`popup_width`), never past the pane's left edge.
+pub fn popup_left_end(combo_right: f32, popup_w: f32, pane_left: f32) -> f32 {
+    (combo_right - popup_w).max(pane_left)
+}
+
+/// Which edge of its combo a popup lines up with.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PopupEdge {
+    Start,
+    End,
+}
+
+/// A popup scrollbar thumb at rest and hovered: `border`, then `muted` (surface_2 measured 1.14:1 off the popup).
+pub fn popup_thumb(p: &Palette) -> (egui::Color32, egui::Color32) {
+    (p.border, p.muted)
+}
+
 /// A popup frame's margin, so a selected row's fill sits 4 in from the popup edge (margin 3 + stroke 1).
 const POPUP_MARGIN: i8 = 3;
 /// A popup frame's margin and stroke, both sides.
@@ -477,6 +495,7 @@ fn combo(
     (w, widest): (f32, f32),
     n_rows: usize,
     pane: (f32, f32),
+    edge: PopupEdge,
     p: &Palette,
     contents: impl FnOnce(&mut Ui, f32),
 ) {
@@ -499,7 +518,10 @@ fn combo(
         painter.add(egui::Shape::line(pts, Stroke::new(1.5, p.muted)));
     }
     let pop_w = popup_width(w, widest, POPUP_ROW_PAD, pane.1 - pane.0);
-    let left = popup_left(rect.left(), pop_w, pane.0, pane.1);
+    let left = match edge {
+        PopupEdge::Start => popup_left(rect.left(), pop_w, pane.0, pane.1),
+        PopupEdge::End => popup_left_end(rect.right(), pop_w, pane.0),
+    };
     let anchor = Rect::from_min_max(egui::pos2(left, rect.top()), egui::pos2(left + pop_w, rect.bottom()));
     let inner = pop_w - POPUP_FRAME;
     let (scroll_h, bar) = popup_scroll(n_rows);
@@ -520,6 +542,12 @@ fn combo(
             ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
             let visibility = if bar {
                 ui.spacing_mut().scroll = egui::style::ScrollStyle::solid();
+                // The solid thumb paints in the widgets' `bg_fill` (rows use `weak_bg_fill`, so they keep theirs).
+                let (rest, hover) = popup_thumb(p);
+                let w = &mut ui.visuals_mut().widgets;
+                w.inactive.bg_fill = rest;
+                w.hovered.bg_fill = hover;
+                w.active.bg_fill = hover;
                 egui::scroll_area::ScrollBarVisibility::AlwaysVisible
             } else {
                 egui::scroll_area::ScrollBarVisibility::VisibleWhenNeeded
@@ -616,21 +644,31 @@ fn filters(app: &mut App, ui: &mut Ui, p: &Palette) {
     let team_text = team_combo_label(&team_label, !team_short).to_string();
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = GAP;
-        combo(ui, "team", (team_text, false), (team_w, team_widest), team_options.len(), pane, p, |ui, _| {
+        combo(ui, "team", (team_text, false), (team_w, team_widest), team_options.len(), pane, PopupEdge::Start, p, |ui, _| {
             for (scope, l) in &team_options {
                 if ui.selectable_label(app.filter.team == *scope, l).clicked() {
                     app.actions.push(Action::SetTeam(scope.clone()));
                 }
             }
         });
-        combo(ui, "sprint", sprint_combo_text(app.sprints_answered, &sprint_label), (sprint_w, sprint_widest), sprint_options.len(), pane, p, |ui, _| {
-            for (scope, l) in &sprint_options {
-                if ui.selectable_label(app.filter.sprint == *scope, l).clicked() {
-                    app.actions.push(Action::SetSprint(scope.clone()));
+        combo(
+            ui,
+            "sprint",
+            sprint_combo_text(app.sprints_answered, &sprint_label),
+            (sprint_w, sprint_widest),
+            sprint_options.len(),
+            pane,
+            PopupEdge::Start,
+            p,
+            |ui, _| {
+                for (scope, l) in &sprint_options {
+                    if ui.selectable_label(app.filter.sprint == *scope, l).clicked() {
+                        app.actions.push(Action::SetSprint(scope.clone()));
+                    }
                 }
-            }
-        });
-        combo(ui, "epic", (epic_label, false), (epic_w, epic_widest), epics.len() + 1, pane, p, |ui, row_text_w| {
+            },
+        );
+        combo(ui, "epic", (epic_label, false), (epic_w, epic_widest), epics.len() + 1, pane, PopupEdge::End, p, |ui, row_text_w| {
             if ui.selectable_label(app.filter.epic.is_none(), "All epics").clicked() {
                 app.actions.push(Action::SetEpic(None));
             }
@@ -1008,10 +1046,15 @@ pub fn more_below(rows: &[(f32, f32)], edge: f32) -> bool {
 /// Between the count row's parts.
 const COUNT_GAP: f32 = 7.0;
 /// The count row: its 12 px line box (the spinner and link fit), so the gaps around it are what they say:
-/// V_GAP (12) from the search box, COUNT_TO_ROWS (8) to the first card.
+/// 12 from the search box to the count's ink and 8 from its ink to the first card.
 const COUNT_H: f32 = 16.0;
-/// Count row → first card.
-const COUNT_TO_ROWS: f32 = 8.0;
+/// The count's 12 px text sits ~4 inside its 16 px line box at the top and the bottom (measured 16 / 12 with
+/// 12 / 8 in code), so the code gaps are 8 and 4.
+const COUNT_INK_INSET: f32 = 4.0;
+/// Search box → count row (12 to the ink).
+const SEARCH_TO_COUNT: f32 = V_GAP - COUNT_INK_INSET;
+/// Count row → first card (8 from the ink).
+const COUNT_TO_ROWS: f32 = 8.0 - COUNT_INK_INSET;
 /// Space between a row's pills.
 const PILL_GAP: f32 = 8.0;
 /// The mono key's left side bearing at 12.5: the pill row moves in by it so pills and key share an ink edge.
@@ -1195,9 +1238,9 @@ fn goto_box(app: &mut App, ctx: &egui::Context, p: &Palette) {
 const GOTO_W: f32 = 444.0;
 const GOTO_PAD: f32 = 12.0;
 
-/// The go-to box's top edge: 12 px below the 48 px header.
+/// The go-to box's top edge: 12 px below the header rule.
 pub fn goto_top() -> f32 {
-    48.0 + 12.0
+    crate::views::HEADER_H + 12.0
 }
 
 #[cfg(test)]
@@ -1279,8 +1322,7 @@ mod tests {
 
     #[test]
     fn goto_box_sits_just_under_the_header() {
-        let gap = goto_top() - 48.0;
-        assert!((8.0..=16.0).contains(&gap), "{gap}");
+        assert_eq!(goto_top() - crate::views::HEADER_H, 12.0, "12 below the rule's bottom (round 7 measured 11)");
     }
 
     #[test]
@@ -1385,6 +1427,14 @@ mod tests {
         assert_eq!(popup_left(300.0, 200.0, 16.0, 588.0), 300.0, "fits under its combo");
         assert_eq!(popup_left(300.0, 400.0, 16.0, 588.0), 188.0, "shifts left to end at the pane edge");
         assert_eq!(popup_left(300.0, 572.0, 16.0, 588.0), 16.0, "as wide as the pane: from its left edge");
+        assert_eq!(popup_left_end(588.0, 200.0, 16.0), 388.0, "epic: right edge on the combo's, grows leftward");
+        assert_eq!(popup_left_end(588.0, 700.0, 16.0), 16.0, "bounded by the pane");
+        for p in [&theme::LIGHT, &theme::DARK] {
+            let (rest, hover) = popup_thumb(p);
+            assert!(theme::contrast(rest, p.surface) >= 1.3, "thumb at rest dark={}: {:.2}", p.dark, theme::contrast(rest, p.surface));
+            assert!(theme::contrast(hover, p.surface) > theme::contrast(rest, p.surface));
+        }
+        assert_eq!((SEARCH_TO_COUNT, COUNT_TO_ROWS), (8.0, 4.0), "12 / 8 to the count's ink");
     }
 
     #[test]
@@ -1513,7 +1563,10 @@ mod tests {
     #[test]
     fn fifteen_rows_fit_at_1440_by_900() {
         // 900 less the header (48), the filter block (12 + 28 + 12 + 28 + 12 + 28 + 12, the count row, 8) and the hint bar.
-        let list_h = 900.0 - 48.0 - (12.0 + 28.0 + 12.0 + 28.0 + 12.0 + crate::views::INPUT_H + 12.0 + COUNT_H + COUNT_TO_ROWS) - HINT_BAR_H;
+        let list_h = 900.0
+            - crate::views::HEADER_H
+            - (12.0 + 28.0 + 12.0 + 28.0 + 12.0 + crate::views::INPUT_H + SEARCH_TO_COUNT + COUNT_H + COUNT_TO_ROWS)
+            - HINT_BAR_H;
         assert!((list_h / ROW_PITCH).floor() >= 15.0, "{}", list_h / ROW_PITCH);
     }
 
