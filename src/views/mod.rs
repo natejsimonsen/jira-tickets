@@ -327,8 +327,13 @@ pub const SIGN_IN_ASIDE: [&str; 7] = ["Or export ", "JIRA_API_TOKEN", ", or set 
 /// 16 above the title's ink as below "Check again" (round 8 measured 21.5 top, 17.5 bottom).
 const SIGN_IN_TOP: f32 = 12.0;
 
-/// Sign in → "Check again": the 8 the text button's own 28 px box used to add, now explicit at 12.
-const SIGN_IN_TO_AGAIN: f32 = 12.0;
+/// Sign in → "Check again" in code: its row-height box carries ~5 above the ink of "Check", so 7 reads as the
+/// 12 the field → button gap shows (round 12 J1 measured 17 ink to ink at 12).
+const SIGN_IN_TO_AGAIN: f32 = 7.0;
+
+/// Body → aside in code: the 14 px line's leading under its ink and the aside's over its ink add ~6, so 2 reads
+/// as the 8 that makes the aside a footnote of the line above (round 12 J1 measured 14 at 8).
+const BODY_TO_ASIDE: f32 = 2.0;
 
 /// The sign-in aside → token field, in code (see the comment at its use).
 const ASIDE_TO_FIELD: f32 = 15.0;
@@ -361,7 +366,7 @@ pub fn sign_in(app: &mut App, ui: &mut Ui) {
             let w = sign_in_width(aside_w);
             ui.set_width(w);
             ui.vertical(|ui| {
-                // Every gap is explicit: 16 title → body, 8 body → aside, 16 aside → field, 12 → button, 8 → Check again.
+                // Every gap is explicit, ink to ink: 16 title → body, 8 body → aside, 16 aside → field, 12 → button, 12 → Check again.
                 // The aside's mono runs make its line box ~1 px taller than its prose, so 15 reads as 16.
                 ui.spacing_mut().item_spacing.y = 0.0;
                 ui.label(RichText::new("Sign in to Jira").font(theme::bold(22.0)).color(p.text));
@@ -387,7 +392,8 @@ pub fn sign_in(app: &mut App, ui: &mut Ui) {
                         app.actions.push(Action::SignOut);
                     }
                 }
-                ui.add_space(8.0);
+                // After the Sign out button (no text leading above the aside's) the plain 8.
+                ui.add_space(if app.login.is_some() { 8.0 } else { BODY_TO_ASIDE });
                 ui.add(egui::Label::new(aside).extend());
                 ui.add_space(ASIDE_TO_FIELD);
                 ui.visuals_mut().text_edit_bg_color = Some(theme::input_fill(p.surface, p));
@@ -678,19 +684,22 @@ pub fn input_field_in<'a>(text: &'a mut String, hint: &str, font: egui::FontId, 
         .vertical_align(egui::Align::Center)
 }
 
-/// An input's margin: INPUT_PAD_X either side; 2 above and 5 below, so the centred line box (whose leading sits under
-/// the glyphs) puts the text's ink, not its box, on the field's centre (it read 1.5 px low at 4/4).
+/// An input's margin: INPUT_PAD_X either side, the shared vertical margin above and below.
 const INPUT_MARGIN: Margin = input_margin(INPUT_PAD_X);
+
+/// Every single-line field's margin above and below its text: an even 4, so the galley is centred in the box like
+/// the combos' and chips' text (round 11 B2 fixed the search box; round 12 I1 gives go-to, sign-in and the pickers
+/// the same one vertical offset; their 2 / 5 read 1–1.5 high).
+pub const INPUT_PAD_Y: i8 = 4;
 
 /// An input's margin for a text inset of `pad_x` (12 on the page, the picker rows' 8 in picker dialogs).
 pub const fn input_margin(pad_x: f32) -> Margin {
-    Margin { left: pad_x as i8, right: pad_x as i8, top: 2, bottom: 5 }
+    Margin { left: pad_x as i8, right: pad_x as i8, top: INPUT_PAD_Y, bottom: INPUT_PAD_Y }
 }
 
-/// The list pane's search box margin: SEARCH_PAD_X either side and an even 4 above and below, so its galley is
-/// centred in the box like the combos' and chips' text beside it (2 / 5 put it 1.5 high of them; round 11 B2).
+/// The list pane's search box margin: SEARCH_PAD_X either side, the shared vertical margin.
 pub const fn search_margin() -> Margin {
-    Margin { left: SEARCH_PAD_X as i8, right: SEARCH_PAD_X as i8, top: 4, bottom: 4 }
+    input_margin(SEARCH_PAD_X)
 }
 
 /// A modal dialog's fill: plain surface in light; in dark #333331, a step past surface_2, so the dialog lifts
@@ -1020,6 +1029,70 @@ pub fn error_banner(ui: &mut Ui, p: &Palette, title: &str, raw: &str) -> bool {
 
 #[cfg(test)]
 mod widget_tests {
+    /// Renders one field in a real pass and returns (first glyph x, galley top) of the galley showing `shown`,
+    /// relative to the field's rect.
+    type MakeField<'f> = &'f dyn Fn(&mut String) -> egui::TextEdit<'_>;
+
+    fn ink_at(make: MakeField<'_>, typed: &str, shown: &str) -> (f32, f32) {
+        let ctx = egui::Context::default();
+        crate::theme::apply(&ctx);
+        let input = || egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0))), ..Default::default() };
+        let mut rect = egui::Rect::NOTHING;
+        let mut text = typed.to_string();
+        let mut out = None;
+        for _ in 0..2 {
+            let mut o = ctx.run_ui(input(), |ui| {
+                ui.set_width(400.0);
+                rect = ui.add_sized([400.0, 28.0], make(&mut text)).rect;
+            });
+            o.textures_delta.clear();
+            out = Some(o);
+        }
+        fn walk(s: &egui::Shape, shown: &str, found: &mut Vec<(f32, f32)>) {
+            match s {
+                egui::Shape::Text(t) if t.galley.job.text == shown => {
+                    let g = t.galley.rows.first().and_then(|r| r.glyphs.first().map(|gl| r.pos.x + gl.pos.x)).unwrap_or(0.0);
+                    found.push((t.pos.x + g, t.pos.y));
+                }
+                egui::Shape::Vec(v) => v.iter().for_each(|s| walk(s, shown, found)),
+                _ => {}
+            }
+        }
+        let mut found = Vec::new();
+        out.expect("a pass").shapes.iter().for_each(|c| walk(&c.shape, shown, &mut found));
+        let (x, y) = *found.first().unwrap_or_else(|| panic!("{shown:?} not painted"));
+        (x - rect.left(), y - rect.top())
+    }
+
+    #[test]
+    fn every_placeholder_starts_where_typed_text_does() {
+        // F1: the composer, search, go-to, sign-in and dialog fields each ink the placeholder at the typed
+        // text's origin (the empty caret sits CARET_LEAD left); I1: the single-line fields share one vertical
+        // offset.
+        let p = &crate::theme::LIGHT;
+        let font = || crate::theme::body(14.0);
+        let fields: [(&str, MakeField<'_>, f32); 5] = [
+            ("composer", &|t| super::detail::composer_edit(t, p), 0.0),
+            ("search", &|t| super::input_field_in(t, "Hint", font(), p, super::search_margin()), super::SEARCH_PAD_X),
+            ("go-to", &|t| super::input_field(t, "Hint", font(), p), super::INPUT_PAD_X),
+            ("sign-in", &|t| super::input_field(t, "Hint", font(), p).password(true), super::INPUT_PAD_X),
+            ("picker", &|t| super::pickers::field(t, "Hint", p), super::pickers::ROW_INSET),
+        ];
+        let mut tops = Vec::new();
+        for (name, make, inset) in fields {
+            let hint = if name == "composer" { super::detail::COMPOSER_HINT } else { "Hint" };
+            let (hx, _) = ink_at(make, "", hint);
+            let typed = if name == "sign-in" { "\u{2022}" } else { "A" };
+            let (tx, ty) = ink_at(make, "A", typed);
+            assert!((hx - tx).abs() < 0.5, "{name}: placeholder at {hx}, typed at {tx}");
+            assert!((tx - inset).abs() < 1.5, "{name}: typed text at {tx}, inset {inset}");
+            if name != "composer" {
+                tops.push((name, ty));
+            }
+        }
+        assert!(tops.iter().all(|(_, y)| (y - tops[0].1).abs() < 0.5), "one vertical offset: {tops:?}");
+    }
+
     #[test]
     fn read_only_is_inked_in_text() {
         // A1: the galley's glyphs carry `text`, the colour the painter actually draws; the name stays muted.
@@ -1415,5 +1488,46 @@ mod widget_tests {
     fn toast_sits_above_the_hint_bar_when_there_is_one() {
         assert_eq!(toast_offset(Some(24.0)), 40.0);
         assert_eq!(toast_offset(None), 24.0);
+    }
+}
+
+#[cfg(test)]
+mod tip_gap_tests {
+    /// Hovers a Comment-like button with its tooltip open (below, or beside on the left) and returns the painted
+    /// gap between the button's rect and the tip's frame rect.
+    fn painted_gap(beside: bool) -> f32 {
+        let ctx = egui::Context::default();
+        crate::theme::apply(&ctx);
+        ctx.all_styles_mut(|s| s.interaction.tooltip_delay = 0.0);
+        let p = crate::theme::LIGHT;
+        let mut btn = egui::Rect::NOTHING;
+        let mut rects = Vec::new();
+        for i in 0..4 {
+            let mut input = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0))), ..Default::default() };
+            input.time = Some(f64::from(i));
+            input.events.push(egui::Event::PointerMoved(egui::pos2(310.0, 114.0)));
+            let mut o = ctx.run_ui(input, |ui| {
+                ui.add_space(100.0);
+                ui.horizontal(|ui| {
+                    ui.add_space(300.0);
+                    let r = ui.add(super::primary_button_if("Comment", true, &p));
+                    btn = r.rect;
+                    super::show_tip(&r, super::detail::COMMENT_TIP.into(), beside.then_some(egui::RectAlign::LEFT));
+                });
+            });
+            o.textures_delta.clear();
+            rects = o.shapes.iter().filter_map(|c| if let egui::Shape::Rect(r) = &c.shape { Some(r.rect) } else { None }).collect();
+        }
+        let tip = rects.into_iter().find(|r| *r != btn).expect("the tip's frame");
+        if beside { btn.left() - tip.right() } else { tip.top() - btn.bottom() }
+    }
+
+    #[test]
+    fn tooltips_paint_tip_gap_off_the_control() {
+        // F2 (round 12): the gap is measured between painted rects, below and beside.
+        for beside in [false, true] {
+            let g = painted_gap(beside);
+            assert!((g - super::TIP_GAP).abs() <= 0.5, "beside={beside}: {g}");
+        }
     }
 }

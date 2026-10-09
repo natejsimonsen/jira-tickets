@@ -1429,7 +1429,7 @@ fn goto_box(app: &mut App, ctx: &egui::Context, p: &Palette) {
             .inner_margin(Margin::same(GOTO_PAD as i8))
             .show(ui, |ui| {
                 crate::views::dialog_fields(ui, p);
-                ui.set_width(GOTO_W - 2.0 * GOTO_PAD);
+                ui.set_width(goto_inner_w(crate::views::dialog_stroke(p).width));
                 ui.label(RichText::new("Go to issue").font(theme::bold(13.5)).color(p.text));
                 ui.add_space(4.0);
                 // Proportional 14 like the search box: mono is for rendered ids, not input.
@@ -1451,6 +1451,12 @@ fn goto_box(app: &mut App, ctx: &egui::Context, p: &Palette) {
 const GOTO_W: f32 = 444.0;
 const GOTO_PAD: f32 = 12.0;
 
+/// The go-to box's content width: GOTO_W less the padding and the frame's stroke, which egui adds outside the
+/// margin (it made the box 446 wide and 1 px right of centre; round 12 I2).
+pub fn goto_inner_w(stroke: f32) -> f32 {
+    GOTO_W - 2.0 * (GOTO_PAD + stroke)
+}
+
 /// The go-to box's top edge: 12 px below the header rule.
 pub fn goto_top() -> f32 {
     crate::views::HEADER_H + 12.0
@@ -1459,6 +1465,15 @@ pub fn goto_top() -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_goto_box_is_centred_at_its_width() {
+        // I2: outer width (content + padding + stroke) is GOTO_W, so round((window - GOTO_W) / 2) centres it.
+        let stroke = crate::views::dialog_stroke(&theme::LIGHT).width;
+        assert_eq!(goto_inner_w(stroke) + 2.0 * GOTO_PAD + 2.0 * stroke, GOTO_W);
+        let x = ((1440.0 - GOTO_W) / 2.0_f32).round();
+        assert_eq!(x, 1440.0 - (x + GOTO_W), "equal margins at 1440");
+    }
 
     #[test]
     fn only_the_selected_or_pointed_row_is_filled() {

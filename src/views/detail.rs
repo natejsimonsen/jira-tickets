@@ -229,17 +229,7 @@ fn composer(app: &mut App, ui: &mut Ui, p: &Palette, key: &str) {
         .corner_radius(theme::RADIUS)
         // 11 + the 1 px stroke: the comment cards' 12 to the text on every side.
         .inner_margin(Margin::same(COMPOSER_PAD as i8))
-        .show(ui, |ui| {
-            ui.add_sized([ui.available_width(), COMPOSER_H - 2.0 * (COMPOSER_PAD + COMPOSER_STROKE)], {
-                // The empty-field caret rule (I1): caret CARET_LEAD left of the origin, placeholder on it.
-                let empty = draft.is_empty();
-                egui::TextEdit::multiline(draft)
-                    .id(id)
-                    .frame(Frame::new())
-                    .margin(crate::views::caret_margin(Margin::ZERO, empty))
-                    .hint_text(crate::views::empty_field_hint(COMPOSER_HINT, theme::body(14.0), p))
-            })
-        })
+        .show(ui, |ui| ui.add_sized([ui.available_width(), COMPOSER_H - 2.0 * (COMPOSER_PAD + COMPOSER_STROKE)], composer_edit(draft, p).id(id)))
         .inner;
     // Clicking the frame's padding focuses the box too.
     let enabled = comment_enabled(draft, &app.posting);
@@ -255,6 +245,16 @@ fn composer(app: &mut App, ui: &mut Ui, p: &Palette, key: &str) {
             crate::views::icons::spinner(ui, crate::views::icons::INLINE_SPINNER, p);
         }
     });
+}
+
+/// The composer's text field. The empty-field caret rule (I1) lives in the frame's margin: a TextEdit given its own
+/// `frame` ignores `.margin()`, which is how the composer kept round 10's placeholder 2 right of the typed text
+/// (round 12 F1). Caret CARET_LEAD left of the origin, placeholder and typed text on it.
+pub fn composer_edit<'a>(draft: &'a mut String, p: &Palette) -> egui::TextEdit<'a> {
+    let empty = draft.is_empty();
+    egui::TextEdit::multiline(draft)
+        .frame(Frame::new().inner_margin(crate::views::caret_margin(Margin::ZERO, empty)))
+        .hint_text(crate::views::empty_field_hint(COMPOSER_HINT, theme::body(14.0), p))
 }
 
 /// The Comment button's tooltip.
