@@ -45,9 +45,9 @@ Only a token you paste is saved. Signing out deletes that file.
 | `⌘1` to `⌘4` | Issues, Grooming, Team, Roadmap |
 | `⌘R` | Refresh |
 | `⌘W` | Close the window |
-| `?` or `Esc` | Close this help |
 | `⌘K` | Go to an issue by key, number, or link |
 | `⌘O` | Open in Jira |
+| `?` or `Esc` | Close this help |
 | **Issues** | |
 | `⌘F` or `/` | Focus search |
 | `j/k` or `↑/↓` | Next or previous issue |

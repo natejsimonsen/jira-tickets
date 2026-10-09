@@ -301,7 +301,7 @@ fn sign_in_aside(p: &Palette) -> egui::text::LayoutJob {
 }
 
 /// Alternating prose and identifiers.
-pub const SIGN_IN_ASIDE: [&str; 7] = ["Or set ", "JIRA_API_TOKEN", ", or ", "api_token", " in ", "config.toml", ", then check again."];
+pub const SIGN_IN_ASIDE: [&str; 7] = ["Or set ", "JIRA_API_TOKEN", " or ", "api_token", " in ", "config.toml", ", then check again."];
 
 /// The sign-in panel's top padding: 16 less the 22 px title's ~4 of leading above its ink, so the panel reads
 /// 16 above the title's ink as below "Check again" (round 8 measured 21.5 top, 17.5 bottom).
@@ -394,6 +394,31 @@ pub fn sign_in(app: &mut App, ui: &mut Ui) {
             });
         });
     });
+}
+
+/// A one-line tooltip's height (14 px text and the frame's margins), for deciding where it fits.
+pub const TIP_H: f32 = 28.0;
+/// egui's tooltip gap under (or over) its control.
+const TIP_GAP: f32 = 4.0;
+
+/// Whether a tooltip goes above its control: when, below it, it would cross `limit` (the hint bar's top rule,
+/// or the window's bottom), as the Comment tooltip did (F2, H4).
+pub fn tip_above(anchor_bottom: f32, limit: f32) -> bool {
+    anchor_bottom + TIP_GAP + TIP_H > limit
+}
+
+/// `on_hover_text`, but above the control when there is no room for it below, over the hint bar.
+pub fn hover_tip(resp: egui::Response, text: impl Into<egui::WidgetText>, app: &App) -> egui::Response {
+    let limit = resp.ctx.content_rect().bottom() - hint_bar_height(app).unwrap_or(0.0);
+    let mut tip = egui::Tooltip::for_enabled(&resp);
+    if tip_above(resp.rect.bottom(), limit) {
+        tip.popup = tip.popup.align(egui::RectAlign::TOP_START).align_alternatives(&[]);
+    }
+    tip.show(|ui| {
+        ui.set_max_width(ui.spacing().tooltip_width);
+        ui.add(egui::Label::new(text));
+    });
+    resp
 }
 
 /// The hint bar's height when it shows (signed in, on any screen, and on the sign-in form), else None.
@@ -908,6 +933,14 @@ mod widget_tests {
     }
 
     #[test]
+    fn tooltips_go_above_when_the_hint_bar_is_close() {
+        // The Comment button's bottom 20 above the hint bar: a 28 tooltip below would cross its rule.
+        assert!(tip_above(780.0, 800.0));
+        assert!(!tip_above(700.0, 800.0), "room below: below, like every tooltip");
+        assert!(!tip_above(800.0 - TIP_H - 4.0, 800.0), "exactly fits");
+    }
+
+    #[test]
     fn one_centring_rule() {
         assert_eq!(centre_top(800.0, 300.0), 250.0);
         assert_eq!(centre_top(100.0, 300.0), 0.0, "never negative");
@@ -916,7 +949,7 @@ mod widget_tests {
 
     #[test]
     fn sign_in_aside_reads_as_one_sentence() {
-        assert_eq!(SIGN_IN_ASIDE.concat(), "Or set JIRA_API_TOKEN, or api_token in config.toml, then check again.");
+        assert_eq!(SIGN_IN_ASIDE.concat(), "Or set JIRA_API_TOKEN or api_token in config.toml, then check again.");
         assert_eq!(SIGN_IN_TOP, 16.0 - 4.0, "title top leading trimmed");
         assert_eq!(sign_in_width(300.0), 480.0);
         assert_eq!(sign_in_width(451.0), 480.0, "round 6: 480 so the aside has margin");

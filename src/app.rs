@@ -1313,7 +1313,7 @@ pub const ASSIGN_USERS: usize = 9;
 /// The Assign picker's user rows (row 0, "Unassigned", is not included): the current assignee pinned
 /// first (whether or not the fetched list holds them) while they match the filter, then the filter's other
 /// matches, capped at ASSIGN_USERS. A current assignee the filter does not match is not shown. The bool
-/// says matches were cut (the dialog says "Type to see more").
+/// says matches were cut (the dialog says "9 of N · type to see more").
 pub fn assign_rows(items: &[User], filter: &str, current: Option<&User>) -> (Vec<User>, bool) {
     let others: Vec<User> = filtered_users(items, filter).into_iter().filter(|u| current.is_none_or(|c| c.account_id != u.account_id)).collect();
     let pinned = current.filter(|c| !filtered_users(std::slice::from_ref(*c), filter).is_empty());
@@ -1358,11 +1358,19 @@ pub fn assign_current_row(rows: &[User], current: Option<&User>) -> Option<usize
     }
 }
 
-/// The line under a filtered Assign list: "Type to see more" when matches were cut, else "N matches"
-/// while a filter is typed (so a short list does not end in blank space), else nothing.
-pub fn assign_note(filter: &str, matches: usize, cut: bool) -> Option<String> {
+/// How many users match the Assign filter: the listed matches plus a pinned current assignee who matches.
+pub fn assign_matches(items: &[User], filter: &str, current: Option<&User>) -> usize {
+    let others = filtered_users(items, filter).into_iter().filter(|u| current.is_none_or(|c| c.account_id != u.account_id)).count();
+    others + usize::from(current.is_some_and(|c| !filtered_users(std::slice::from_ref(c), filter).is_empty()))
+}
+
+/// The line under the Assign list, leading with the count like the filtered "N matches": "9 of N · type to
+/// see more" when matches were cut, else "N matches" while a filter is typed (so a short list does not end in
+/// blank space), else nothing.
+pub fn assign_note(filter: &str, shown: usize, total: usize, cut: bool) -> Option<String> {
+    let matches = shown;
     if cut {
-        Some("Type to see more".into())
+        Some(format!("{shown} of {total} · type to see more"))
     } else if !filter.trim().is_empty() {
         Some(format!("{matches} {}", if matches == 1 { "match" } else { "matches" }))
     } else {
@@ -1685,10 +1693,13 @@ mod tests {
         let (rows, cut) = assign_rows(&items, "user 0", Some(&shawn));
         assert_eq!(rows[0].display_name, "User 00");
         assert!(cut, "User 00..09: 10 matches, room for 9");
-        assert_eq!(assign_note("user 0", rows.len(), cut).as_deref(), Some("Type to see more"));
-        assert_eq!(assign_note("grace", 2, false).as_deref(), Some("2 matches"));
-        assert_eq!(assign_note("grace", 1, false).as_deref(), Some("1 match"));
-        assert_eq!(assign_note("", 9, false), None);
+        assert_eq!(assign_matches(&items, "user 0", Some(&shawn)), 10);
+        assert_eq!(assign_note("user 0", rows.len(), 10, cut).as_deref(), Some("9 of 10 · type to see more"));
+        assert_eq!(assign_matches(&items, "", Some(&shawn)), 21, "the pinned assignee counts once");
+        assert_eq!(assign_note("", 9, 21, true).as_deref(), Some("9 of 21 · type to see more"), "unfiltered leads with the count");
+        assert_eq!(assign_note("grace", 2, 2, false).as_deref(), Some("2 matches"));
+        assert_eq!(assign_note("grace", 1, 1, false).as_deref(), Some("1 match"));
+        assert_eq!(assign_note("", 9, 9, false), None);
         // Short list: nothing cut.
         let (rows, cut) = assign_rows(&items[..3], "", None);
         assert_eq!(rows.len(), 3);

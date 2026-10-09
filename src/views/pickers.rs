@@ -2,7 +2,8 @@
 //! Keys (↑/↓/j/k, Enter, Esc) are handled in `App::shortcuts`; this only draws.
 
 use crate::app::{
-    Action, App, Picker, assign_current_row, assign_cursor_after_filter, assign_note, assign_rows, sprint_current_row, sprint_row_label, transition_row,
+    Action, App, Picker, assign_current_row, assign_cursor_after_filter, assign_matches, assign_note, assign_rows, sprint_current_row, sprint_row_label,
+    transition_row,
 };
 use crate::theme::{self, Palette};
 use crate::views::primary_button;
@@ -69,7 +70,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                         if *cursor >= names.len() {
                             *cursor = 0;
                         }
-                        let note = assign_note(filter, shown.len(), cut);
+                        let note = assign_note(filter, shown.len(), assign_matches(items, filter, current.as_ref()), cut);
                         rows(ui, p, names, &mut confirm, cursor, Some(note.as_deref()));
                     }
                     Picker::Sprint { key, items, cursor } => {
@@ -134,7 +135,7 @@ pub fn dialog_top(window_h: f32) -> f32 {
     (window_h * 0.2).round() + 8.0
 }
 
-/// Rows the Assign list holds: Unassigned, up to ASSIGN_USERS users, and the "Type to see more" line.
+/// Rows the Assign list holds: Unassigned, up to ASSIGN_USERS users, and the "9 of N · type to see more" line.
 const ASSIGN_ROWS: f32 = (crate::app::ASSIGN_USERS + 2) as f32;
 /// One picker row: 14 px text plus 6 px above and below.
 const ROW_H: f32 = 30.0;
@@ -148,7 +149,7 @@ fn title(ui: &mut egui::Ui, p: &Palette, text: &str) {
     ui.add_space(TITLE_GAP);
 }
 
-/// Assign's fixed block: the note row ("N matches", "Type to see more") right after the last row, then the
+/// Assign's fixed block: the note row ("N matches", "9 of N · type to see more") right after the last row, then the
 /// space that keeps the block one height however few rows the filter leaves. Returns (note top, space after).
 pub fn assign_block(block_h: f32, rows_h: f32, note_h: f32) -> (f32, f32) {
     (rows_h, (block_h - rows_h - note_h).max(0.0))
@@ -193,7 +194,7 @@ impl Row {
 /// Draws the rows with `cursor` highlighted. A click picks the row and confirms;
 /// hover does not move the cursor, so a resting mouse can't fight the keys.
 /// `fixed`: Assign's capped list. It keeps one height (Unassigned, the users, a note row) whatever the
-/// filter leaves, and the note ("Type to see more") shows when matches were cut.
+/// filter leaves, and the note ("9 of N · type to see more") shows when matches were cut.
 fn rows(ui: &mut egui::Ui, p: &Palette, names: Vec<Row>, confirm: &mut bool, cursor: &mut usize, fixed: Option<Option<&str>>) {
     if names.is_empty() {
         ui.label(RichText::new("Nothing available").color(crate::views::dialog_muted(p)));

@@ -35,9 +35,9 @@ pub const BINDINGS: &[KeyBinding] = &[
     b(Group::Global, "⌘1 to ⌘4", "Issues, Grooming, Team, Roadmap"),
     b(Group::Global, "⌘R", "Refresh"),
     b(Group::Global, "⌘W", "Close the window"),
-    b(Group::Global, "?, Esc", "Close this help"),
     b(Group::Global, "⌘K", "Go to an issue by key, number, or link"),
     b(Group::Global, "⌘O", "Open in Jira"),
+    b(Group::Global, "?, Esc", "Close this help"),
     b(Group::Issues, "⌘F, /", "Focus search"),
     b(Group::Issues, "j/k, ↑/↓", "Next or previous issue"),
     b(Group::Issues, "t", "Transition"),
@@ -193,15 +193,15 @@ pub fn hints(c: HintContext) -> &'static [Hint] {
         // Alternatives are separate chips; a slash only joins an up/down pair.
         HintContext::Help => &[&[K("?"), W("or"), K("Esc"), W("close")]],
         HintContext::GoTo => &[&[K("Enter"), W("open")], &[K("Esc"), W("close")]],
-        HintContext::Search => &[&[K("Enter"), W("search JQL")], &[K("Esc"), W("clear")]],
+        HintContext::Search => &[&[K("Enter"), W("run as JQL")], &[K("Esc"), W("clear")]],
         HintContext::SearchText => &[&[K("Enter"), W("run as JQL")], &[K("Esc"), W("clear")]],
-        HintContext::SearchEmpty => &[&[K("Enter"), W("search JQL")], &[K("Esc"), W("done")]],
-        HintContext::Composer => &[&[K("⌘Enter"), W("post")], &[K("Esc"), W("done, draft kept")]],
+        HintContext::SearchEmpty => &[&[K("Enter"), W("run as JQL")], &[K("Esc"), W("done")]],
+        HintContext::Composer => &[&[K("⌘Enter"), W("post")], &[K("Esc"), W("done")], &[W("draft kept")]],
         HintContext::EditPicker => &[&[K("Tab/⇧Tab"), W("field")], &[K("Enter"), W("confirm")], &[K("Esc"), W("cancel")]],
         HintContext::AssignPicker => &[&[W("Type to filter")], &[K("↑/↓"), W("move")], &[K("Enter"), W("confirm")], &[K("Esc"), W("cancel")]],
         HintContext::Picker => &[&[K("j/k"), W("or"), K("↑/↓"), W("move")], &[K("Enter"), W("confirm")], &[K("Esc"), W("cancel")]],
         HintContext::Selected => &[
-            &[K("j/k"), W("move")],
+            &[K("j/k"), W("or"), K("↑/↓"), W("move")],
             &[K("t"), W("transition")],
             &[K("a"), W("assign")],
             &[K("s"), W("sprint")],
@@ -213,7 +213,7 @@ pub fn hints(c: HintContext) -> &'static [Hint] {
             &[K("?"), W("help")],
         ],
         HintContext::SelectedSearch => &[
-            &[K("j/k"), W("move")],
+            &[K("j/k"), W("or"), K("↑/↓"), W("move")],
             &[K("Esc"), W("clear")],
             &[K("t"), W("transition")],
             &[K("a"), W("assign")],
@@ -227,8 +227,10 @@ pub fn hints(c: HintContext) -> &'static [Hint] {
         ],
         HintContext::Placeholder => &[&[K("⌘1"), W("issues")], &[K("?"), W("help")]],
         HintContext::SignIn => &[&[K("Enter"), W("sign in")]],
-        HintContext::Browse => &[&[K("j/k"), W("move")], &[K("⌘K"), W("go to")], &[K("⌘F"), W("search")], &[K("?"), W("help")]],
-        HintContext::BrowseSearch => &[&[K("j/k"), W("move")], &[K("Esc"), W("clear")], &[K("⌘K"), W("go to")], &[K("⌘F"), W("search")], &[K("?"), W("help")]],
+        HintContext::Browse => &[&[K("j/k"), W("or"), K("↑/↓"), W("move")], &[K("⌘K"), W("go to")], &[K("⌘F"), W("search")], &[K("?"), W("help")]],
+        HintContext::BrowseSearch => {
+            &[&[K("j/k"), W("or"), K("↑/↓"), W("move")], &[K("Esc"), W("clear")], &[K("⌘K"), W("go to")], &[K("⌘F"), W("search")], &[K("?"), W("help")]]
+        }
     }
 }
 
@@ -290,7 +292,7 @@ mod tests {
         assert!(t.contains("| `j/k` or `↑/↓` | Move |\n"), "one alternatives order, no keys in prose");
         let global = BINDINGS.iter().filter(|k| k.group == Group::Global).count();
         assert_eq!(global, 6, "⌘K and ⌘O live in Global, balancing the help columns");
-        assert!(t.contains("| `?` or `Esc` | Close this help |\n"), "one help row, as the bar says");
+        assert!(t.contains("| `?` or `Esc` | Close this help |\n| **Issues** | |\n"), "one help row, the last of Global");
         assert!(t.contains("| `J/K` | Move down or up in rank |\n"));
         assert!(t.contains("| `⌘Enter` | Post the comment |\n"));
         assert!(!t.contains("Close the go-to box"), "the go-to bar shows its own Esc");
@@ -311,8 +313,8 @@ mod tests {
         let soon = HintState { placeholder: true, ..HintState::new(Focus::None) };
         assert_eq!(hint_text(hints(hint_context(soon))), "⌘1 issues · ? help");
         assert_eq!(hint_context(HintState { help_open: true, ..soon }), Help, "help still wins");
-        assert_eq!(hint_text(hints(BrowseSearch)), "j/k move · Esc clear · ⌘K go to · ⌘F search · ? help");
-        assert!(hint_text(hints(SelectedSearch)).starts_with("j/k move · Esc clear · t transition"));
+        assert_eq!(hint_text(hints(BrowseSearch)), "j/k or ↑/↓ move · Esc clear · ⌘K go to · ⌘F search · ? help");
+        assert!(hint_text(hints(SelectedSearch)).starts_with("j/k or ↑/↓ move · Esc clear · t transition"));
         assert_eq!(hint_context(st(true, true, Some(PickerHint::Other), true, Focus::OtherText)), Help, "help wins");
         assert_eq!(hint_context(st(false, false, Some(PickerHint::Edit), true, Focus::OtherText)), EditPicker);
         assert_eq!(
@@ -327,23 +329,26 @@ mod tests {
         assert_eq!(hint_context(st(false, false, None, true, Focus::Search { clear: true, plain: true })), SearchText);
         assert_eq!(hint_text(hints(SearchText)), "Enter run as JQL · Esc clear");
         assert_eq!(hint_context(st(false, false, None, true, Focus::Search { clear: false, plain: false })), SearchEmpty);
-        assert_eq!(hint_text(hints(SearchEmpty)), "Enter search JQL · Esc done");
+        assert_eq!(hint_text(hints(SearchEmpty)), "Enter run as JQL · Esc done");
         assert_eq!(hint_context(st(false, false, None, true, Focus::Composer)), Composer, "the bar follows focus into the composer");
         assert_eq!(hint_context(st(false, false, None, true, Focus::None)), Selected);
         assert_eq!(hint_context(st(false, false, None, true, Focus::OtherText)), Browse, "letters type into the field, so no selection hints");
         assert_eq!(hint_context(st(false, false, None, false, Focus::None)), Browse);
-        assert_eq!(hint_text(hints(Composer)), "⌘Enter post · Esc done, draft kept");
+        assert_eq!(hint_text(hints(Composer)), "⌘Enter post · Esc done · draft kept");
         let ro = HintState { read_only: true, has_selection: true, ..HintState::new(Focus::Composer) };
         let bar = hint_text(hints(hint_context(ro)));
         assert!(!bar.contains("⌘Enter") && !bar.contains("draft"), "read-only has no composer, so no composer keys: {bar}");
         assert_eq!(hint_text(hints(Help)), "? or Esc close");
         assert_eq!(hint_text(hints(SignIn)), "Enter sign in");
         assert_eq!(hint_text(hints(GoTo)), "Enter open · Esc close");
-        assert_eq!(hint_text(hints(Search)), "Enter search JQL · Esc clear");
+        assert_eq!(hint_text(hints(Search)), "Enter run as JQL · Esc clear", "one Enter wording for every search text");
         assert_eq!(hint_text(hints(EditPicker)), "Tab/⇧Tab field · Enter confirm · Esc cancel");
         assert_eq!(hint_text(hints(Picker)), "j/k or ↑/↓ move · Enter confirm · Esc cancel");
-        assert_eq!(hint_text(hints(Browse)), "j/k move · ⌘K go to · ⌘F search · ? help");
-        assert_eq!(hint_text(hints(Selected)), "j/k move · t transition · a assign · s sprint · e edit · l label · J/K rank · c copy · ⌘O open · ? help");
+        assert_eq!(hint_text(hints(Browse)), "j/k or ↑/↓ move · ⌘K go to · ⌘F search · ? help");
+        assert_eq!(
+            hint_text(hints(Selected)),
+            "j/k or ↑/↓ move · t transition · a assign · s sprint · e edit · l label · J/K rank · c copy · ⌘O open · ? help"
+        );
     }
 
     #[test]

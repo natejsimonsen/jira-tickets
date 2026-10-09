@@ -240,7 +240,7 @@ fn composer(app: &mut App, ui: &mut Ui, p: &Palette, key: &str) {
     ui.add_space(BOX_TO_BUTTON - ui.spacing().item_spacing.y);
     ui.allocate_ui_with_layout(vec2(ui.available_width(), crate::views::BUTTON_H), egui::Layout::right_to_left(egui::Align::Center), |ui| {
         ui.spacing_mut().item_spacing.x = 8.0;
-        if ui.add(primary_button_if("Comment", enabled, p)).on_hover_text(COMMENT_TIP).clicked() || (post && enabled) {
+        if crate::views::hover_tip(ui.add(primary_button_if("Comment", enabled, p)), COMMENT_TIP, app).clicked() || (post && enabled) {
             app.actions.push(Action::Comment);
         }
         if app.posting.is_some() {

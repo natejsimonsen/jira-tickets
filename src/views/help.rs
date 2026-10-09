@@ -118,11 +118,21 @@ pub fn section_gap(row_h: f32) -> f32 {
 
 /// A help row's height: its tallest part, a chip or the 14 px action.
 fn row_h(ui: &mut egui::Ui, p: &Palette) -> f32 {
-    chip_size(ui, "⌘", p).y.max(ui.fonts_mut(|f| f.row_height(&theme::body(14.0))))
+    slot_h(chip_size(ui, "⌘", p).y.max(ui.fonts_mut(|f| f.row_height(&theme::body(14.0)))))
+}
+
+/// A header or row slot's height on whole points, so the rows under a second header (Global) do not sit half a
+/// point low (round 9 measured 0.5 in the right column).
+pub fn slot_h(h: f32) -> f32 {
+    h.ceil()
 }
 
 fn group(ui: &mut egui::Ui, p: &Palette, g: Group, key_w: f32) {
-    ui.label(RichText::new(g.name()).font(theme::bold(12.0)).color(crate::views::dialog_muted(p)));
+    let header = slot_h(ui.fonts_mut(|f| f.row_height(&theme::bold(12.0))));
+    ui.allocate_ui_with_layout(vec2(ui.available_width(), header), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+        ui.set_min_height(header);
+        ui.label(RichText::new(g.name()).font(theme::bold(12.0)).color(crate::views::dialog_muted(p)));
+    });
     ui.add_space(8.0);
     // Every row is as tall as its tallest part (a chip or the action), and chips, words and the action are
     // all centred on that row.
@@ -185,6 +195,12 @@ pub fn ink_left(centre: f32, ink_centre: f32) -> f32 {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn slots_are_whole_points() {
+        assert_eq!(super::slot_h(14.5), 15.0);
+        assert_eq!(super::slot_h(17.0), 17.0);
+    }
+
     #[test]
     fn chips_centre_the_ink() {
         assert_eq!(super::ink_left(50.0, 6.0), 44.0);

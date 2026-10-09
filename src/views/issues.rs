@@ -982,7 +982,7 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
             row_x = Some(rect.x_range());
             let mut r = ui.interact(rect, row_id(&i.key), Sense::click());
             if let Some(tip) = r.hover_pos().and_then(|at| tips.iter().find(|(t, _)| t.contains(at))).map(|(_, t)| t.clone()) {
-                r = r.on_hover_text(tip);
+                r = crate::views::hover_tip(r, tip, app);
             }
             let fill = row_fill(is_sel, r.hovered(), p);
             ui.painter().set(bg, egui::epaint::RectShape::filled(rect, corners, fill));
@@ -1180,7 +1180,7 @@ fn hint_bar(ui: &mut Ui, hs: &[crate::keys::Hint], p: &Palette) {
     // Each token is its own galley, placed by its ink so the gaps are what they say: KEY_TO_WORD between a
     // key and its word, SEP_SPACE either side of "·", whatever the mono key's side bearings.
     let galley = |t: &Tok| match t {
-        Tok::K(s) => ui.painter().layout_no_wrap(s.to_string(), theme::key_font(), p.text),
+        Tok::K(s) => ui.painter().layout_job(key_job(s, p.text)),
         Tok::W(s) => ui.painter().layout_no_wrap(s.to_string(), theme::body(12.0), p.muted),
     };
     let word = |s: &str| ui.painter().layout_no_wrap(s.to_string(), theme::body(12.0), p.muted);
@@ -1230,6 +1230,31 @@ fn hint_bar(ui: &mut Ui, hs: &[crate::keys::Hint], p: &Palette) {
         // Each galley carries its own colour (keys `text`, words `muted`).
         ui.painter().galley(egui::pos2(rect.left() + x, top), g, p.muted);
     }
+}
+
+/// A hint key's runs: modifier glyphs (⌘ ⇧ ⌥ ⌃, which SF Mono lacks) apart from the rest, as (text, mono), so
+/// the letters stay in the mono face whatever the fallback does with the modifier (I2).
+pub fn key_runs(key: &str) -> Vec<(String, bool)> {
+    let modifier = |c: char| matches!(c, '⌘' | '⇧' | '⌥' | '⌃');
+    let mut out: Vec<(String, bool)> = Vec::new();
+    for c in key.chars() {
+        let mono = !modifier(c);
+        match out.last_mut() {
+            Some((t, m)) if *m == mono => t.push(c),
+            _ => out.push((c.to_string(), mono)),
+        }
+    }
+    out
+}
+
+/// A hint key as one galley of two kinds of run: modifiers in the 12.5 system face, the rest in the key font.
+pub fn key_job(key: &str, color: egui::Color32) -> egui::text::LayoutJob {
+    let mut job = egui::text::LayoutJob::default();
+    for (t, mono) in key_runs(key) {
+        let font_id = if mono { theme::key_font() } else { theme::body(12.5) };
+        job.append(&t, 0.0, egui::TextFormat { font_id, color, ..Default::default() });
+    }
+    job
 }
 
 /// Places items left to right by their ink: each is (ink left, ink right, both from its own origin, and the
@@ -1704,6 +1729,25 @@ mod tests {
                     }
                 }
             })
+        });
+    }
+
+    #[test]
+    fn hint_keys_keep_letters_mono_beside_a_modifier() {
+        assert_eq!(key_runs("⌘K"), [("⌘".to_string(), false), ("K".to_string(), true)]);
+        assert_eq!(key_runs("⌘Enter"), [("⌘".to_string(), false), ("Enter".to_string(), true)]);
+        assert_eq!(key_runs("Tab/⇧Tab"), [("Tab/".to_string(), true), ("⇧".to_string(), false), ("Tab".to_string(), true)]);
+        assert_eq!(key_runs("?"), [("?".to_string(), true)]);
+        let job = key_job("⌘F", egui::Color32::WHITE);
+        assert_eq!(job.sections.len(), 2);
+        assert_eq!(job.sections[1].format.font_id, theme::key_font(), "the letter is in the mono face");
+        // The real fonts: the letter run's advance is the mono advance.
+        crate::testutil::with_ui(|ui| {
+            let g = ui.painter().layout_job(key_job("⌘F", egui::Color32::WHITE));
+            let mono_f = ui.fonts_mut(|f| f.glyph_width(&theme::key_font(), 'F'));
+            let glyphs = &g.rows[0].glyphs;
+            let f = glyphs.iter().find(|gl| gl.chr == 'F').expect("an F");
+            assert!((f.advance_width - mono_f).abs() < 0.01, "F {:.2} vs mono {mono_f:.2}", f.advance_width);
         });
     }
 
