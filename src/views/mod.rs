@@ -86,11 +86,12 @@ const TABS: [(Screen, &str); 4] = [(Screen::Issues, "Issues"), (Screen::Grooming
 /// tab's ink, TAB_GAP between the tabs' ink (round 13 A1 / A2: gaps between the boxes read 33.5 and 24.5–25.5).
 /// Every tab label is regular 14 (the underline marks the active one), so its slot is its label's width whatever
 /// its state and switching tabs never moves anything.
-pub fn tab_origins(left: f32, title: &egui::Galley, tabs: &[std::sync::Arc<egui::Galley>]) -> Vec<f32> {
-    // On whole pixels, so each galley paints exactly the raster its ink was measured on.
+pub fn tab_origins(ctx: &egui::Context, left: f32, title: &egui::Galley, tabs: &[std::sync::Arc<egui::Galley>]) -> Vec<f32> {
+    // On whole pixels, so each galley paints exactly the raster its ink was measured on; the rasters' visible
+    // coverage, not their boxes (round 15 A1: "Team"'s faint last column read Team → Roadmap 25).
     let ppp = title.pixels_per_point.max(1.0);
     let ink = |g: &egui::Galley| {
-        let r = theme::ink_rect(g);
+        let r = theme::visible_ink(ctx, g);
         if r.is_positive() { (r.left(), r.right()) } else { (0.0, g.size().x) }
     };
     let (tl, tr) = ink(title);
@@ -232,7 +233,7 @@ fn header(app: &mut App, ui: &mut Ui, p: &Palette) -> (egui::Rect, Option<egui::
                 .iter()
                 .map(|(s, name)| ui.painter().layout_no_wrap(name.to_string(), theme::body(14.0), if app.screen == *s { p.text } else { p.muted }))
                 .collect();
-            let origins = tab_origins(ui.cursor().left(), &title, &tabs);
+            let origins = tab_origins(ui.ctx(), ui.cursor().left(), &title, &tabs);
             let (title_rect, _) = ui.allocate_exact_size(vec2(title.size().x.ceil(), 32.0), Sense::hover());
             let line = (title_rect.center().y - tab_probe.size().y / 2.0).round() + baseline(&tab_probe);
             ui.painter().galley(egui::pos2(title_rect.left(), top_for_baseline(line, baseline(&title))), title, p.text);
@@ -369,20 +370,44 @@ fn sign_in_title(ui: &mut Ui, p: &Palette) {
     ui.add(egui::Label::new(g));
 }
 
-/// "Check again", only as tall as its text, then SIGN_IN_PAD from its descenders to the panel's edge. `text`, so
-/// it reads as a control beside the muted aside; the standard hover fill when pointed at (J2), no frame at rest.
-fn check_again(ui: &mut Ui, p: &Palette, w: f32) -> egui::Response {
+/// "Check again", BUTTON_H tall with its text centred, then SIGN_IN_PAD from its descenders to the panel's edge.
+/// `text`, so it reads as a control beside the muted aside; on hover the standard fill only, no stroke, the full
+/// button height (round 15 J2: a 16.5 box with an edge touched the descenders), no frame at rest. Returns the
+/// response and the space from its box's bottom to the panel's outer edge.
+fn check_again(ui: &mut Ui, p: &Palette, w: f32) -> (egui::Response, f32) {
     let g = ui.painter().layout_no_wrap(CHECK_AGAIN.to_string(), theme::body(14.0), p.text);
     let (h, ink_bottom) = (g.size().y, theme::ink_rect(&g).bottom());
+    // The box grows round the text, so the spaces either side give that back and the ink stays put.
+    let extra = again_extra(h);
+    ui.add_space(-extra);
     let again = egui::Button::new(RichText::new(CHECK_AGAIN).color(p.text).size(14.0)).frame_when_inactive(false);
-    ui.spacing_mut().button_padding.y = 0.0;
-    // egui's 18 interact height made it 1.5 taller than its text, which then sat 0.75 low.
-    ui.spacing_mut().interact_size.y = h;
-    let r = ui.add_sized([w, h], again);
-    // The text is centred in a box its own height, so its ink sits where the galley's does.
-    ui.add_space(SIGN_IN_PAD - (h - ink_bottom) - ui.spacing().item_spacing.y);
-    r
+    let r = ui
+        .scope(|ui| {
+            ui.spacing_mut().button_padding.y = 0.0;
+            let w2 = &mut ui.visuals_mut().widgets;
+            w2.hovered.bg_stroke = Stroke::NONE;
+            w2.active.bg_stroke = Stroke::NONE;
+            ui.add_sized([w, BUTTON_H], again)
+        })
+        .inner;
+    let after = SIGN_IN_PAD - extra - (h - ink_bottom);
+    ui.add_space(after - ui.spacing().item_spacing.y);
+    (r, after + SIGN_IN_STROKE)
 }
+
+/// How far "Check again"'s BUTTON_H box reaches past its `h`-tall text, above and below.
+fn again_extra(h: f32) -> f32 {
+    (BUTTON_H - h) / 2.0
+}
+
+/// The sign-in panel's edge.
+const SIGN_IN_STROKE: f32 = 1.0;
+
+/// "Check again"'s tooltip: its identifiers in mono like the aside's (round 15 J3).
+pub const CHECK_AGAIN_TIP: [&str; 5] = ["Look again for ", "JIRA_API_TOKEN", " or ", "api_token", " in config.toml"];
+
+/// The tooltip's clearance below the sign-in panel (round 15 J3: it overlapped the panel's edge).
+const TIP_PANEL_CLEAR: f32 = 4.0;
 
 /// Sign in → "Check again" in code: its row-height box carries ~5 above the ink of "Check", so this reads as the
 /// 12 the field → button gap shows (round 12 J1 measured 17 ink to ink at 12). 7.75: the box is now its text's
@@ -396,7 +421,8 @@ const SIGN_IN_TO_AGAIN: f32 = 8.25;
 const BODY_TO_ASIDE: f32 = 2.5;
 
 /// The sign-in aside → token field, in code (see the comment at its use).
-const ASIDE_TO_FIELD: f32 = 14.5;
+/// Round 15 J1: +1 (it read 15).
+const ASIDE_TO_FIELD: f32 = 15.5;
 
 /// The sign-in panel's content width: 480, or the aside's one-line width plus 24 of margin when wider, so
 /// the aside never fits with only a pixel to spare.
@@ -470,7 +496,8 @@ pub fn sign_in(app: &mut App, ui: &mut Ui) {
                     app.actions.push(Action::SubmitToken);
                 }
                 ui.add_space(SIGN_IN_TO_AGAIN);
-                if tooltip(check_again(ui, p, w), "Look for JIRA_API_TOKEN or the config api_token again").clicked() {
+                let (again, below) = check_again(ui, p, w);
+                if tooltip_job(again, check_again_tip(p), below + TIP_PANEL_CLEAR).clicked() {
                     app.actions.push(Action::FindToken);
                 }
             });
@@ -527,9 +554,14 @@ pub const TIP_KEY_RAISE: f32 = 0.5;
 /// A tooltip's one line, TIP_INK_X from the edge to the ink on both sides; a key-only tip TIP_KEY_RAISE higher.
 fn tip_row(ui: &mut Ui, text: &str, p: &Palette) {
     let g = ui.painter().layout_job(tip_job(text, p));
+    let raise = if tip_key_split(text).0.is_empty() { TIP_KEY_RAISE } else { 0.0 };
+    tip_row_job(ui, g, raise, p);
+}
+
+/// A tooltip's laid-out line `g`, TIP_INK_X from the edge to the ink on both sides, `raise` above its place.
+fn tip_row_job(ui: &mut Ui, g: std::sync::Arc<egui::Galley>, raise: f32, p: &Palette) {
     let ink = theme::ink_rect(&g);
     let (lb, rb) = if ink.is_positive() { (ink.left(), g.size().x - ink.right()) } else { (0.0, 0.0) };
-    let raise = if tip_key_split(text).0.is_empty() { TIP_KEY_RAISE } else { 0.0 };
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 0.0;
         ui.add_space(TIP_INK_X - lb);
@@ -549,6 +581,26 @@ pub fn tip_frame(p: &Palette) -> Frame {
 pub fn tooltip(resp: egui::Response, text: impl Into<String>) -> egui::Response {
     show_tip(&resp, text.into(), None);
     resp
+}
+
+/// A tooltip of `job` (its own runs), `gap` below its control, in the app's tooltip style.
+pub fn tooltip_job(resp: egui::Response, job: egui::text::LayoutJob, gap: f32) -> egui::Response {
+    let p = theme::palette(&resp.ctx);
+    let mut tip = egui::Tooltip::for_enabled(&resp);
+    tip.popup = tip.popup.frame(tip_frame(p)).gap(gap).align(egui::RectAlign::BOTTOM_START).align_alternatives(&[egui::RectAlign::TOP_START]);
+    tip.show(|ui| tip_row_job(ui, ui.painter().layout_job(job), 0.0, p));
+    resp
+}
+
+/// "Check again"'s tooltip text: prose at TIP_TEXT, identifiers in mono at the same size.
+pub fn check_again_tip(p: &Palette) -> egui::text::LayoutJob {
+    let mut job = egui::text::LayoutJob::default();
+    let prose = egui::TextFormat { font_id: theme::body(TIP_TEXT), color: p.text, ..Default::default() };
+    let code = egui::TextFormat { font_id: theme::mono(TIP_TEXT), color: p.text, ..Default::default() };
+    for (i, part) in CHECK_AGAIN_TIP.iter().enumerate() {
+        job.append(part, 0.0, if i % 2 == 1 { code.clone() } else { prose.clone() });
+    }
+    job
 }
 
 fn show_tip(resp: &egui::Response, text: String, align: Option<egui::RectAlign>) {
@@ -659,7 +711,8 @@ fn toast_body(ui: &mut Ui, p: &Palette, dot: Option<Color32>, text: &str) {
 /// The toast's one line: the type dot (if any), 8, the text, with TOAST_INK_X from the fill to the ink either side.
 fn toast_row(ui: &mut Ui, p: &Palette, dot: Option<Color32>, text: &str) {
     let g = ui.painter().layout_no_wrap(text.to_string(), theme::body(14.0), p.tooltip_text);
-    let ink = theme::ink_rect(&g);
+    // The rasters' visible coverage: a faint outer column read the right inset 15.5 (round 15 D2).
+    let ink = theme::visible_ink(ui.ctx(), &g);
     let (lb, rb) = if ink.is_positive() { (ink.left(), g.size().x - ink.right()) } else { (0.0, 0.0) };
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 8.0;
@@ -694,7 +747,9 @@ pub fn toast(app: &mut App, ctx: &egui::Context) {
     let shadow = toast_shadow(p);
     let window = ctx.content_rect();
     let x = toast_centre_x(window.width(), app.detail_x.filter(|_| app.screen == Screen::Issues));
-    let at = egui::pos2(x, window.bottom() - toast_offset(hint_bar_height(app)));
+    // The pivot on the device-pixel grid, so the fill's bottom lands exactly 16 over the bar (round 15 D1).
+    let ppp = ctx.pixels_per_point();
+    let at = egui::pos2(issues::snap_px(x, ppp), issues::snap_px(window.bottom() - toast_offset(hint_bar_height(app)), ppp));
     egui::Area::new(egui::Id::new("toast")).pivot(egui::Align2::CENTER_BOTTOM).fixed_pos(at).show(ctx, |ui| {
         Frame::new().fill(p.tooltip).stroke(toast_stroke(p)).shadow(shadow).corner_radius(theme::RADIUS).inner_margin(TOAST_MARGIN).show(ui, |ui| {
             toast_body(ui, p, toast_dot(t.kind), &t.text);
@@ -890,9 +945,12 @@ pub const fn input_margin(pad_x: f32) -> Margin {
     Margin { left: pad_x as i8, right: pad_x as i8, top: INPUT_PAD_Y, bottom: INPUT_PAD_Y }
 }
 
-/// The list pane's search box margin: SEARCH_PAD_X either side, the shared vertical margin.
+/// The list pane's search box margin: SEARCH_PAD_X either side, the shared vertical margin less a point above, so
+/// the centred text sits half a point (one device pixel) higher, like the combos' and chips' (round 15 B1); the box
+/// keeps INPUT_H.
 pub const fn search_margin() -> Margin {
-    input_margin(SEARCH_PAD_X)
+    let m = input_margin(SEARCH_PAD_X);
+    Margin { top: m.top - 1, ..m }
 }
 
 /// A modal dialog's fill: plain surface in light; in dark #383836, two steps past surface_2, so the dialog lifts
@@ -974,7 +1032,8 @@ pub fn toggle_chip(ui: &mut Ui, text: &str, active: bool, p: &Palette) -> egui::
             (false, false) => (p.surface_2, p.border),
         };
         ui.painter().rect(rect, f32::from(theme::RADIUS), fill, Stroke::new(1.0, stroke), egui::StrokeKind::Inside);
-        let y = (rect.center().y - label.size().y / 2.0).round();
+        // One device pixel up, like the combos' text (round 15 B1).
+        let y = (rect.center().y - label.size().y / 2.0).round() - 1.0 / ui.ctx().pixels_per_point();
         ui.painter().galley(egui::pos2(rect.left() + CHIP_PAD, y), label, fg);
     }
     resp
@@ -1334,7 +1393,11 @@ mod widget_tests {
                 tops.push((name, ty));
             }
         }
-        assert!(tops.iter().all(|(_, y)| (y - tops[0].1).abs() < 0.5), "one vertical offset: {tops:?}");
+        // The dialog fields share one offset; the page's search box sits half a point higher, with the combos'
+        // and chips' text (round 15 B1).
+        let lift = |name: &str| if name == "search" { 0.5 } else { 0.0 };
+        let base = tops.iter().find(|(n, _)| *n != "search").expect("a dialog field").1;
+        assert!(tops.iter().all(|(n, y)| (y + lift(n) - base).abs() < 0.25), "one vertical offset: {tops:?}");
     }
 
     #[test]
@@ -1652,9 +1715,9 @@ mod widget_tests {
                 let lay = |t: &str, f: egui::FontId| ui.painter().layout_no_wrap(t.to_string(), f, p.text);
                 let title = lay("Jira Tickets", theme::bold(15.0));
                 let tabs: Vec<_> = TABS.iter().map(|(_, n)| lay(n, theme::body(14.0))).collect();
-                let xs = tab_origins(16.0, &title, &tabs);
+                let xs = tab_origins(ui.ctx(), 16.0, &title, &tabs);
                 let ink = |x: f32, g: &egui::Galley| {
-                    let r = theme::ink_rect(g);
+                    let r = theme::visible_ink(ui.ctx(), g);
                     egui::Rangef::new(r.left() + x, r.right() + x)
                 };
                 assert!((ink(xs[0], &tabs[0]).min - ink(16.0, &title).max - TITLE_GAP).abs() <= 0.25, "title gap");
@@ -1665,7 +1728,9 @@ mod widget_tests {
                 }
                 for (i, g) in tabs.iter().enumerate() {
                     let u = tab_underline_x(xs[i], g);
-                    let ink = ink(xs[i], g);
+                    // The underline keeps the raster box (the header's active tab does not move).
+                    let r = theme::ink_rect(g);
+                    let ink = egui::Rangef::new(r.left() + xs[i], r.right() + xs[i]);
                     assert!((u.min - ink.min).abs() <= 0.25 && (u.max - ink.max).abs() <= 0.25, "J3: the underline spans the ink: {u:?} vs {ink:?}");
                 }
                 let (name, dot, ro) = (lay("Shawn Sorichetti", theme::body(12.0)), lay("·", theme::body(12.0)), read_only_galley(ui.painter(), p));
@@ -1868,19 +1933,33 @@ mod widget_tests {
     fn the_toast_insets_16_to_the_ink() {
         // Round 13 D2: 16 from the fill to the text's ink either side (or to the dot on the left), real fonts.
         let p = theme::DARK;
-        for dot in [None, Some(theme::DARK.on_track)] {
-            let text = "Read-only mode: transition not sent to Jira";
+        for (dot, text, x) in [None, Some(theme::DARK.on_track)]
+            .into_iter()
+            .flat_map(|d| ["Read-only mode: transition not sent to Jira", "Read-only mode: rank not sent to Jira"].map(move |t| (d, t)))
+            .flat_map(|(d, t)| [0.0, 0.5, 884.5].map(move |x| (d, t, x)))
+        {
             let shapes = crate::testutil::paint_at2(vec2(1440.0, 400.0), |ui| {
-                Frame::new().fill(p.tooltip).inner_margin(TOAST_MARGIN).show(ui, |ui| toast_body(ui, &p, dot, text));
+                let at = egui::Rect::from_min_size(egui::pos2(x, 10.0), vec2(1000.0, 200.0));
+                ui.scope_builder(egui::UiBuilder::new().max_rect(at), |ui| {
+                    Frame::new().fill(p.tooltip).inner_margin(TOAST_MARGIN).show(ui, |ui| toast_body(ui, &p, dot, text));
+                });
             });
             let fill = crate::testutil::fills(&shapes).iter().find(|(_, c)| *c == p.tooltip).expect("toast").0;
-            let ink = crate::testutil::ink_of(&shapes, text);
+            // Round 15 D2: to the rasters' visible coverage.
+            let (mut l, mut r) = (0.0, 0.0);
+            let _ = crate::testutil::paint_at2(vec2(1440.0, 100.0), |ui| {
+                let g = ui.painter().layout_no_wrap(text.to_string(), theme::body(14.0), p.tooltip_text);
+                let (a, v) = (theme::ink_rect(&g), theme::visible_ink(ui.ctx(), &g));
+                (l, r) = (v.left() - a.left(), a.right() - v.right());
+            });
+            let raster = crate::testutil::ink_of(&shapes, text);
+            let ink = egui::Rect::from_x_y_ranges(raster.left() + l..=raster.right() - r, raster.y_range());
             // Round 14 D1: 12 to the ink above (the "R") and below (the "y" of "only").
             assert!((ink.top() - fill.top() - TOAST_INK_Y).abs() <= 0.5, "top {}", ink.top() - fill.top());
             assert!((fill.bottom() - ink.bottom() - TOAST_INK_Y).abs() <= 0.5, "bottom {}", fill.bottom() - ink.bottom());
-            assert!((fill.right() - ink.right() - TOAST_INK_X).abs() <= 0.5, "right {}", fill.right() - ink.right());
+            assert!((fill.right() - ink.right() - TOAST_INK_X).abs() <= 0.01, "{text} at {x}: right {}", fill.right() - ink.right());
             if dot.is_none() {
-                assert!((ink.left() - fill.left() - TOAST_INK_X).abs() <= 0.5, "left {}", ink.left() - fill.left());
+                assert!((ink.left() - fill.left() - TOAST_INK_X).abs() <= 0.01, "{text} at {x}: left {}", ink.left() - fill.left());
             }
         }
     }

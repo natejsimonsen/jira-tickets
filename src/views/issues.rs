@@ -540,8 +540,12 @@ fn combo(
         let shown = crate::views::truncate_text(&text, w - COMBO_CHROME, measure);
         let color = if muted { p.muted } else { p.text };
         let g = painter.layout_no_wrap(shown, font.clone(), color);
-        painter.galley(egui::pos2(rect.left() + INNER_X, (rect.center().y - g.size().y / 2.0).round()), g, color);
-        let c = egui::pos2(chevron_centre_x(rect.right()), rect.center().y);
+        let px = 1.0 / ui.ctx().pixels_per_point();
+        // One device pixel up: centred on whole points the cap's centre sat half a point low (round 15 B1).
+        painter.galley(egui::pos2(rect.left() + INNER_X, (rect.center().y - g.size().y / 2.0).round() - px), g, color);
+        // The chevron's ink box on the device-pixel grid (round 15 B2: the epic combo's sat on a half pixel).
+        let reach = CHEVRON_HALF_W + CHEVRON_STROKE / 2.0;
+        let c = egui::pos2(snap_px(chevron_centre_x(rect.right()) - reach, 1.0 / px) + reach, rect.center().y);
         let half = CHEVRON_HALF_W;
         let pts = vec![c + vec2(-half, -2.0), c + vec2(0.0, 2.0), c + vec2(half, -2.0)];
         painter.add(egui::Shape::line(pts, Stroke::new(CHEVRON_STROKE, p.muted)));
@@ -868,6 +872,35 @@ pub fn count_job(f: &mut egui::epaint::text::FontsView<'_>, label: &str, color: 
     job
 }
 
+/// `job` with every "·" on a whole device pixel: each dot starts a section of its own whose leading space rounds
+/// its x up to the grid, so its raster is never binned between pixels (round 15 D4: "1 issue · JQL" read 7 / 6 px
+/// either side).
+pub fn snap_dots(f: &mut egui::epaint::text::FontsView<'_>, job: egui::text::LayoutJob, ppp: f32) -> egui::text::LayoutJob {
+    let range = |s: &egui::text::LayoutSection| s.byte_range.start.0..s.byte_range.end.0;
+    let mut out = egui::text::LayoutJob { sections: Vec::new(), text: String::new(), ..job.clone() };
+    for sec in &job.sections {
+        let mut lead = sec.leading_space;
+        for piece in job.text[range(sec)].split_inclusive('·') {
+            let parts = match piece.strip_suffix('·') {
+                Some(head) => [head, "·"],
+                None => [piece, ""],
+            };
+            for part in parts.into_iter().filter(|t| !t.is_empty()) {
+                out.append(part, lead, sec.format.clone());
+                lead = 0.0;
+            }
+        }
+    }
+    let dots: Vec<usize> = (0..out.sections.len()).filter(|&i| &out.text[range(&out.sections[i])] == "·").collect();
+    for i in dots {
+        let g = f.layout_job(out.clone());
+        let at = out.text[..out.sections[i].byte_range.start.0].chars().count();
+        let Some(x) = g.rows.iter().flat_map(|r| r.row.glyphs.iter().map(move |gl| r.pos.x + gl.pos.x)).nth(at) else { continue };
+        out.sections[i].leading_space += ((x * ppp).ceil() - x * ppp) / ppp;
+    }
+    out
+}
+
 /// The separator before anything the count row adds after the count: mode suffixes and the Enter note alike.
 pub const COUNT_SEP: &str = " · ";
 
@@ -978,7 +1011,11 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
             // One line: the count, then in `muted` the mode suffix and (JQL-looking text unrun, so the rows are not
             // filtered by it) what Enter does, each after the same "·".
             let note = !row_spinner && jql_awaiting_enter(&app.filter.text, app.last_search_jql.as_deref(), app.typed_search && app.search_active, pending);
-            let job = ui.ctx().fonts_mut(|f| count_job(f, &label, color, &mode, note, p));
+            let ppp = ui.ctx().pixels_per_point();
+            let job = ui.ctx().fonts_mut(|f| {
+                let job = count_job(f, &label, color, &mode, note, p);
+                snap_dots(f, job, ppp)
+            });
             ui.label(job);
             if row_spinner {
                 spinner_label(ui, p, "Updating…");
@@ -1489,8 +1526,10 @@ fn hint_bar(ui: &mut Ui, hs: &[crate::keys::Hint], p: &Palette) {
     let word = |s: &str| ui.painter().layout_no_wrap(s.to_string(), theme::body(12.0), p.muted);
     // The glyphs' rasters as the tessellator places them (`ink_rect`), so with the origins on whole pixels every
     // gap lands exactly, after a mono run too (round 14 J3: 4.5 after "Enter", 4 after "⌘1").
+    // Trimmed to the rasters' visible coverage (round 15 H1/H2: a faint outer column read 4.5 and 12.5).
+    let ctx = ui.ctx().clone();
     let ink = |g: &std::sync::Arc<egui::Galley>| {
-        let r = theme::ink_rect(g);
+        let r = theme::visible_ink(&ctx, g);
         if r.is_positive() { (r.left(), r.right()) } else { (0.0, 0.0) }
     };
     let ink_w = |g: &std::sync::Arc<egui::Galley>| {
@@ -1907,6 +1946,70 @@ mod tests {
     }
 
     #[test]
+    fn count_dots_sit_on_whole_pixels() {
+        // Round 15 D4: every "·" in the count row starts on the device-pixel grid; the text is unchanged.
+        let _ = crate::testutil::paint_at2(egui::vec2(800.0, 100.0), |ui| {
+            let p = theme::LIGHT;
+            for (label, mode, note) in [("1 issue", " · JQL", false), ("18 issues", "", true), ("7 issues", " · text", true)] {
+                let job = ui.ctx().fonts_mut(|f| {
+                    let j = count_job(f, label, p.text, mode, note, &p);
+                    snap_dots(f, j, 2.0)
+                });
+                let plain = ui.ctx().fonts_mut(|f| count_job(f, label, p.text, mode, note, &p)).text;
+                assert_eq!(job.text, plain);
+                let g = ui.painter().layout_job(job);
+                for (i, gl) in g.rows[0].row.glyphs.iter().enumerate() {
+                    if gl.chr == '·' {
+                        let x = (g.rows[0].pos.x + gl.pos.x) * 2.0;
+                        assert!((x - x.round()).abs() < 0.01, "{label}{mode}: dot {i} at {x} px");
+                    }
+                }
+            }
+        });
+    }
+
+    #[test]
+    fn hint_gaps_hold_to_the_visible_ink() {
+        // Round 15 H1 / H2: key → word 4 and 12 around the dots, to the rasters' visible coverage (the raster box
+        // read 4.5 after "J/K", "c" and "Esc"). Real fonts, 2x.
+        use crate::keys::Tok::{K, W};
+        let hints: &[crate::keys::Hint] = &[&[K("J/K"), W("rank")], &[K("c"), W("copy")], &[K("Esc"), W("cancel")], &[K("j/k"), W("move")]];
+        for p in [theme::LIGHT, theme::DARK] {
+            let mut vis = Vec::new();
+            let _ = crate::testutil::paint_at2(egui::vec2(1200.0, 40.0), |ui| {
+                let shapes = ui.ctx().graphics_mut(|g| g.entry(ui.layer_id()).next_idx().0);
+                hint_bar(ui, hints, &p);
+                let texts = ui.ctx().graphics(|g| {
+                    g.get(ui.layer_id())
+                        .map(|l| {
+                            l.all_entries()
+                                .skip(shapes)
+                                .filter_map(|c| match &c.shape {
+                                    egui::Shape::Text(t) => Some((t.galley.clone(), t.pos)),
+                                    _ => None,
+                                })
+                                .collect::<Vec<_>>()
+                        })
+                        .unwrap_or_default()
+                });
+                vis = texts
+                    .into_iter()
+                    .map(|(g, pos)| {
+                        let r = theme::visible_ink(ui.ctx(), &g).translate((pos.to_vec2() * 2.0).round() / 2.0);
+                        (g.job.text.clone(), r.left(), r.right())
+                    })
+                    .collect();
+            });
+            assert_eq!(vis.len(), 11, "{vis:?}");
+            for w in vis.windows(2) {
+                let gap = w[1].1 - w[0].2;
+                let want = if w[0].0 == "·" || w[1].0 == "·" { SEP_SPACE } else { KEY_TO_WORD };
+                assert!((gap - want).abs() < 0.01, "{} → {}: {gap}", w[0].0, w[1].0);
+            }
+        }
+    }
+
+    #[test]
     fn popups_show_whole_rows_and_a_bar_when_they_scroll() {
         assert_eq!(popup_scroll(3), (3.0 * POPUP_ROW_H, false));
         assert_eq!(popup_scroll(POPUP_MAX_ROWS), (POPUP_MAX_ROWS as f32 * POPUP_ROW_H, false));
@@ -2092,9 +2195,9 @@ mod tests {
         assert_eq!(count_note(JQL_ENTER_NOTE), " · Enter run as JQL");
         assert!(JQL_ENTER_NOTE.starts_with(JQL_ENTER_KEY), "the note leads with its key");
         assert!(count_label(2, None, false, CountSuffix::Jql).ends_with(&count_note("JQL")), "one separator");
-        // B2: the search box's text is centred like a combo's (even margins top and bottom).
+        // B2: the search box's text is centred like a combo's; round 15 B1: a point less above, half a point up.
         let m = crate::views::search_margin();
-        assert_eq!((m.top, m.bottom), (4, 4));
+        assert_eq!((m.top, m.bottom), (3, 4));
         assert_eq!(f32::from(m.left), crate::views::SEARCH_PAD_X);
         assert!(jql_awaiting_enter("status = Blocked", None, false, false), "typed, not run");
         assert!(!jql_awaiting_enter("status = Blocked", Some("status = Blocked"), true, false), "its rows are on screen");

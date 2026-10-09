@@ -33,10 +33,13 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
             .fill(crate::views::dialog_fill(p))
             .stroke(crate::views::dialog_stroke(p))
             .corner_radius(theme::RADIUS)
-            .inner_margin(Margin { left: PAD as i8, right: PAD as i8, top: TITLE_TOP as i8, bottom: PAD as i8 })
+            // Margins are whole points: the right, top and bottom take a point and give back HALF_PX inside, so
+            // they sit HALF_PX tighter (round 15 H3: they read 24.5 to the ink against the left's 24).
+            .inner_margin(Margin { left: PAD as i8, right: PAD as i8 - 1, top: TITLE_TOP as i8 - 1, bottom: PAD as i8 - 1 })
             .show(ui, |ui| {
-                ui.set_width(lw + COL_GAP + rw);
+                ui.set_width(lw + COL_GAP + rw + 1.0 - HALF_PX);
                 ui.spacing_mut().item_spacing.y = 0.0;
+                ui.add_space(1.0 - HALF_PX);
                 let title = ui.painter().layout_no_wrap("Keyboard".to_string(), theme::bold(15.0), p.text);
                 let below = title.size().y - theme::ink_rect(&title).bottom();
                 ui.label(title);
@@ -55,6 +58,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                         group(ui, p, Group::Global, rk);
                     });
                 });
+                ui.add_space(1.0 - HALF_PX);
             });
     });
 }
@@ -65,6 +69,8 @@ const PAD: f32 = 24.0;
 /// measured 28 at 24).
 const TITLE_TOP: f32 = 20.0;
 const COL_GAP: f32 = 24.0;
+/// How much tighter the right, top and bottom paddings sit than PAD / TITLE_TOP: one device pixel at 2x.
+const HALF_PX: f32 = 0.5;
 /// Key cell → action: 16 px, never more.
 const KEY_TO_ACTION: f32 = 16.0;
 /// Between a chip and the "or" / "to" beside it.

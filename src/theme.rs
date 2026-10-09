@@ -511,6 +511,72 @@ pub fn ink_rect(g: &egui::Galley) -> egui::Rect {
     r
 }
 
+/// A glyph raster's coverage below this reads as background: `visible_ink` trims raster columns that faint
+/// (the antialiasing margin a glyph's bitmap carries, up to a device pixel each side).
+const VISIBLE_ALPHA: u8 = 26;
+
+/// `ink_rect`'s x edges trimmed to the glyphs' visible coverage in the font atlas: a raster's outer columns can be
+/// near-empty, so gaps set from the raster box read up to a device pixel wide (round 15 H1: 4.5 after "J/K", "c").
+/// Cached per galley text and fonts in `ctx`'s memory; the atlas is read only on a miss.
+pub fn visible_ink(ctx: &egui::Context, g: &egui::Galley) -> egui::Rect {
+    visible_ink_at(ctx, g, VISIBLE_ALPHA)
+}
+
+/// `visible_ink` with its coverage threshold.
+fn visible_ink_at(ctx: &egui::Context, g: &egui::Galley, alpha: u8) -> egui::Rect {
+    let r = ink_rect(g);
+    if !r.is_positive() {
+        return r;
+    }
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    g.job.text.hash(&mut h);
+    for s in &g.job.sections {
+        s.format.font_id.hash(&mut h);
+        s.leading_space.to_bits().hash(&mut h);
+    }
+    g.pixels_per_point.to_bits().hash(&mut h);
+    alpha.hash(&mut h);
+    // The rasters' atlas cells too: other fonts (the first frame's) or a rebuilt atlas is another entry.
+    for row in &g.rows {
+        for gl in &row.glyphs {
+            (gl.uv_rect.min, gl.uv_rect.max).hash(&mut h);
+        }
+    }
+    let id = egui::Id::new(("visible-ink", h.finish()));
+    let trim = ctx.data(|d| d.get_temp::<(f32, f32)>(id)).unwrap_or_else(|| {
+        let atlas = ctx.fonts(|f| f.image());
+        let ppp = g.pixels_per_point.max(1.0);
+        let snap = |v: f32| (v * ppp).round() / ppp;
+        // Each glyph's visible columns, as (left, right) in galley points.
+        let (mut left, mut right) = (f32::INFINITY, f32::NEG_INFINITY);
+        for row in &g.rows {
+            for gl in &row.glyphs {
+                let uv = gl.uv_rect;
+                if uv.is_nothing() || uv.size.x <= 0.0 {
+                    continue;
+                }
+                let x0 = row.pos.x + snap(gl.pos.x + uv.offset.x);
+                let cols = usize::from(uv.max[0].saturating_sub(uv.min[0]));
+                let seen = |c: usize| {
+                    (usize::from(uv.min[1])..usize::from(uv.max[1])).any(|y| {
+                        let x = usize::from(uv.min[0]) + c;
+                        y < atlas.size[1] && x < atlas.size[0] && atlas.pixels[y * atlas.size[0] + x].a() >= alpha
+                    })
+                };
+                let Some(first) = (0..cols).find(|&c| seen(c)) else { continue };
+                let last = (0..cols).rev().find(|&c| seen(c)).unwrap_or(first);
+                left = left.min(x0 + first as f32 / ppp);
+                right = right.max(x0 + (last + 1) as f32 / ppp);
+            }
+        }
+        let t = if left.is_finite() { (left - r.left(), r.right() - right) } else { (0.0, 0.0) };
+        ctx.data_mut(|d| d.insert_temp(id, t));
+        t
+    });
+    egui::Rect::from_x_y_ranges(r.left() + trim.0..=r.right() - trim.1, r.y_range())
+}
+
 /// One font's ink offsets inside its line box, measured on reference glyphs with the loaded fonts at the
 /// current pixel density. "Spacing is measured to the ink": a container's margin is the ruled ink gap minus
 /// these (`pad_*`), so the ink, not the line box, lands on the 4 / 8 / 12 / 16 / 24 scale.
