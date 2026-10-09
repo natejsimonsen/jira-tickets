@@ -27,7 +27,10 @@ pub fn show(app: &mut App, ui: &mut Ui) {
     let saved = crate::views::set_thumb_fills(ui, p);
     // No edge fade: the pane ends flush on the hint bar's rule (the fade dimmed its last ~19 px).
     crate::views::no_scroll_fade(ui);
-    egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+    // The viewport stops BAR_CLEARANCE above the hint bar, so a partly scrolled line's ascenders never show
+    // against the bar's rule (C5).
+    let view_h = (ui.available_height() - BAR_CLEARANCE).max(0.0);
+    egui::ScrollArea::vertical().auto_shrink([false, false]).max_height(view_h).show(ui, |ui| {
         crate::views::restore_fills(ui, saved);
         // The pane has no right margin: the bar sits in this inset, clear of the content.
         ui.set_max_width(ui.available_width() - DETAIL_RIGHT);
@@ -153,6 +156,8 @@ const COMPOSER_PAD: f32 = 11.0;
 const COMPOSER_STROKE: f32 = 1.0;
 /// Comment author → date.
 const COMMENT_META_GAP: f32 = 8.0;
+/// The detail viewport's bottom gap above the hint bar.
+pub const BAR_CLEARANCE: f32 = 4.0;
 /// The detail content's right inset, inside the scroll area: the pane's 16 px gutter, which holds the floating
 /// scrollbar (its width + 4 at least).
 pub const DETAIL_RIGHT: f32 = 16.0;
@@ -325,6 +330,7 @@ mod tests {
         assert!(DETAIL_RIGHT >= bar.bar_width + bar.bar_outer_margin + 4.0, "the scrollbar sits clear of the content");
         assert_eq!((COMMENT_TIP, COMPOSER_HINT), ("Post the comment (⌘Enter)", "Add a comment (⌘Enter to post)"));
         assert_eq!(COMPOSER_PAD + COMPOSER_STROKE, 12.0, "text on the comment cards' 12 px edge");
+        assert_eq!(BAR_CLEARANCE, 4.0, "the viewport stops 4 above the hint bar (C5)");
     }
 
     #[test]

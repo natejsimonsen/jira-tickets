@@ -908,11 +908,15 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
     };
     // egui's own fade dims whatever sits near an edge; the list fades only a row that is really cut (`fade_strip`).
     crate::views::no_scroll_fade(ui);
+    // A thin, faint thumb at rest whenever the list overflows, so "more below" never hides (C4).
+    ui.spacing_mut().scroll.dormant_handle_opacity = LIST_THUMB_REST;
+    let saved = crate::views::set_thumb_fills(ui, p);
     let mut row_spans: Vec<(f32, f32)> = Vec::with_capacity(rows.len());
     let mut selected_rect: Option<(Rect, usize)> = None;
     let mut row_x: Option<egui::Rangef> = None;
     let mut stripes: Vec<(usize, Rect, CornerRadius, egui::Color32)> = Vec::new();
     let out = egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+        crate::views::restore_fills(ui, saved);
         ui.spacing_mut().item_spacing.y = ROW_GAP;
         for (idx, i) in rows.iter().enumerate() {
             let is_sel = selected.as_deref() == Some(&i.key);
@@ -928,6 +932,8 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
                 .inner_margin(Margin { left: 12, right: 12, top: ROW_PAD_TOP, bottom: ROW_PAD_BOTTOM })
                 .show(ui, |ui| {
                     ui.set_width(ui.available_width());
+                    // The row's outer top edge (the content starts inside the 1 px border and the top margin).
+                    let row_top = ui.cursor().top() - ROW_STROKE - f32::from(ROW_PAD_TOP);
                     ui.add_space(ROW_PAD_TOP_EXTRA);
                     ui.spacing_mut().item_spacing.y = ROW_LINE_GAP;
                     ui.horizontal(|ui| {
@@ -962,7 +968,7 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
                                 let t = theme::status_tint(&i.status.name, &i.status.category, p, status_colors);
                                 (PillKind::Status, PillLook::Tint(status_fill(&t, p, is_sel), t.fg))
                             }
-                            ("parent.summary" | "parent.key", Some(t)) => (PillKind::Epic, PillLook::Epic(t.fg, t.stripe)),
+                            ("parent.summary" | "parent.key", Some(t)) => (PillKind::Epic, PillLook::Epic(t.fg, row_stripe(&t, p, is_sel))),
                             ("parent.summary" | "parent.key", None) => (PillKind::Epic, PillLook::Outline),
                             ("assignee", _) => (PillKind::Assignee, PillLook::Outline),
                             _ => (PillKind::Other, PillLook::Outline),
@@ -970,8 +976,14 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
                         pills.push((kind, v, look));
                     }
                     pills.sort_by_key(|(k, _, _)| pill_rank(*k));
+                    // The pill line at one fixed, pixel-rounded y from the row's top (C1), whatever the title row
+                    // laid out to (its slot follows the inherited interact height and the galley).
+                    let line = pill_line_y(row_top, ui.ctx().pixels_per_point());
+                    ui.add_space(line - ui.cursor().top());
                     ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing = vec2(PILL_GAP, 4.0);
+                        // Pills sit on the line's top, not centred in an inherited interact height.
+                        ui.spacing_mut().interact_size.y = 0.0;
                         // The pill row starts on the key's ink, not its side bearing.
                         ui.add_space(KEY_INK_INSET);
                         let painter = ui.painter().clone();
@@ -1049,6 +1061,9 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
         }
         // Stripes last, in both themes; a row hidden as a bottom sliver shows none (it peeked 1 pt over the seam).
         let hidden = sliver_row(&row_spans, ui.clip_rect().bottom());
+        // The selected row's stripe goes last, over the seam it shares with the next row, so its bottom rule
+        // never shows the next row's stripe tone (C3).
+        stripes.sort_by_key(|(idx, ..)| stripe_paints_last(*idx, selected_rect.map(|(_, i)| i)));
         for (idx, r, corners, color) in stripes {
             if Some(idx) != hidden {
                 ui.painter().rect_filled(r, corners, color);
@@ -1058,13 +1073,15 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
         ui.add_space(LIST_BOTTOM_PAD);
     });
     let view = out.inner_rect;
-    // A row showing less than CLIP_MIN at the bottom is hidden: the list ends on the last whole row's border.
+    // A row showing less than CLIP_MIN at the bottom is hidden, but the card runs on to the hint bar: its fill
+    // and left border fill the leftover gap, so it reads as card, not panel (C4).
     let sliver = bottom_sliver(&row_spans, view.bottom());
     if let (Some((top, bottom)), Some(x)) = (sliver, row_x) {
-        ui.painter().rect_filled(Rect::from_x_y_ranges(x, top..=bottom), 0.0, p.bg);
+        ui.painter().rect_filled(Rect::from_x_y_ranges(x, top..=bottom), 0.0, row_fill(false, false, p));
+        ui.painter().vline(x.min + 0.5, top..=bottom, Stroke::new(1.0, p.border));
     }
     // More rows below the viewport: a 1 px rule at its bottom edge says so, without dimming any row.
-    if sliver.is_none() && more_below(&row_spans, view.bottom()) {
+    if more_below(&row_spans, view.bottom()) {
         ui.painter().hline(view.x_range(), view.bottom() - 0.5, Stroke::new(1.0, p.border));
     }
     let fade = p.bg.gamma_multiply(FADE_STRENGTH);
@@ -1078,6 +1095,10 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
         }
     }
 }
+
+/// The list thumb's opacity at rest (floating bars default to 0, hidden until hovered): faint, over the
+/// `scroll_thumb` rest colour (`muted` at about half alpha).
+const LIST_THUMB_REST: f32 = 0.5;
 
 /// A row cut by more than this at a viewport edge fades; less, and it reads as whole.
 const CLIP_MIN: f32 = 8.0;
@@ -1145,6 +1166,24 @@ const ROW_PAD_TOP_EXTRA: f32 = 0.5;
 const ROW_PAD_BOTTOM: i8 = 4;
 const ROW_PAD_BOTTOM_EXTRA: f32 = 3.5;
 const ROW_LINE_GAP: f32 = -1.5;
+/// The row frame's border width (egui 0.36 frames draw the stroke inside, ahead of the margin).
+const ROW_STROKE: f32 = 1.0;
+/// Row top edge → the title's cap ink (the border, the 0.5 pad and the title's ~4.5 leading).
+const ROW_INK_TOP: f32 = 6.0;
+/// The title line as the row grid counts it: its 18 slot less the 4.5 leading over the caps, the 1.5 the pills
+/// moved up in round 10, and the 4 gap.
+const TITLE_LINE: f32 = 8.0;
+/// Title line → pill line.
+const TITLE_TO_PILLS: f32 = 4.0;
+/// The pill line's top below the row's top edge: 6 + title line + 4 (round 11 C1), where it measured in every
+/// round-11 capture (row top + 36 px at 2×).
+pub const PILL_LINE_TOP: f32 = ROW_INK_TOP + TITLE_LINE + TITLE_TO_PILLS;
+
+/// The pill line's y for a row whose outer top edge is `row_top`: PILL_LINE_TOP below it, on a whole physical
+/// pixel, so it never depends on the title row's laid-out height, the row's index, or the scroll offset's fraction.
+pub fn pill_line_y(row_top: f32, ppp: f32) -> f32 {
+    ((row_top + PILL_LINE_TOP) * ppp).round() / ppp
+}
 /// One row's pitch (rows overlap by ROW_GAP's 1 px), for the density check: 44 − 2 from round 8's padding.
 pub const ROW_PITCH: f32 = 42.0;
 
@@ -1152,6 +1191,11 @@ pub const ROW_PITCH: f32 = 42.0;
 pub fn stripe_rect(row: Rect, ppp: f32) -> Rect {
     let snap = |v: f32| (v * ppp).round() / ppp;
     Rect::from_min_max(egui::pos2(snap(row.left()), row.top()), egui::pos2(snap(row.left() + 3.0), row.bottom()))
+}
+
+/// Stripe paint order key: false (first) for every row but the selected one (C3).
+pub fn stripe_paints_last(idx: usize, selected: Option<usize>) -> bool {
+    selected == Some(idx)
 }
 
 /// A row's epic stripe colour: the slot's stripe, except on a selected light row, where it takes the slot's text
@@ -1892,6 +1936,50 @@ mod tests {
             let d = theme::slot_tint(s, &theme::DARK);
             assert_eq!(row_stripe(&d, &theme::DARK, true), d.stripe, "dark unchanged");
         }
+    }
+
+    #[test]
+    fn the_pill_line_sits_at_one_fixed_y() {
+        assert_eq!(PILL_LINE_TOP, 6.0 + 8.0 + 4.0, "row top + 6 + title line + 4");
+        // It is where the old flow put it: border 1 + pad 0.5 + the 18 title slot + the −1.5 line gap.
+        assert_eq!(ROW_STROKE + f32::from(ROW_PAD_TOP) + ROW_PAD_TOP_EXTRA + 18.0 + ROW_LINE_GAP, PILL_LINE_TOP);
+        // Whole physical pixels at 1× and 2×, from fractional row tops (a scroll offset) too.
+        assert_eq!(pill_line_y(100.0, 2.0), 118.0);
+        assert_eq!(pill_line_y(100.3, 2.0), 118.5);
+        assert_eq!(pill_line_y(100.2, 2.0), 118.0);
+        assert_eq!(pill_line_y(100.6, 1.0), 119.0);
+        // Every row index and either scroll fraction: the same offset from the row's (pixel-rounded) top.
+        for idx in 0..20 {
+            let top = 197.0 + idx as f32 * ROW_PITCH;
+            assert_eq!(pill_line_y(top, 2.0) - top, PILL_LINE_TOP, "row {idx}");
+        }
+        // The 18 slot the old flow relied on: the title galley (17, fallback glyphs too) under egui's 18 interact
+        // height. The pin no longer depends on it, but the row's height still does.
+        crate::testutil::with_ui(|ui| {
+            assert_eq!(ui.spacing().interact_size.y, 18.0);
+            for t in ["Autoscaler spend dashboard", "Fix → thing", "Ship ✅ it", "日本語"] {
+                let h = ui.painter().layout_no_wrap(t.to_string(), theme::bold(13.5), egui::Color32::WHITE).size().y;
+                assert!(h <= 18.0, "{t:?} {h}");
+            }
+        });
+    }
+
+    #[test]
+    fn the_selected_stripe_paints_last() {
+        let mut order = [(0, ()), (1, ()), (2, ()), (3, ())];
+        order.sort_by_key(|(i, _)| stripe_paints_last(*i, Some(1)));
+        assert_eq!(order.iter().map(|(i, _)| *i).collect::<Vec<_>>(), [0, 2, 3, 1]);
+        assert!(!stripe_paints_last(1, None));
+    }
+
+    #[test]
+    fn light_selected_rows_outline_pills_in_the_text_tone() {
+        let l = &theme::LIGHT;
+        assert!(theme::contrast(crate::views::selected_pill_edge(l), l.selected_row) >= 3.3);
+        let d = &theme::DARK;
+        assert_eq!(crate::views::selected_pill_edge(d), crate::views::selected_edge(d), "dark unchanged");
+        let t = theme::slot_tint(0, l);
+        assert_eq!(row_stripe(&t, l, true), t.fg, "the epic outline takes the stripe's tone");
     }
 
     #[test]

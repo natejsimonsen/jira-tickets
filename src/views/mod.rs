@@ -770,7 +770,13 @@ pub fn outline_pill(ui: &mut Ui, text: &str, p: &Palette, margin: egui::Vec2) ->
 /// An outline pill on a selected row: the `selected_edge` outline so it never sinks into the fill; its text
 /// (assignee, labels) stays secondary (`selected_pill_text`): only the row's key switches to `text`.
 pub fn outline_pill_selected(ui: &mut Ui, text: &str, p: &Palette, margin: egui::Vec2) -> egui::Response {
-    pill_sized(ui, text, Color32::TRANSPARENT, selected_pill_text(p), Stroke::new(1.0, selected_edge(p)), margin)
+    pill_sized(ui, text, Color32::TRANSPARENT, selected_pill_text(p), Stroke::new(1.0, selected_pill_edge(p)), margin)
+}
+
+/// A neutral pill's outline on a selected row: light #77766f (≥ 3.3:1 on the #dfdfda selection; the
+/// `selected_edge` rule tone read 2.88), dark the `selected_edge` (round 11 C3).
+pub fn selected_pill_edge(p: &Palette) -> Color32 {
+    if p.dark { selected_edge(p) } else { Color32::from_rgb(0x77, 0x76, 0x6f) }
 }
 
 /// A scrollbar thumb at rest and hovered: `muted` at about half alpha (2.5–3:1 off the surface: 60 % in light,
@@ -867,7 +873,8 @@ pub fn truncate_title(text: &str, max_w: f32, measure: impl Fn(&str) -> f32) -> 
 }
 
 /// Words a cut title never ends on: they promise a word the "…" hides.
-pub const TITLE_STOP_WORDS: [&str; 9] = ["the", "a", "an", "of", "on", "to", "from", "in", "for"];
+pub const TITLE_STOP_WORDS: [&str; 18] =
+    ["the", "a", "an", "of", "on", "to", "from", "in", "for", "and", "or", "by", "with", "at", "into", "onto", "are", "is"];
 
 /// `kept` without trailing stop words (case-insensitive) and the punctuation they leave, keeping at least one word.
 fn drop_stop_words(mut kept: &str) -> &str {
@@ -1007,6 +1014,14 @@ mod widget_tests {
         assert_eq!(truncate_title("The quick brown", 6.0, w), "The…", "a lone stop word stays");
         assert_eq!(truncate_title("Mirror of, the thing", 15.0, w), "Mirror…", "punctuation left behind goes too");
         assert_eq!(truncate_title("In the beginning", 30.0, w), "In the beginning", "uncut titles keep every word");
+        // Round 11 C2: and, or, by, with, at, into, onto, are, is go too, repeatedly.
+        assert_eq!(truncate_title("Ship logs into the store by default", 20.0, w), "Ship logs…", "'into the' both go");
+        assert_eq!(truncate_title("Pods are pending and stuck", 18.0, w), "Pods are pending…", "'and' goes");
+        assert_eq!(truncate_title("Alerts with or without labels", 16.0, w), "Alerts…", "'with or' both go");
+        assert_eq!(truncate_title("Logs are at rest now", 13.0, w), "Logs…", "'are at' both go");
+        for word in ["and", "or", "by", "with", "at", "into", "onto", "are", "is"] {
+            assert!(TITLE_STOP_WORDS.contains(&word), "{word}");
+        }
     }
 
     #[test]
