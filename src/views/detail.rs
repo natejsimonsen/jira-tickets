@@ -65,7 +65,7 @@ pub fn show(app: &mut App, ui: &mut Ui) {
         ui.add_space(key_to_title_space(ui, &issue.key));
         ui.label(RichText::new(&issue.summary).font(theme::bold(22.0)).color(p.text));
         ui.add_space(TITLE_TO_PILLS);
-        ui.horizontal_wrapped(|ui| {
+        let pills = ui.horizontal_wrapped(|ui| {
             // The list rows' pill gap (E3; 6 measured 6.5–7).
             ui.spacing_mut().item_spacing = vec2(super::issues::PILL_GAP, 4.0);
             let st = theme::status_tint(&issue.status.name, &issue.status.category, p, &app.cfg.issues.status_colors);
@@ -83,6 +83,11 @@ pub fn show(app: &mut App, ui: &mut Ui) {
                 outline_pill(ui, l, p, crate::views::PILL_MARGIN);
             }
         });
+        // Only a pill row inside the viewport anchors a picker (a scrolled-away one would lift it off the window).
+        let pills_top = pills.response.rect.top();
+        if ui.clip_rect().y_range().contains(pills_top) {
+            app.detail_pills_top = Some(pills_top);
+        }
         // The pills' edge is their ink.
         ui.add_space(section_space(ui, "Description", 0.0));
         let window_w = ui.ctx().content_rect().width();

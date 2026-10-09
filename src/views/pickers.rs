@@ -22,13 +22,15 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
     let issue = app.picker.as_ref().map(picker_key).and_then(|k| app.store.get(k));
     let status = issue.map(|i| i.status.name.clone()).unwrap_or_default();
     let sprint = issue.and_then(|i| i.sprint.clone());
+    let app_pills = app.detail_pills_top;
     let Some(picker) = app.picker.as_mut() else { return };
     // Dim the page behind the dialog and swallow its clicks.
     crate::views::backdrop(ctx, "picker-backdrop", egui::Order::Middle, hint_bar, p);
     let mut confirm = false;
     let mut cancel = false;
-    // A fixed top edge, so a list that shrinks while filtering never moves the dialog.
-    let top = dialog_top(ctx.content_rect().height());
+    // A fixed top edge, so a list that shrinks while filtering never moves the dialog: PILLS_MARGIN over the
+    // detail pane's pill row when it shows, else a fifth down the window.
+    let top = picker_top(ctx.content_rect().height(), app_pills);
     egui::Area::new(egui::Id::new("picker")).order(egui::Order::Foreground).anchor(egui::Align2::CENTER_TOP, vec2(0.0, top)).show(ctx, |ui| {
         Frame::new().fill(crate::views::dialog_fill(p)).stroke(crate::views::dialog_stroke(p)).corner_radius(theme::RADIUS).inner_margin(DIALOG_MARGIN).show(
             ui,
@@ -36,15 +38,15 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                 ui.set_width(440.0);
                 // Fields on `bg` with the dialog's own edge, in both themes.
                 crate::views::dialog_fields(ui, p);
-                match picker {
+                let buttons_gap = match picker {
                     Picker::Transition { key, items, cursor } => {
-                        title(ui, p, &format!("Transition {key}"));
+                        let below = title_line(ui, p, &format!("Transition {key}"));
                         let names = items.iter().map(|t| Row::plain(transition_row(t)).current_if(t.to.eq_ignore_ascii_case(&status))).collect();
-                        rows(ui, p, names, &mut confirm, cursor, None);
+                        rows(ui, p, names, &mut confirm, cursor, None, Some(below))
                     }
                     Picker::Resolution { key, items, cursor, .. } => {
-                        title(ui, p, &format!("Resolution for {key}"));
-                        rows(ui, p, items.iter().map(|r| Row::plain(r.name.clone())).collect(), &mut confirm, cursor, None);
+                        let below = title_line(ui, p, &format!("Resolution for {key}"));
+                        rows(ui, p, items.iter().map(|r| Row::plain(r.name.clone())).collect(), &mut confirm, cursor, None, Some(below))
                     }
                     Picker::Assign { key, items, current, cursor, filter } => {
                         title(ui, p, &format!("Assign {key}"));
@@ -68,17 +70,18 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                             *cursor = 0;
                         }
                         let note = assign_note(filter, shown.len(), assign_matches(items, filter, current.as_ref()), cut);
-                        rows(ui, p, names, &mut confirm, cursor, Some(note.as_deref()));
+                        // The field sits under the title; the rows' own top gap is ASSIGN_FIELD_GAP (above).
+                        rows(ui, p, names, &mut confirm, cursor, Some(note.as_deref()), None)
                     }
                     Picker::Sprint { key, items, cursor } => {
-                        title(ui, p, &format!("Move {key} to sprint"));
+                        let below = title_line(ui, p, &format!("Move {key} to sprint"));
                         let now = sprint_current_row(items, sprint.as_deref());
                         let mut names = vec![Row::plain("Backlog".to_string())];
                         names.extend(items.iter().map(|s| Row::plain(sprint_row_label(&s.name, &s.state))));
                         for (i, n) in names.iter_mut().enumerate() {
                             n.current = now == Some(i);
                         }
-                        rows(ui, p, names, &mut confirm, cursor, None);
+                        rows(ui, p, names, &mut confirm, cursor, None, Some(below))
                     }
                     Picker::Edit { key, labels, priority, points, .. } => {
                         let below = title_line(ui, p, &format!("Edit {key}"));
@@ -93,9 +96,10 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                         edit_group(ui, p, "Priority", priority, |t| field(t, crate::app::PRIORITY_HINT, p));
                         ui.add_space(group_space(ui, "Story points"));
                         edit_group(ui, p, "Story points", points, |t| field(t, crate::app::POINTS_HINT, p));
+                        BUTTONS_GAP
                     }
-                }
-                ui.add_space(BUTTONS_GAP);
+                };
+                ui.add_space(buttons_gap);
                 // The hint bar carries the keys; the dialog carries one primary action.
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 8.0;
@@ -134,6 +138,16 @@ fn picker_key(p: &Picker) -> &str {
 pub fn dialog_top(window_h: f32) -> f32 {
     ((window_h * 0.2).round() - DIALOG_LIFT).max(0.0)
 }
+
+/// The dialog's top edge with the detail pane's pill row at `pills_top` (its fill is its ink): PILLS_MARGIN above
+/// it, so the dialog covers the pills and leaves the title readable (round 15 G1: 20% less 13 sat 3 over the
+/// one-line-title pills); without a pill row on screen, `dialog_top`.
+pub fn picker_top(window_h: f32, pills_top: Option<f32>) -> f32 {
+    pills_top.map_or_else(|| dialog_top(window_h), |t| (t - PILLS_MARGIN).max(0.0))
+}
+
+/// The dialog's outer edge above the detail pane's pill row.
+const PILLS_MARGIN: f32 = 8.0;
 
 /// How far the dialog sits above the window's 20% line (round 13 G4: 10 left 5 over the pills; 13 leaves 8).
 const DIALOG_LIFT: f32 = 13.0;
@@ -190,9 +204,13 @@ const ASSIGN_ROWS: f32 = (crate::app::ASSIGN_USERS + 2) as f32;
 /// One picker row: 14 px text plus 6 px above and below.
 const ROW_H: f32 = 30.0;
 
-/// Title → first row, and last row → buttons: 24 measured ink to fill (round 6 measured 22 with 12 and 16).
+/// Assign's title → its field (the field's fill is its ink).
 const TITLE_GAP: f32 = 14.0;
+/// Edit's last field → the buttons, both edges their ink (24).
 const BUTTONS_GAP: f32 = 18.0;
+/// The list pickers' title ink → the first row's text ink, and the last row's (or note's) text ink → the
+/// buttons' edge (round 15 G2: the row boxes' slack read 33 and 35).
+const LIST_INK_GAP: f32 = 24.0;
 
 /// The dialog's title, TITLE_INK_TOP under the dialog's inner edge to its ink, then TITLE_GAP.
 fn title(ui: &mut egui::Ui, p: &Palette, text: &str) {
@@ -260,10 +278,17 @@ impl Row {
 /// hover does not move the cursor, so a resting mouse can't fight the keys.
 /// `fixed`: Assign's capped list. It keeps one height (Unassigned, the users, a note row) whatever the
 /// filter leaves, and the note ("9 of N · type to see more") shows when matches were cut.
-fn rows(ui: &mut egui::Ui, p: &Palette, names: Vec<Row>, confirm: &mut bool, cursor: &mut usize, fixed: Option<Option<&str>>) {
+/// `title_below`: how far the title's line box runs below its ink, when the rows follow the title directly; the
+/// space before them puts LIST_INK_GAP from the title's ink to the first row's text ink. Returns the space before
+/// the buttons for LIST_INK_GAP from the last row's (or the note's) text ink to the buttons' edge.
+fn rows(ui: &mut egui::Ui, p: &Palette, names: Vec<Row>, confirm: &mut bool, cursor: &mut usize, fixed: Option<Option<&str>>, title_below: Option<f32>) -> f32 {
+    let item_y = ui.spacing().item_spacing.y;
+    if let (Some(below), Some(first)) = (title_below, names.first()) {
+        ui.add_space(LIST_INK_GAP - below - f32::from(ROW_PAD_Y) - row_ink(ui, &first.text).top() - item_y);
+    }
     if names.is_empty() {
         ui.label(RichText::new("Nothing available").color(crate::views::dialog_muted(p)));
-        return;
+        return BUTTONS_GAP;
     }
     if let Some(note) = fixed {
         let h = ASSIGN_ROWS * ROW_H;
@@ -281,9 +306,20 @@ fn rows(ui: &mut egui::Ui, p: &Palette, names: Vec<Row>, confirm: &mut bool, cur
                 ui.add_space(after);
             }
         });
-        return;
+        // The block keeps its height, so the gap is set for the note at its foot (its descenders are its ink).
+        let note = theme::Ink::of(ui.ctx(), &theme::body(12.0), None);
+        let under = f32::from(ROW_PAD_Y) + (ROW_H - 12.0).max(note.line) - (note.base + note.descent);
+        return LIST_INK_GAP - under - item_y;
     }
     egui::ScrollArea::vertical().max_height(360.0).show(ui, |ui| row_list(ui, p, &names, confirm, cursor));
+    let last = names.last().map(|n| row_ink(ui, &n.text)).unwrap_or(egui::Rect::NOTHING);
+    let line = theme::Ink::of(ui.ctx(), &theme::body(14.0), None).line;
+    LIST_INK_GAP - (f32::from(ROW_PAD_Y) + (ROW_H - 12.0).max(line) - last.bottom()) - item_y
+}
+
+/// A picker row's text ink, from its line box's top-left.
+fn row_ink(ui: &egui::Ui, text: &str) -> egui::Rect {
+    theme::ink_rect(&ui.painter().layout_no_wrap(text.to_string(), theme::body(14.0), egui::Color32::WHITE))
 }
 
 fn row_list(ui: &mut egui::Ui, p: &Palette, names: &[Row], confirm: &mut bool, cursor: &mut usize) {
@@ -343,6 +379,47 @@ mod tests {
     }
 
     #[test]
+    fn list_pickers_sit_24_to_the_text_ink() {
+        // Round 15 G2: title ink → first row text ink 24, last row (or Assign's note) text ink → buttons 24, wherever
+        // the cursor is. Real fonts, 2x.
+        for p in [crate::theme::LIGHT, crate::theme::DARK] {
+            for cursor in [0, 2] {
+                let mut gaps = (0.0, 0.0);
+                let shapes = crate::testutil::paint_at2(egui::vec2(800.0, 900.0), |ui| {
+                    egui::Frame::new().fill(crate::views::dialog_fill(&p)).inner_margin(super::DIALOG_MARGIN).show(ui, |ui| {
+                        ui.set_width(440.0);
+                        let below = super::title_line(ui, &p, "Transition CI-3779");
+                        let names = vec![super::Row::plain("New".into()), super::Row::plain("Backlog".into()), super::Row::plain("Closed".into())];
+                        let gap = super::rows(ui, &p, names, &mut false, &mut cursor.clone(), None, Some(below));
+                        ui.add_space(gap);
+                        let b = ui.add(crate::views::primary_button("Confirm", &p)).rect;
+                        gaps.0 = b.top();
+                        // A full list: the cut note sits at the block's foot.
+                        let mut names = vec![super::Row::muted("Unassigned")];
+                        names.extend((0..crate::app::ASSIGN_USERS).map(|i| super::Row::plain(format!("User {i}"))));
+                        let gap = super::rows(ui, &p, names, &mut false, &mut cursor.clone(), Some(Some("9 of 40 · type to see more")), None);
+                        ui.add_space(gap);
+                        gaps.1 = ui.add(crate::views::dialog_button("Cancel", &p)).rect.top();
+                    });
+                });
+                let title = crate::testutil::ink_of(&shapes, "Transition CI-3779");
+                let first = crate::testutil::ink_of(&shapes, "New");
+                let last = crate::testutil::ink_of(&shapes, "Closed");
+                let note = crate::testutil::ink_of(&shapes, "9 of 40 · type to see more");
+                assert!((first.top() - title.bottom() - 24.0).abs() <= 0.5, "title → first row {}", first.top() - title.bottom());
+                assert!((gaps.0 - last.bottom() - 24.0).abs() <= 0.5, "last row → buttons {}", gaps.0 - last.bottom());
+                assert!((gaps.1 - note.bottom() - 24.0).abs() <= 0.5, "note → buttons {}", gaps.1 - note.bottom());
+            }
+        }
+    }
+
+    #[test]
+    fn dialog_sits_8_over_the_pill_row() {
+        assert_eq!(super::picker_top(900.0, Some(170.0)), 162.0, "8 over the pills' fill");
+        assert_eq!(super::picker_top(900.0, None), super::dialog_top(900.0), "no pill row: a fifth down");
+    }
+
+    #[test]
     fn titles_and_edit_groups_sit_16_to_the_ink() {
         // Round 13 G1 / G3: 16 from the dialog's inner edge to the title's ink, 16 from an Edit field to the next
         // label's ink, with the real fonts at the captures' density.
@@ -379,7 +456,7 @@ mod tests {
                 crate::views::add_field(ui, None, &mut filter, |t| super::field(t, "Type a name", &p));
                 ui.add_space(super::assign_field_space(ui));
                 let names = vec![super::Row::muted("Unassigned"), super::Row::plain("Ada Lovelace".into())];
-                super::rows(ui, &p, names, &mut false, &mut 1, Some(None));
+                super::rows(ui, &p, names, &mut false, &mut 1, Some(None), None);
             });
             let field = crate::testutil::fills(&shapes).iter().find(|(_, c)| *c == crate::theme::dialog_input_fill(&p)).expect("field").0;
             let gap = crate::testutil::ink_of(&shapes, "Unassigned").top() - field.bottom();

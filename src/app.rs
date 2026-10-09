@@ -251,6 +251,9 @@ pub struct App {
     pub picker: Option<Picker>,
     /// The detail pane's x-range on the Issues screen last frame; the toast centres over it.
     pub detail_x: Option<(f32, f32)>,
+    /// The detail pane's pill row top (its fill's edge) when it showed in the pane's viewport last frame; pickers
+    /// anchor their dialog over it.
+    pub detail_pills_top: Option<f32>,
     /// The keyboard help overlay is showing; it owns the keyboard while open.
     pub help_open: bool,
     /// A picker's items are being fetched; a spinner shows meanwhile.
@@ -340,6 +343,7 @@ impl App {
             search_pending: None,
             search_from_refresh: false,
             detail_x: None,
+            detail_pills_top: None,
             last_search_jql: None,
             typed_search: false,
             typed_shown: false,
@@ -1521,6 +1525,8 @@ impl eframe::App for App {
         close_shortcut(&ctx);
         if self.client.is_some() {
             self.shortcuts(&ctx);
+            // Set again by the detail pane when its pill row shows.
+            self.detail_pills_top = None;
             views::main(self, ui);
             self.text_search_tick(&ctx);
             views::pickers::show(self, &ctx);
