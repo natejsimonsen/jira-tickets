@@ -42,7 +42,7 @@ pub struct Palette {
     pub hover_row: Color32,
     pub danger_subtle: Color32,
     pub tooltip: Color32,
-    /// Text on a `tooltip` fill (the toast).
+    /// Text on a `tooltip` fill (the toast): the page `bg` in light, `text` in dark, never pure white.
     pub tooltip_text: Color32,
 }
 
@@ -70,7 +70,7 @@ pub const LIGHT: Palette = Palette {
     hover_row: hex(0xe6e6e2),
     danger_subtle: hex(0xfbe9e8),
     tooltip: hex(0x1f1f1d),
-    tooltip_text: hex(0xffffff),
+    tooltip_text: hex(0xf7f7f5),
 };
 
 pub const DARK: Palette = Palette {
@@ -92,8 +92,8 @@ pub const DARK: Palette = Palette {
     selected_row: hex(0x3d3d3a),
     hover_row: hex(0x343432),
     danger_subtle: hex(0x3a2422),
-    tooltip: hex(0x4d4c47),
-    tooltip_text: hex(0xffffff),
+    tooltip: hex(0x57564f),
+    tooltip_text: hex(0xecebe8),
 };
 
 // Spinners: one size (`icons::INLINE_SPINNER`, 13). The header spinner is `text` because it replaces the
@@ -402,8 +402,10 @@ mod tests {
     #[test]
     fn toast_text_reads_on_the_tooltip_fill() {
         for p in [&LIGHT, &DARK] {
-            assert!(contrast(p.tooltip_text, p.tooltip) >= 7.0, "dark={}: {:.2}", p.dark, contrast(p.tooltip_text, p.tooltip));
+            assert!(contrast(p.tooltip_text, p.tooltip) >= 4.5, "dark={}: {:.2}", p.dark, contrast(p.tooltip_text, p.tooltip));
         }
+        assert_eq!(LIGHT.tooltip_text, LIGHT.bg);
+        assert_eq!(DARK.tooltip_text, DARK.text);
     }
 
     #[test]

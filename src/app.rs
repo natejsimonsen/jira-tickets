@@ -201,6 +201,8 @@ pub struct App {
     pub sprints: Vec<Sprint>,
     /// The sprint scope has been defaulted to the active sprint once; later refreshes keep the user's choice.
     pub sprint_default_applied: bool,
+    /// The board's sprints have answered (or failed) once, so the sprint combo shows the real scope.
+    pub sprints_answered: bool,
     /// Set by ⌘F or `/`; the search box takes focus on its next frame.
     pub focus_search: bool,
     /// The ⌘K box text while it is open.
@@ -237,8 +239,6 @@ pub struct App {
     pub members_disabled: bool,
     /// Each epic's hue slot, given in order of first appearance and kept for the session (`theme::extend_epic_slots`).
     pub epic_slots: std::collections::BTreeMap<String, usize>,
-    /// The epic combo's natural width, fixed at first paint from the cached epic list so it never grows.
-    pub epic_combo_nat: Option<f32>,
     /// Unposted comment text, keyed by issue key.
     pub drafts: HashMap<String, String>,
     /// The issue key of the comment post in flight.
@@ -319,6 +319,7 @@ impl App {
             filter,
             sprints: Vec::new(),
             sprint_default_applied: false,
+            sprints_answered: false,
             focus_search: false,
             goto: None,
             cursor: 0,
@@ -337,7 +338,6 @@ impl App {
             text_shown: None,
             members_disabled: false,
             epic_slots: Default::default(),
-            epic_combo_nat: None,
             drafts: HashMap::new(),
             posting: None,
             picker: None,
@@ -754,6 +754,7 @@ impl App {
                 }
             }
             Msg::BoardSprints(Ok(sprints)) => {
+                self.sprints_answered = true;
                 self.sprints = sprints;
                 let next = if self.sprint_default_applied {
                     crate::filter::sprint_scope_after_refresh(&self.filter.sprint, &self.sprints)
@@ -768,6 +769,7 @@ impl App {
             }
             // Keep the last good list on a failed refresh; only say so when there is none.
             Msg::BoardSprints(Err(e)) => {
+                self.sprints_answered = true;
                 if self.sprints.is_empty() {
                     self.toast(format!("Couldn't load sprints: {e}"), true);
                 }

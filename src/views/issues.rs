@@ -236,11 +236,13 @@ pub fn show(app: &mut App, ui: &mut Ui) {
             ui.add_space(V_GAP);
             list(app, ui, p);
         });
-    let detail = egui::CentralPanel::default()
+    // The toast centres on the whole pane as laid out, not on the panel's response (which grows past the
+    // window when content overflows it).
+    let pane = ui.available_rect_before_wrap();
+    app.detail_x = Some((pane.left(), pane.right()));
+    egui::CentralPanel::default()
         .frame(Frame::new().fill(p.surface).inner_margin(Margin { left: 16, right: 16, top: 16, bottom: 0 }))
         .show(ui, |ui| super::detail::show(app, ui));
-    let r = detail.response.rect;
-    app.detail_x = Some((r.left(), r.right()));
     goto_box(app, ui.ctx(), p);
 }
 
@@ -301,6 +303,38 @@ const EPIC_MIN: f32 = 108.0;
 const TEAM_MIN: f32 = 72.0;
 /// Sizes the sprint combo before the board's sprints load, so its width does not change when they land.
 const SPRINT_SAMPLE: &str = "Sprint 0 (active)";
+/// The sprint combo's label until the board's sprints answer (muted): the scope that will apply.
+pub const SPRINT_PENDING: &str = "Active sprint";
+/// Sizes the epic combo: a typical key and a 28-character epic name. Longer names are cut with "…" (the
+/// popup shows them whole), so the combo is as wide before the epics load as after.
+const EPIC_SAMPLE: &str = "CI-0000 · Observability and dashboards";
+
+/// The filter combos whose width is fixed by samples, never by loaded data.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ComboKind {
+    Sprint,
+    Epic,
+}
+
+/// The texts a combo's natural width is measured from: constants only, so nothing the board or the issues
+/// load can move the row (round-6 D1).
+pub fn combo_samples(kind: ComboKind) -> &'static [&'static str] {
+    match kind {
+        ComboKind::Sprint => &[SPRINT_SAMPLE, "All sprints", SPRINT_PENDING, "Backlog"],
+        ComboKind::Epic => &["All epics", EPIC_SAMPLE],
+    }
+}
+
+/// A combo's natural width (text + chrome) from its samples alone, so it is identical before and after load.
+pub fn combo_width(kind: ComboKind, measure: impl Fn(&str) -> f32) -> f32 {
+    (combo_samples(kind).iter().map(|t| measure(t)).fold(0.0, f32::max) + COMBO_CHROME).ceil()
+}
+
+/// The sprint combo's text and whether it is muted: until the board's sprints answer, the default scope is
+/// still unknown, so the combo reads a muted "Active sprint" instead of "All sprints" flipping to the sprint.
+pub fn sprint_combo_text(answered: bool, label: &str) -> (String, bool) {
+    if answered { (label.to_string(), false) } else { (SPRINT_PENDING.to_string(), true) }
+}
 
 /// The combo widths, in row order team, sprint, epic, and whether the team combo uses its short labels.
 /// One rule for all three: each is its widest option (`*_nat`, text + chevron), never the current label, so
@@ -345,16 +379,10 @@ pub fn team_combo_label(full: &str, fits: bool) -> &str {
     if fits { full } else { full.split(" · ").next().unwrap_or(full) }
 }
 
-/// The epic combo's natural width for the session: measured once, at first paint, and kept, so it never
-/// grows when the first issues land.
-pub fn session_width(stored: Option<f32>, measure: impl FnOnce() -> f32, min: f32) -> f32 {
-    stored.unwrap_or_else(|| measure().max(min))
-}
-
 /// A combo exactly `w` wide and BUTTON_H tall: its text at INNER_X, truncated with "…", a muted chevron at
 /// the right. Its popup follows `popup_width` from the options' widest text (`widest`, paired with `w`) and `popup_left`
 /// within the pane (`pane`, left and right); `contents` gets the room a row's text has.
-fn combo(ui: &mut Ui, salt: &str, text: String, (w, widest): (f32, f32), pane: (f32, f32), p: &Palette, contents: impl FnOnce(&mut Ui, f32)) {
+fn combo(ui: &mut Ui, salt: &str, (text, muted): (String, bool), (w, widest): (f32, f32), pane: (f32, f32), p: &Palette, contents: impl FnOnce(&mut Ui, f32)) {
     let (rect, resp) = ui.allocate_exact_size(vec2(w, crate::views::BUTTON_H), Sense::click());
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, true, &text));
     let popup_id = egui::Id::new(("combo-popup", salt));
@@ -366,8 +394,9 @@ fn combo(ui: &mut Ui, salt: &str, text: String, (w, widest): (f32, f32), pane: (
         let painter = ui.painter().clone();
         let measure = |t: &str| painter.layout_no_wrap(t.to_string(), font.clone(), p.text).size().x;
         let shown = crate::views::truncate_text(&text, w - COMBO_CHROME, measure);
-        let g = painter.layout_no_wrap(shown, font.clone(), p.text);
-        painter.galley(egui::pos2(rect.left() + INNER_X, (rect.center().y - g.size().y / 2.0).round()), g, p.text);
+        let color = if muted { p.muted } else { p.text };
+        let g = painter.layout_no_wrap(shown, font.clone(), color);
+        painter.galley(egui::pos2(rect.left() + INNER_X, (rect.center().y - g.size().y / 2.0).round()), g, color);
         let c = egui::pos2(rect.right() - INNER_X - CHEVRON_W / 2.0, rect.center().y);
         let pts = vec![c + vec2(-4.0, -2.0), c + vec2(0.0, 2.0), c + vec2(4.0, -2.0)];
         painter.add(egui::Shape::line(pts, Stroke::new(1.5, p.muted)));
@@ -467,37 +496,30 @@ fn filters(app: &mut App, ui: &mut Ui, p: &Palette) {
     let team_widest = widest(ui, &mut team_options.iter().map(|(_, l)| l.clone()));
     let team_short_nat = widest(ui, &mut team_options.iter().map(|(_, l)| team_combo_label(l, false).to_string())) + COMBO_CHROME;
     let sprint_widest = widest(ui, &mut sprint_options.iter().map(|(_, l)| l.clone()));
-    let sprint_nat = sprint_widest.max(text_w(ui, SPRINT_SAMPLE)) + COMBO_CHROME;
     let epic_widest = widest(ui, &mut epics.iter().map(|(k, s)| format!("{}{}", entry(k, s), suffix(k))).chain(["All epics".to_string()]));
-    // The combo's own width comes from the epic list cached at launch, once, so it never moves when issues land.
-    let epic_nat = session_width(
-        app.epic_combo_nat,
-        || {
-            let cached = app.store.list(ListId::Epics);
-            widest(ui, &mut cached.iter().map(|e| format!("{}{}", entry(&e.key, &e.summary), suffix(&e.key)))) + COMBO_CHROME
-        },
-        EPIC_MIN,
-    );
-    app.epic_combo_nat = Some(epic_nat);
+    // The combos' own widths come from constant samples, so nothing moves when sprints or issues land; the
+    // popups still size to the loaded options.
+    let sprint_nat = combo_width(ComboKind::Sprint, |t| text_w(ui, t));
+    let epic_nat = combo_width(ComboKind::Epic, |t| text_w(ui, t));
     let ([team_w, sprint_w, epic_w], team_short) = combo_widths(team_widest + COMBO_CHROME, team_short_nat, sprint_nat, epic_nat, pane_w);
     let team_text = team_combo_label(&team_label, !team_short).to_string();
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = GAP;
-        combo(ui, "team", team_text, (team_w, team_widest), pane, p, |ui, _| {
+        combo(ui, "team", (team_text, false), (team_w, team_widest), pane, p, |ui, _| {
             for (scope, l) in &team_options {
                 if ui.selectable_label(app.filter.team == *scope, l).clicked() {
                     app.actions.push(Action::SetTeam(scope.clone()));
                 }
             }
         });
-        combo(ui, "sprint", sprint_label, (sprint_w, sprint_widest), pane, p, |ui, _| {
+        combo(ui, "sprint", sprint_combo_text(app.sprints_answered, &sprint_label), (sprint_w, sprint_widest), pane, p, |ui, _| {
             for (scope, l) in &sprint_options {
                 if ui.selectable_label(app.filter.sprint == *scope, l).clicked() {
                     app.actions.push(Action::SetSprint(scope.clone()));
                 }
             }
         });
-        combo(ui, "epic", epic_label, (epic_w, epic_widest), pane, p, |ui, row_text_w| {
+        combo(ui, "epic", (epic_label, false), (epic_w, epic_widest), pane, p, |ui, row_text_w| {
             if ui.selectable_label(app.filter.epic.is_none(), "All epics").clicked() {
                 app.actions.push(Action::SetEpic(None));
             }
@@ -1156,10 +1178,27 @@ mod tests {
     }
 
     #[test]
-    fn epic_combo_width_is_fixed_for_the_session() {
-        assert_eq!(session_width(None, || 300.0, EPIC_MIN), 300.0, "first paint: the cached epics' widest");
-        assert_eq!(session_width(None, || 0.0, EPIC_MIN), EPIC_MIN, "nothing cached: All epics whole");
-        assert_eq!(session_width(Some(EPIC_MIN), || 400.0, EPIC_MIN), EPIC_MIN, "issues landing later change nothing");
+    fn combo_widths_do_not_depend_on_loaded_data() {
+        // A stand-in measure: 7 px a character.
+        let m = |t: &str| t.chars().count() as f32 * 7.0;
+        let before = combo_width(ComboKind::Epic, m);
+        // Data arriving (epics, sprints) never enters the combo's own width: it is the samples' widest.
+        let loaded_epics = ["CI-4321 · Cluster (on-prem migration and cluster upgrades)", "CI-79 · Deployer"];
+        assert!(loaded_epics.iter().all(|e| !combo_samples(ComboKind::Epic).contains(e)));
+        assert_eq!(combo_width(ComboKind::Epic, m), before, "identical before and after load");
+        assert_eq!(before, (m(EPIC_SAMPLE) + COMBO_CHROME).ceil());
+        assert!(before >= m("All epics") + COMBO_CHROME);
+        assert_eq!(EPIC_SAMPLE.split(" · ").nth(1).unwrap().chars().count(), 28, "a 28-character epic name");
+        let sprint = combo_width(ComboKind::Sprint, m);
+        assert!(sprint >= m(SPRINT_PENDING) + COMBO_CHROME && sprint >= m("All sprints") + COMBO_CHROME);
+        assert_eq!(combo_width(ComboKind::Sprint, m), sprint);
+    }
+
+    #[test]
+    fn sprint_combo_reads_pending_until_sprints_answer() {
+        assert_eq!(sprint_combo_text(false, "All sprints"), ("Active sprint".to_string(), true));
+        assert_eq!(sprint_combo_text(true, "Sprint 91 (active)"), ("Sprint 91 (active)".to_string(), false));
+        assert_eq!(sprint_combo_text(true, "All sprints"), ("All sprints".to_string(), false), "a board with no active sprint");
     }
 
     #[test]
