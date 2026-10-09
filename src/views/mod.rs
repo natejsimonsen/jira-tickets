@@ -698,7 +698,13 @@ pub fn outline_pill_selected(ui: &mut Ui, text: &str, p: &Palette, margin: egui:
     pill_sized(ui, text, Color32::TRANSPARENT, selected_pill_text(p), Stroke::new(1.0, selected_edge(p)), margin)
 }
 
-/// Outline-pill text on the selected row: `muted`, lifted only where it would fall under 4.5:1 (`muted_on`).
+/// Secondary text inside a modal dialog (labels, "Unassigned", "N matches", help section heads, "or"): `muted`
+/// on the dialog fill, lifted where it would fall under 5.0:1 (dark).
+pub fn dialog_muted(p: &Palette) -> Color32 {
+    theme::muted_on(dialog_fill(p), p)
+}
+
+/// Outline-pill text on the selected row: `muted`, lifted only where it would fall under 5.0:1 (`muted_on`).
 pub fn selected_pill_text(p: &Palette) -> Color32 {
     theme::muted_on(p.selected_row, p)
 }
@@ -905,6 +911,15 @@ mod widget_tests {
             let lift = if p.dark { theme::contrast(edge, dimmed) } else { theme::contrast(dialog_fill(p), dimmed) };
             assert!(lift >= 1.3, "dark={}: {lift:.2}", p.dark);
         }
+    }
+
+    #[test]
+    fn dialog_secondary_text_holds_five_to_one() {
+        for p in [&theme::LIGHT, &theme::DARK] {
+            assert!(theme::contrast(dialog_muted(p), dialog_fill(p)) >= 5.0, "dark={}", p.dark);
+            assert!(theme::contrast(selected_pill_text(p), p.selected_row) >= 5.0, "dark={}", p.dark);
+        }
+        assert_eq!(dialog_muted(&theme::LIGHT), theme::LIGHT.muted, "light muted already reads on white");
     }
 
     #[test]

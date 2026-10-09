@@ -164,7 +164,7 @@ fn field<'a>(text: &'a mut String, hint: &str, p: &Palette) -> egui::TextEdit<'a
 
 /// A small muted label, 4 px, then the field (full width).
 fn edit_group(ui: &mut egui::Ui, p: &Palette, label: &str, field: egui::TextEdit<'_>) -> egui::Response {
-    ui.label(RichText::new(label).color(p.muted).size(12.0));
+    ui.label(RichText::new(label).color(crate::views::dialog_muted(p)).size(12.0));
     ui.add_space(4.0);
     ui.add(field)
 }
@@ -196,7 +196,7 @@ impl Row {
 /// filter leaves, and the note ("Type to see more") shows when matches were cut.
 fn rows(ui: &mut egui::Ui, p: &Palette, names: Vec<Row>, confirm: &mut bool, cursor: &mut usize, fixed: Option<Option<&str>>) {
     if names.is_empty() {
-        ui.label(RichText::new("Nothing available").color(p.muted));
+        ui.label(RichText::new("Nothing available").color(crate::views::dialog_muted(p)));
         return;
     }
     if let Some(note) = fixed {
@@ -209,7 +209,7 @@ fn rows(ui: &mut egui::Ui, p: &Palette, names: Vec<Row>, confirm: &mut bool, cur
                 ui.add_space(note_gap(h, ui.cursor().top() - top, ROW_H));
                 Frame::new().inner_margin(Margin::symmetric(ROW_INSET as i8, 6)).show(ui, |ui| {
                     ui.set_min_height(ROW_H - 12.0);
-                    ui.label(RichText::new(note).size(12.0).color(p.muted));
+                    ui.label(RichText::new(note).size(12.0).color(crate::views::dialog_muted(p)));
                 });
             }
         });
@@ -231,8 +231,8 @@ fn row_list(ui: &mut egui::Ui, p: &Palette, names: &[Row], confirm: &mut bool, c
                 .show(ui, |ui| {
                     ui.set_width(ui.available_width());
                     ui.set_min_height(ROW_H - 12.0);
-                    // Secondary text lifts on the cursor fill where muted would fall under 4.5:1 (dark).
-                    let muted = if on_cursor { theme::muted_on(fill, p) } else { p.muted };
+                    // Secondary text lifts on the cursor fill where muted would fall under 5.0:1.
+                    let muted = if on_cursor { theme::muted_on(fill, p) } else { crate::views::dialog_muted(p) };
                     let color = if n.muted { muted } else { p.text };
                     let mut job = egui::text::LayoutJob::default();
                     job.append(&n.text, 0.0, egui::TextFormat { font_id: theme::body(14.0), color, ..Default::default() });

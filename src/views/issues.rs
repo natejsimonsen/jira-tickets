@@ -899,6 +899,7 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
                 .inner_margin(Margin { left: 12, right: 12, top: ROW_PAD_TOP, bottom: ROW_PAD_BOTTOM })
                 .show(ui, |ui| {
                     ui.set_width(ui.available_width());
+                    ui.add_space(ROW_PAD_TOP_EXTRA);
                     ui.spacing_mut().item_spacing.y = ROW_LINE_GAP;
                     ui.horizontal(|ui| {
                         let key_color = row_key_color(is_sel, p);
@@ -930,7 +931,7 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
                         let (kind, look) = match (c.as_str(), epic) {
                             ("status", _) => {
                                 let t = theme::status_tint(&i.status.name, &i.status.category, p, status_colors);
-                                (PillKind::Status, PillLook::Tint(t.bg, t.fg))
+                                (PillKind::Status, PillLook::Tint(status_fill(&t, p), t.fg))
                             }
                             ("parent.summary" | "parent.key", Some(t)) => (PillKind::Epic, PillLook::Epic(t.fg, t.stripe)),
                             ("parent.summary" | "parent.key", None) => (PillKind::Epic, PillLook::Outline),
@@ -973,6 +974,7 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
                             }
                         }
                     });
+                    ui.add_space(ROW_PAD_BOTTOM_EXTRA);
                 });
             let rect = r.response.rect;
             row_spans.push((rect.top(), rect.bottom()));
@@ -1007,8 +1009,8 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
         // the selected-row edge, so they never sink into the selection.
         if let Some((rect, idx)) = selected_rect {
             let edge = crate::views::selected_edge(p);
-            for y in selected_dividers(rect, idx, rows.len()) {
-                ui.painter().hline(rect.x_range(), y, Stroke::new(1.0, edge));
+            for (y, inset) in selected_dividers(rect, idx, rows.len()) {
+                ui.painter().hline(rect.x_range().shrink(inset), y, Stroke::new(1.0, edge));
             }
         }
         // Room under the last row, so a toast (anchored above the hint bar) never covers it.
@@ -1072,14 +1074,17 @@ const LIST_BOTTOM_PAD: f32 = 56.0;
 /// Rows stack as one list: −1 overlaps neighbouring borders, so a single 1 px divider separates rows, and
 /// only the list's outer corners are rounded (no doubled lines or notches at the seams).
 const ROW_GAP: f32 = -1.0;
-/// Row inner vertical padding. The title's line box carries ~4 px of leading above the caps, so 0 above reads
-/// as ~4–5; 6 under the pills (round 6 measured the pitch at 42 with 4) makes the pitch 44 px, rule 10's
-/// two-line row, and 15 full rows still fit at 1440×900.
+/// Row inner vertical padding, measured edge (border included) to ink: 6 / title / 4 / pills / 6 (round 8; it
+/// measured 5.5 / 5 / 7.5 with pads 0 / 1 / 6). The title's line box carries ~4.5 of leading above the caps,
+/// so the top pad is 0.5; the bottom read 1.5 over its pad, so it is 4.5. Margins are whole points, so the
+/// half points are spaces inside the frame.
 const ROW_PAD_TOP: i8 = 0;
-const ROW_PAD_BOTTOM: i8 = 6;
-const ROW_LINE_GAP: f32 = 1.0;
-/// One row's pitch (rows overlap by ROW_GAP's 1 px), for the density check.
-pub const ROW_PITCH: f32 = 44.0;
+const ROW_PAD_TOP_EXTRA: f32 = 0.5;
+const ROW_PAD_BOTTOM: i8 = 4;
+const ROW_PAD_BOTTOM_EXTRA: f32 = 0.5;
+const ROW_LINE_GAP: f32 = 0.0;
+/// One row's pitch (rows overlap by ROW_GAP's 1 px), for the density check: 44 − 2 from round 8's padding.
+pub const ROW_PITCH: f32 = 42.0;
 
 /// The 3 px epic stripe over a row card's left edge, snapped to whole physical pixels.
 pub fn stripe_rect(row: Rect, ppp: f32) -> Rect {
@@ -1087,17 +1092,19 @@ pub fn stripe_rect(row: Rect, ppp: f32) -> Rect {
     Rect::from_min_max(egui::pos2(snap(row.left()), row.top()), egui::pos2(snap(row.left() + 3.0), row.bottom()))
 }
 
-/// The centre lines of the dividers next to the selected row `idx` of `n`: above it unless it is the first
-/// row, below it unless it is the last (the list's outer edge keeps its rounded border).
-pub fn selected_dividers(rect: Rect, idx: usize, n: usize) -> Vec<f32> {
-    let mut out = Vec::new();
-    if idx > 0 {
-        out.push(rect.top() + 0.5);
-    }
-    if idx + 1 < n {
-        out.push(rect.bottom() - 0.5);
-    }
-    out
+/// The selected row's two rules, as (centre y, inset from each end): its top and bottom dividers in the
+/// selected-row edge, on the list frame too at the outer edges (inset by the corner radius).
+pub fn selected_dividers(rect: Rect, idx: usize, n: usize) -> Vec<(f32, f32)> {
+    // An outer edge (the first row's top, the last row's bottom) is the list frame's rounded border: the rule
+    // goes over it too, stopping where the corners start.
+    let inset = |outer: bool| if outer { f32::from(theme::RADIUS) } else { 0.0 };
+    vec![(rect.top() + 0.5, inset(idx == 0)), (rect.bottom() - 0.5, inset(idx + 1 == n))]
+}
+
+/// A status pill's fill: its wash resolved over the plain row, so the pill is one opaque colour on every row
+/// (a wash composited over the selection shifted its colour, round 8).
+pub fn status_fill(t: &theme::Tint, p: &Palette) -> egui::Color32 {
+    theme::over(t.bg, p.surface)
 }
 
 /// The list's outer corners are rounded (6); the seams between rows are square.
@@ -1612,12 +1619,34 @@ mod tests {
     }
 
     #[test]
+    fn status_pills_are_one_opaque_colour_on_every_row() {
+        let statuses = ["New", "Planning", "Ready for Work", "In Progress", "In Review", "Blocked", "Done", "Waiting for support", "Work in Progress"];
+        for p in [&theme::LIGHT, &theme::DARK] {
+            for s in statuses {
+                let t = theme::status_tint(s, "indeterminate", p, &Default::default());
+                let fill = status_fill(&t, p);
+                assert_eq!(fill.a(), 255);
+                assert!(theme::contrast(t.fg, fill) >= 4.5, "dark={} {s}: {:.2}", p.dark, theme::contrast(t.fg, fill));
+            }
+        }
+    }
+
+    #[test]
+    fn row_padding_is_six_four_six() {
+        // Edge to ink as round 8 measured it: above, the border 1 and the title's ~4.5 of leading over the caps
+        // (5.5 with a 0 pad); below, 1.5 more than the pad (7.5 with 6).
+        assert_eq!(1.0 + 4.5 + f32::from(ROW_PAD_TOP) + ROW_PAD_TOP_EXTRA, 6.0);
+        assert_eq!(f32::from(ROW_PAD_BOTTOM) + ROW_PAD_BOTTOM_EXTRA + 1.5, 6.0);
+        assert_eq!(ROW_LINE_GAP, 0.0, "baseline to pill top 5 → 4");
+    }
+
+    #[test]
     fn selected_row_keeps_its_dividers() {
         let r = Rect::from_min_max(egui::pos2(0.0, 100.0), egui::pos2(10.0, 144.0));
-        assert_eq!(selected_dividers(r, 3, 10), [100.5, 143.5]);
-        assert_eq!(selected_dividers(r, 0, 10), [143.5], "the first row's top is the list's rounded edge");
-        assert_eq!(selected_dividers(r, 9, 10), [100.5]);
-        assert!(selected_dividers(r, 0, 1).is_empty());
+        assert_eq!(selected_dividers(r, 3, 10), [(100.5, 0.0), (143.5, 0.0)]);
+        assert_eq!(selected_dividers(r, 0, 10), [(100.5, 6.0), (143.5, 0.0)], "the first row's top goes over the frame, inside its corners");
+        assert_eq!(selected_dividers(r, 9, 10), [(100.5, 0.0), (143.5, 6.0)]);
+        assert_eq!(selected_dividers(r, 0, 1), [(100.5, 6.0), (143.5, 6.0)]);
         for p in [&theme::LIGHT, &theme::DARK] {
             let edge = theme::over(crate::views::selected_edge(p), p.selected_row);
             assert!(theme::contrast(edge, p.selected_row) > theme::contrast(p.border, p.selected_row), "dark={}", p.dark);

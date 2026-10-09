@@ -82,7 +82,7 @@ fn chip_size(ui: &egui::Ui, text: &str, p: &Palette) -> egui::Vec2 {
 }
 
 fn word_width(ui: &egui::Ui, word: &str, p: &Palette) -> f32 {
-    ui.painter().layout_no_wrap(word.into(), theme::body(12.0), p.muted).size().x
+    ui.painter().layout_no_wrap(word.into(), theme::body(12.0), crate::views::dialog_muted(p)).size().x
 }
 
 /// The width of one binding's key cell: its chips, with a muted "or" between alternatives and "to" between
@@ -122,7 +122,7 @@ fn row_h(ui: &mut egui::Ui, p: &Palette) -> f32 {
 }
 
 fn group(ui: &mut egui::Ui, p: &Palette, g: Group, key_w: f32) {
-    ui.label(RichText::new(g.name()).font(theme::bold(12.0)).color(p.muted));
+    ui.label(RichText::new(g.name()).font(theme::bold(12.0)).color(crate::views::dialog_muted(p)));
     ui.add_space(8.0);
     // Every row is as tall as its tallest part (a chip or the action), and chips, words and the action are
     // all centred on that row.
@@ -139,7 +139,7 @@ fn group(ui: &mut egui::Ui, p: &Palette, g: Group, key_w: f32) {
                 ui.set_width(key_w);
                 ui.set_min_height(row_h);
                 ui.spacing_mut().item_spacing.x = CHIP_GAP;
-                let word = |ui: &mut egui::Ui, w: &str| ui.label(RichText::new(w).font(theme::body(12.0)).color(p.muted));
+                let word = |ui: &mut egui::Ui, w: &str| ui.label(RichText::new(w).font(theme::body(12.0)).color(crate::views::dialog_muted(p)));
                 for (i, alt) in keys::chips(k.keys).enumerate() {
                     if i > 0 {
                         word(ui, "or");

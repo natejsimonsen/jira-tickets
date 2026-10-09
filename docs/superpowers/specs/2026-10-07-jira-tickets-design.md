@@ -215,7 +215,8 @@ List rows: key, summary, configured columns. Status pills are coloured by
 status name (New grey, Planning blue, Ready for Work teal, In Progress
 accent, In Review purple, Blocked red, Done green; unmapped names fall
 back to the status category). Status is the only filled pill. Each epic
-gets a hue from a 10-hue palette (36° apart) in order of first appearance:
+gets a hue from a 10-colour perceptual palette (OKLCH hues 36° apart, every pair
+≥ ΔE2000 12 in each theme) in order of first appearance:
 the loaded epic list in Jira rank order, then any other parent seen on
 screen, keyed by epic key and kept for the session, so one epic has one hue
 in every list and two epics with the same name never share one by name. The

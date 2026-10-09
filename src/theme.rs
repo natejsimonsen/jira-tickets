@@ -125,10 +125,37 @@ const GREEN: u32 = 0x2e8b57;
 /// Waiting statuses ("Waiting for External Party"): amber, apart from the In Progress blue.
 const AMBER: u32 = 0xb07a0c;
 
-/// Ten epic hues, evenly spaced 36° apart from 18°, at one luminance so all ten read alike. Epic pills are
-/// outline-only (status is the one filled pill), so the palette needs no room around the status hues.
-/// Hues go to the epics on screen first, farthest free hue first (`assign_epic_slots`).
-pub const EPIC_HUES: [u32; 10] = [0xb6572e, 0x7d741f, 0x507f20, 0x21842b, 0x208264, 0x287b9e, 0x4053ff, 0x9a3ef6, 0xc231b4, 0xd23464];
+/// Ten epic colours per theme as (pill text, stripe and outline), perceptually spaced: OKLCH hues 1° + 36°·k at
+/// chroma 0.12 (clipped to sRGB), lightness alternating between hue-adjacent slots (light 0.48 / 0.43, dark 0.81 /
+/// 0.76), the stripe 0.06 toward the row (lighter in light, darker in dark). Every pair is ≥ ΔE2000 13 in each
+/// theme (the old 36° HSL wheel crowded the greens to 6.3). Epic pills are outline only (status is the one
+/// filled pill). Slots go to the epics on screen first, farthest free slot first (`assign_epic_slots`).
+pub const EPIC_LIGHT: [(u32, u32); 10] = [
+    (0x923c5a, 0xa54d6a),
+    (0x843219, 0x98432b),
+    (0x805300, 0x966200),
+    (0x545300, 0x666500),
+    (0x286f2f, 0x3b8040),
+    (0x005d52, 0x007063),
+    (0x00697d, 0x007c93),
+    (0x12508f, 0x2662a2),
+    (0x5d509c, 0x6d61af),
+    (0x6f3473, 0x824585),
+];
+pub const EPIC_DARK: [(u32, u32); 10] = [
+    (0xffa1bc, 0xec8da9),
+    (0xf2957a, 0xde8268),
+    (0xf0b464, 0xdca150),
+    (0xb7b756, 0xa4a443),
+    (0x8ed690, 0x7bc27e),
+    (0x40cab5, 0x22b6a3),
+    (0x52d4f3, 0x39c0df),
+    (0x78b5fb, 0x66a2e7),
+    (0xbeb6ff, 0xaca1f5),
+    (0xd896db, 0xc483c7),
+];
+/// The number of epic slots.
+pub const EPIC_SLOTS: usize = EPIC_LIGHT.len();
 
 /// `#rrggbb` or `rrggbb`.
 pub fn parse_hex(s: &str) -> Option<Color32> {
@@ -203,11 +230,11 @@ pub fn assign_epic_slots<'a>(slots: &mut BTreeMap<String, usize>, visible: impl 
             seen.push(k);
         }
     }
-    let mut used = [false; EPIC_HUES.len()];
+    let mut used = [false; EPIC_SLOTS];
     let mut pending = Vec::new();
     for &k in &seen {
         match slots.get(k) {
-            Some(&s) if !used[s % EPIC_HUES.len()] => used[s % EPIC_HUES.len()] = true,
+            Some(&s) if !used[s % EPIC_SLOTS] => used[s % EPIC_SLOTS] = true,
             _ => pending.push(k),
         }
     }
@@ -219,14 +246,14 @@ pub fn assign_epic_slots<'a>(slots: &mut BTreeMap<String, usize>, visible: impl 
             }
             // More than ten epics on screen: a known epic keeps its hue, a new one takes the next in order.
             None => {
-                let next = EPIC_SLOT_ORDER[slots.len() % EPIC_HUES.len()];
+                let next = EPIC_SLOT_ORDER[slots.len() % EPIC_SLOTS];
                 slots.entry(k.to_string()).or_insert(next);
             }
         }
     }
     for k in rest {
         if !slots.contains_key(k) {
-            let next = EPIC_SLOT_ORDER[slots.len() % EPIC_HUES.len()];
+            let next = EPIC_SLOT_ORDER[slots.len() % EPIC_SLOTS];
             slots.insert(k.to_string(), next);
         }
     }
@@ -241,19 +268,13 @@ pub fn epic_tint_in(epic_key: &str, slots: &BTreeMap<String, usize>, p: &Palette
     }
 }
 
-/// Dark only: adjacent slots (36° apart) alternate lightness by this much, so neighbouring hues on one
-/// screen stay further apart (the dark tints, mixed toward white, compress hue differences).
-const DARK_SLOT_LIGHTNESS: f32 = 0.06;
-
-/// A slot's tint: its hue's, and in dark the pill text and stripe of even slots 6 % lighter and of odd slots
-/// 6 % darker, so two neighbouring slots never share a lightness.
+/// A slot's tint: the theme's colours for it (`EPIC_LIGHT`, `EPIC_DARK`). The wash (unused by outline epic
+/// pills) is the stripe at the status wash alpha.
 pub fn slot_tint(slot: usize, p: &Palette) -> Tint {
-    let t = tint_from_hue(hex(EPIC_HUES[slot % EPIC_HUES.len()]), p);
-    if !p.dark {
-        return t;
-    }
-    let toward = if slot.is_multiple_of(2) { 255 } else { 0 };
-    Tint { fg: mix(t.fg, toward, DARK_SLOT_LIGHTNESS), stripe: mix(t.stripe, toward, DARK_SLOT_LIGHTNESS), ..t }
+    let (fg, stripe) = if p.dark { EPIC_DARK[slot % EPIC_SLOTS] } else { EPIC_LIGHT[slot % EPIC_SLOTS] };
+    let (fg, stripe) = (hex(fg), hex(stripe));
+    let alpha = if p.dark { DARK_WASH } else { LIGHT_WASH };
+    Tint { bg: Color32::from_rgba_unmultiplied(stripe.r(), stripe.g(), stripe.b(), alpha), fg, stripe }
 }
 
 fn visuals(p: &Palette) -> Visuals {
@@ -310,11 +331,20 @@ pub fn control_hover(p: &Palette) -> Color32 {
     if p.dark { p.hover_row } else { hex(0xe6e6e2) }
 }
 
-/// Muted text on a cursor or selected fill: in dark lifted to #c0bfba, so it holds 4.5:1 on the dark dialog's
-/// #4a4a47 cursor row (muted reaches 3.8 there); `muted` everywhere else.
+/// Muted text on a fill other than the page's (a selected or cursor row, a dialog): where `muted` falls under
+/// MUTED_MIN there, the theme's lift (light #55544f darker, dark #c0bfba lighter); `muted` everywhere else.
 pub fn muted_on(fill: Color32, p: &Palette) -> Color32 {
-    if p.dark && contrast(p.muted, fill) < 4.5 { hex(0xc0bfba) } else { p.muted }
+    if contrast(p.muted, fill) >= MUTED_MIN {
+        p.muted
+    } else if p.dark {
+        hex(0xc0bfba)
+    } else {
+        hex(0x55544f)
+    }
 }
+
+/// The contrast `muted` must keep on a fill before `muted_on` lifts it (round 8: 4.5 → 5.0 in both themes).
+pub const MUTED_MIN: f32 = 5.0;
 
 /// Below `bg` in dark: the sunken field on the dark page.
 const DARK_SUNKEN: Color32 = hex(0x121211);
@@ -529,13 +559,15 @@ mod tests {
 
     #[test]
     fn epic_outline_pills_read_on_every_row_fill() {
-        // No fill: the text sits on the row itself, and the outline and stripe are the stripe colour.
+        // No fill: the text sits on the row itself, and the outline and stripe are the stripe colour. Slots and a
+        // config override (through `tint_from_hue`) alike.
+        let override_base = hex(0x8250df);
         for p in [&LIGHT, &DARK] {
-            for &h in &EPIC_HUES {
-                let t = tint_from_hue(hex(h), p);
+            let tints = (0..EPIC_SLOTS).map(|s| slot_tint(s, p)).chain(std::iter::once(tint_from_hue(override_base, p)));
+            for (i, t) in tints.enumerate() {
                 for row in [p.surface, p.selected_row, p.hover_row, p.bg] {
-                    assert!(contrast(t.fg, row) >= 4.5, "dark={} {h:06x} text on {row:?}: {:.2}", p.dark, contrast(t.fg, row));
-                    assert!(contrast(t.stripe, row) >= 3.0, "dark={} {h:06x} edge on {row:?}: {:.2}", p.dark, contrast(t.stripe, row));
+                    assert!(contrast(t.fg, row) >= 4.5, "dark={} slot {i} text on {row:?}: {:.2}", p.dark, contrast(t.fg, row));
+                    assert!(contrast(t.stripe, row) >= 3.0, "dark={} slot {i} edge on {row:?}: {:.2}", p.dark, contrast(t.stripe, row));
                 }
             }
         }
@@ -596,48 +628,110 @@ mod tests {
         }
     }
 
-    /// HSV hue angle in degrees (0..360) of an opaque colour.
-    fn hue_angle(v: u32) -> f32 {
-        let c = hex(v);
-        let (r, g, b) = (f32::from(c.r()) / 255.0, f32::from(c.g()) / 255.0, f32::from(c.b()) / 255.0);
-        let (max, min) = (r.max(g).max(b), r.min(g).min(b));
-        let d = max - min;
-        if d == 0.0 {
-            return 0.0;
-        }
-        let h = if max == r {
-            60.0 * ((g - b) / d).rem_euclid(6.0)
-        } else if max == g {
-            60.0 * ((b - r) / d + 2.0)
-        } else {
-            60.0 * ((r - g) / d + 4.0)
-        };
-        h.rem_euclid(360.0)
-    }
-
-    /// Shortest distance around the wheel between two angles.
-    fn hue_dist(a: f32, b: f32) -> f32 {
-        let d = (a - b).abs() % 360.0;
-        d.min(360.0 - d)
-    }
-
     #[test]
-    fn hue_angle_of_primaries() {
-        assert_eq!(hue_angle(0xff0000), 0.0);
-        assert!((hue_angle(0x00ff00) - 120.0).abs() < 1e-3);
-        assert!((hue_angle(0x0000ff) - 240.0).abs() < 1e-3);
-        assert!((hue_dist(350.0, 10.0) - 20.0).abs() < 1e-3);
-    }
-
-    #[test]
-    fn ten_epic_hues_evenly_spaced() {
-        assert_eq!(EPIC_HUES.len(), 10);
-        let hues: Vec<f32> = EPIC_HUES.iter().map(|&h| hue_angle(h)).collect();
-        for (i, a) in hues.iter().enumerate() {
-            for b in &hues[i + 1..] {
-                assert!(hue_dist(*a, *b) >= 35.0, "{a:.0}° vs {b:.0}°");
+    fn epic_colours_are_perceptually_apart() {
+        // Round 8: the HSL wheel's closest visible pair was ΔE2000 6.3 light / 8.1 dark (two greens).
+        for p in [&LIGHT, &DARK] {
+            for part in [|t: Tint| t.fg, |t: Tint| t.stripe] {
+                let cols: Vec<Color32> = (0..EPIC_SLOTS).map(|s| part(slot_tint(s, p))).collect();
+                let mut min = f32::INFINITY;
+                for (i, &a) in cols.iter().enumerate() {
+                    for &b in &cols[i + 1..] {
+                        min = min.min(delta_e2000(a, b));
+                    }
+                }
+                assert!(min >= 12.0, "dark={}: closest pair ΔE2000 {min:.1}", p.dark);
+            }
+            // Hue-adjacent slots (the wheel wraps) differ in OKLCH lightness by 4–6.
+            for s in 0..EPIC_SLOTS {
+                let (a, b) = (slot_tint(s, p).fg, slot_tint((s + 1) % EPIC_SLOTS, p).fg);
+                let d = (oklab_l(a) - oklab_l(b)).abs() * 100.0;
+                assert!((4.0..=6.0).contains(&d), "dark={} slots {s}/{}: ΔL {d:.1}", p.dark, (s + 1) % EPIC_SLOTS);
             }
         }
+        assert_eq!(EPIC_DARK.len(), EPIC_SLOTS);
+    }
+
+    /// CIE L*a*b* (D65) of an sRGB colour.
+    fn lab(c: Color32) -> (f64, f64, f64) {
+        let lin = |v: u8| {
+            let v = f64::from(v) / 255.0;
+            if v <= 0.040_45 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) }
+        };
+        let (r, g, b) = (lin(c.r()), lin(c.g()), lin(c.b()));
+        let x = (0.4124 * r + 0.3576 * g + 0.1805 * b) / 0.950_47;
+        let y = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+        let z = (0.0193 * r + 0.1192 * g + 0.9505 * b) / 1.088_83;
+        let f = |t: f64| if t > 0.008_856 { t.cbrt() } else { 7.787 * t + 16.0 / 116.0 };
+        (116.0 * f(y) - 16.0, 500.0 * (f(x) - f(y)), 200.0 * (f(y) - f(z)))
+    }
+
+    /// CIEDE2000 between two L*a*b* colours (Sharma, Wu and Dalal 2005).
+    fn ciede2000((l1, a1, b1): (f64, f64, f64), (l2, a2, b2): (f64, f64, f64)) -> f64 {
+        let rad = f64::to_radians;
+        let cb = (a1.hypot(b1) + a2.hypot(b2)) / 2.0;
+        let g = 0.5 * (1.0 - (cb.powi(7) / (cb.powi(7) + 25f64.powi(7))).sqrt());
+        let (a1p, a2p) = ((1.0 + g) * a1, (1.0 + g) * a2);
+        let (c1p, c2p) = (a1p.hypot(b1), a2p.hypot(b2));
+        let hue = |b: f64, a: f64| if b == 0.0 && a == 0.0 { 0.0 } else { b.atan2(a).to_degrees().rem_euclid(360.0) };
+        let (h1p, h2p) = (hue(b1, a1p), hue(b2, a2p));
+        let dhp = if c1p * c2p == 0.0 {
+            0.0
+        } else {
+            let d = h2p - h1p;
+            if d > 180.0 {
+                d - 360.0
+            } else if d < -180.0 {
+                d + 360.0
+            } else {
+                d
+            }
+        };
+        let (dl, dc, dh) = (l2 - l1, c2p - c1p, 2.0 * (c1p * c2p).sqrt() * rad(dhp / 2.0).sin());
+        let (lbp, cbp) = ((l1 + l2) / 2.0, (c1p + c2p) / 2.0);
+        let hbp = if c1p * c2p == 0.0 {
+            h1p + h2p
+        } else if (h1p - h2p).abs() <= 180.0 {
+            (h1p + h2p) / 2.0
+        } else if h1p + h2p < 360.0 {
+            (h1p + h2p + 360.0) / 2.0
+        } else {
+            (h1p + h2p - 360.0) / 2.0
+        };
+        let t = 1.0 - 0.17 * rad(hbp - 30.0).cos() + 0.24 * rad(2.0 * hbp).cos() + 0.32 * rad(3.0 * hbp + 6.0).cos() - 0.20 * rad(4.0 * hbp - 63.0).cos();
+        let dth = 30.0 * (-((hbp - 275.0) / 25.0).powi(2)).exp();
+        let rc = 2.0 * (cbp.powi(7) / (cbp.powi(7) + 25f64.powi(7))).sqrt();
+        let sl = 1.0 + 0.015 * (lbp - 50.0).powi(2) / (20.0 + (lbp - 50.0).powi(2)).sqrt();
+        let (sc, sh) = (1.0 + 0.045 * cbp, 1.0 + 0.015 * cbp * t);
+        let rt = -rad(2.0 * dth).sin() * rc;
+        ((dl / sl).powi(2) + (dc / sc).powi(2) + (dh / sh).powi(2) + rt * (dc / sc) * (dh / sh)).sqrt()
+    }
+
+    fn delta_e2000(a: Color32, b: Color32) -> f32 {
+        ciede2000(lab(a), lab(b)) as f32
+    }
+
+    /// OKLab lightness (0..1) of an sRGB colour.
+    fn oklab_l(c: Color32) -> f32 {
+        let lin = |v: u8| {
+            let v = f32::from(v) / 255.0;
+            if v <= 0.040_45 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) }
+        };
+        let (r, g, b) = (lin(c.r()), lin(c.g()), lin(c.b()));
+        let l = (0.412_221_47 * r + 0.536_332_55 * g + 0.051_445_99 * b).cbrt();
+        let m = (0.211_903_5 * r + 0.680_699_5 * g + 0.107_396_96 * b).cbrt();
+        let s = (0.088_302_46 * r + 0.281_718_85 * g + 0.629_978_7 * b).cbrt();
+        0.210_454_26 * l + 0.793_617_8 * m - 0.004_072_047 * s
+    }
+
+    #[test]
+    fn ciede2000_matches_the_reference_pairs() {
+        // Sharma et al. test data, pairs 1, 17 and 25.
+        let close = |a, b, want: f64| assert!((ciede2000(a, b) - want).abs() < 1e-3, "{:.4} vs {want}", ciede2000(a, b));
+        close((50.0, 2.6772, -79.7751), (50.0, 0.0, -82.7485), 2.0425);
+        close((50.0, 2.5, 0.0), (73.0, 25.0, -18.0), 27.1492);
+        close((60.2574, -34.0099, 36.2677), (60.4626, -34.1751, 39.4387), 1.2644);
+        assert!((oklab_l(Color32::WHITE) - 1.0).abs() < 1e-3);
     }
 
     #[test]
@@ -696,6 +790,15 @@ mod tests {
         }
         assert_eq!(muted_on(DARK_DIALOG_CURSOR, &DARK), hex(0xc0bfba));
         assert_eq!(muted_on(DARK.surface, &DARK), DARK.muted, "narrow: only where muted falls short");
+        // Symmetric (round 8): light lifts too, and the bar is 5.0 in both themes.
+        assert_eq!(muted_on(LIGHT.selected_row, &LIGHT), hex(0x55544f), "light muted 4.64 on the selected row");
+        assert_eq!(muted_on(LIGHT.surface, &LIGHT), LIGHT.muted);
+        assert_eq!(muted_on(DARK_DIALOG, &DARK), hex(0xc0bfba), "dark dialog muted 4.60");
+        for p in [&LIGHT, &DARK] {
+            for fill in [p.surface, p.bg, p.selected_row, p.hover_row, if p.dark { DARK_DIALOG } else { p.surface }] {
+                assert!(contrast(muted_on(fill, p), fill) >= MUTED_MIN, "dark={} {fill:?}: {:.2}", p.dark, contrast(muted_on(fill, p), fill));
+            }
+        }
         assert!(contrast(DARK_DIALOG_CURSOR, DARK_DIALOG) >= 1.4);
     }
 
@@ -770,45 +873,20 @@ mod tests {
         assert_eq!(EPIC_SLOT_ORDER.iter().collect::<BTreeSet<_>>().len(), 10);
     }
 
-    /// CIE76 ΔE between two sRGB colours.
-    fn delta_e(a: Color32, b: Color32) -> f32 {
-        let lab = |c: Color32| {
-            let lin = |v: u8| {
-                let v = f32::from(v) / 255.0;
-                if v <= 0.040_45 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) }
-            };
-            let (r, g, b) = (lin(c.r()), lin(c.g()), lin(c.b()));
-            let x = (0.4124 * r + 0.3576 * g + 0.1805 * b) / 0.950_47;
-            let y = 0.2126 * r + 0.7152 * g + 0.0722 * b;
-            let z = (0.0193 * r + 0.1192 * g + 0.9505 * b) / 1.088_83;
-            let f = |t: f32| if t > 0.008_856 { t.cbrt() } else { 7.787 * t + 16.0 / 116.0 };
-            (116.0 * f(y) - 16.0, 500.0 * (f(x) - f(y)), 200.0 * (f(y) - f(z)))
-        };
-        let ((l1, a1, b1), (l2, a2, b2)) = (lab(a), lab(b));
-        ((l1 - l2).powi(2) + (a1 - a2).powi(2) + (b1 - b2).powi(2)).sqrt()
-    }
-
     #[test]
-    fn dark_neighbouring_slots_stay_apart() {
-        // Round 7: Node Autoscaling and Cluster (adjacent slots) measured ΔE 11.3 in dark.
-        // ±6 % lightness (the ruled value) widens every adjacent pair; it cannot reach ΔE 20 for all of them
-        // without odd slots' text falling under 4.5:1, so the assignment order keeps neighbours off one screen.
+    fn epic_slots_read_on_selected_rows() {
         let none = BTreeMap::new();
-        let plain = |k: usize| tint_from_hue(hex(EPIC_HUES[k]), &DARK);
-        let pairs = |t: &dyn Fn(usize) -> Tint| (0..EPIC_HUES.len()).map(|s| delta_e(t(s).fg, t((s + 1) % EPIC_HUES.len()).fg)).fold(f32::INFINITY, f32::min);
-        let (before, after) = (pairs(&plain), pairs(&|s| slot_tint(s, &DARK)));
-        assert!(after > before + 1.5, "closest neighbouring pair: ΔE {before:.1} → {after:.1}");
-        for s in 0..EPIC_HUES.len() {
-            let slots = BTreeMap::from([("A".to_string(), s)]);
-            let a = epic_tint_in("A", &slots, &DARK, &none);
-            assert_eq!(a, slot_tint(s, &DARK));
-            // Every alternated tint still reads on every dark row fill.
-            for fill in [DARK.surface, DARK.hover_row, DARK.selected_row] {
-                assert!(contrast(a.fg, fill) >= 4.5, "slot {s} text on {fill:?}: {:.2}", contrast(a.fg, fill));
+        for p in [&LIGHT, &DARK] {
+            for s in 0..EPIC_SLOTS {
+                let slots = BTreeMap::from([("A".to_string(), s)]);
+                let a = epic_tint_in("A", &slots, p, &none);
+                assert_eq!(a, slot_tint(s, p));
+                for fill in [p.surface, p.selected_row] {
+                    assert!(contrast(a.fg, fill) >= 4.5, "dark={} slot {s} text on {fill:?}: {:.2}", p.dark, contrast(a.fg, fill));
+                    assert!(contrast(a.stripe, fill) >= 3.0, "dark={} slot {s} stripe on {fill:?}: {:.2}", p.dark, contrast(a.stripe, fill));
+                }
             }
-            assert!(contrast(a.stripe, DARK.selected_row) > 3.6, "slot {s} stripe: {:.2}", contrast(a.stripe, DARK.selected_row));
         }
-        assert_eq!(slot_tint(3, &LIGHT), tint_from_hue(hex(EPIC_HUES[3]), &LIGHT), "light keeps the base hues");
     }
 
     #[test]
@@ -827,18 +905,13 @@ mod tests {
     }
 
     #[test]
-    fn light_stripe_keeps_the_hue() {
-        let base = hex(EPIC_HUES[0]);
+    fn override_stripe_keeps_the_hue() {
+        // A config override's base goes through `tint_from_hue`.
+        let base = hex(0xb6572e);
         assert_eq!(tint_from_hue(base, &LIGHT).stripe, mix(base, 0, 0.2));
-        for &h in &EPIC_HUES {
-            let s = tint_from_hue(hex(h), &LIGHT).stripe;
-            assert!(contrast(s, LIGHT.surface) >= 4.0, "{h:06x}: {:.2}", contrast(s, LIGHT.surface));
-        }
+        assert!(contrast(tint_from_hue(base, &LIGHT).stripe, LIGHT.surface) >= 4.0);
         assert_eq!(tint_from_hue(base, &DARK).stripe, mix(base, 255, DARK_STRIPE_MIX), "dark stripe 42% to white");
-        for &h in &EPIC_HUES {
-            let s = tint_from_hue(hex(h), &DARK).stripe;
-            assert!(contrast(s, DARK.selected_row) > 3.6, "{h:06x}: {:.2}", contrast(s, DARK.selected_row));
-        }
+        assert!(contrast(tint_from_hue(base, &DARK).stripe, DARK.selected_row) > 3.6);
         assert_eq!(tint_from_hue(base, &DARK).fg, mix(base, 255, DARK_TEXT_MIX), "dark pill text a little past halfway");
     }
 
@@ -847,6 +920,6 @@ mod tests {
         let o = BTreeMap::from([("CI-1860".to_string(), "#8250df".to_string())]);
         let slots = BTreeMap::from([("CI-1860".to_string(), 3), ("CI-1569".to_string(), 4)]);
         assert_eq!(epic_tint_in("CI-1860", &slots, &LIGHT, &o), tint_from_hue(hex(0x8250df), &LIGHT));
-        assert_eq!(epic_tint_in("CI-1569", &slots, &LIGHT, &o), tint_from_hue(hex(EPIC_HUES[4]), &LIGHT));
+        assert_eq!(epic_tint_in("CI-1569", &slots, &LIGHT, &o), slot_tint(4, &LIGHT));
     }
 }
