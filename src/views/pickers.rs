@@ -235,7 +235,7 @@ fn row_list(ui: &mut egui::Ui, p: &Palette, names: &[Row], confirm: &mut bool, c
                     ui.set_width(ui.available_width());
                     ui.set_min_height(ROW_H - 12.0);
                     // Secondary text lifts on the cursor fill where muted would fall under 5.0:1.
-                    let muted = if on_cursor { theme::muted_on(fill, p) } else { crate::views::dialog_muted(p) };
+                    let muted = if on_cursor { crate::views::muted_on_selected(p) } else { crate::views::dialog_muted(p) };
                     let color = if n.muted { muted } else { p.text };
                     let mut job = egui::text::LayoutJob::default();
                     job.append(&n.text, 0.0, egui::TextFormat { font_id: theme::body(14.0), color, ..Default::default() });

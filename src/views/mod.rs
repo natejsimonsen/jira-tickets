@@ -530,12 +530,12 @@ pub fn selected_edge(p: &Palette) -> Color32 {
     if p.dark { Color32::from_rgb(0x5c, 0x5b, 0x56) } else { p.muted.gamma_multiply(0.4) }
 }
 
-/// Inside a dialog: fields one step under the dialog's fill (`theme::input_fill`, the app's one input rule)
-/// with the dialog's edge (focus stays the accent).
+/// Inside a dialog: fields one step under the dialog's fill (`theme::dialog_input_fill`: light #ebebe7, dark the
+/// input rule under the dialog) with the dialog's edge (focus stays the accent).
 pub fn dialog_fields(ui: &mut Ui, p: &Palette) {
     let edge = dialog_stroke(p).color;
     let v = ui.visuals_mut();
-    v.text_edit_bg_color = Some(theme::input_fill(dialog_fill(p), p));
+    v.text_edit_bg_color = Some(theme::dialog_input_fill(p));
     v.widgets.inactive.bg_stroke.color = edge;
     v.widgets.hovered.bg_stroke.color = edge;
 }
@@ -760,6 +760,12 @@ pub fn restore_fills(ui: &mut Ui, [inactive, hovered, active]: [Color32; 3]) {
 /// on the dialog fill, lifted where it would fall under 5.0:1 (dark).
 pub fn dialog_muted(p: &Palette) -> Color32 {
     theme::muted_on(dialog_fill(p), p)
+}
+
+/// Muted text on a dialog's cursor row (the picker's "current" marker and muted names there): `muted` lifted
+/// on `dialog_cursor_fill` where it would fall under 5.0:1 (dark #cccbc6; light `muted`, which needs no lift).
+pub fn muted_on_selected(p: &Palette) -> Color32 {
+    theme::muted_on(dialog_cursor_fill(p), p)
 }
 
 /// Outline-pill text on the selected row: `muted`, lifted only where it would fall under 5.0:1 (`muted_on`).

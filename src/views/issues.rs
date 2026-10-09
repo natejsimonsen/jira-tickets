@@ -994,7 +994,7 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
                 // Over the card's left border, on whole physical pixels, so no sliver of the page shows between
                 // the stripe and the fill.
                 let stripe = CornerRadius { nw: corners.nw, sw: corners.sw, ne: 0, se: 0 };
-                ui.painter().rect_filled(stripe_rect(rect, ui.ctx().pixels_per_point()), stripe, t.stripe);
+                ui.painter().rect_filled(stripe_rect(rect, ui.ctx().pixels_per_point()), stripe, row_stripe(&t, p, is_sel));
             }
             if is_sel {
                 selected_rect = Some((rect, idx));
@@ -1110,6 +1110,12 @@ pub fn stripe_rect(row: Rect, ppp: f32) -> Rect {
     Rect::from_min_max(egui::pos2(snap(row.left()), row.top()), egui::pos2(snap(row.left() + 3.0), row.bottom()))
 }
 
+/// A row's epic stripe colour: the slot's stripe, except on a selected light row, where it takes the slot's text
+/// tone (≥ 4.6:1 on #dfdfda; the stripe tone fell to 3.6, under dark's 3.9–5.1 there).
+pub fn row_stripe(t: &theme::Tint, p: &Palette, selected: bool) -> egui::Color32 {
+    if selected && !p.dark { t.fg } else { t.stripe }
+}
+
 /// The selected row's two rules, as (centre y, inset from each end): its top and bottom dividers in the
 /// selected-row edge, on the list frame too at the outer edges (inset by the corner radius on the left; the right
 /// side is square).
@@ -1122,13 +1128,13 @@ pub fn selected_dividers(rect: Rect, idx: usize, n: usize) -> Vec<(f32, f32)> {
 
 /// A status pill's fill: its wash resolved over the plain row, so the pill is one opaque colour on every row
 /// (a wash composited over the selection shifted its colour, round 8). On a selected row a neutral wash that
-/// would melt into the selection (the grey "New", 1.03:1 light, 1.10 dark) steps one notch (light #d2d1cb, dark
-/// #4a4a47), so the pill keeps a fill.
+/// would melt into the selection (the grey "New", 1.03:1 light, 1.10 dark) steps one notch (light #cdccc6 at
+/// 1.20:1, dark #4a4a47 at 1.23), so the pill keeps a fill.
 pub fn status_fill(t: &theme::Tint, p: &Palette, selected: bool) -> egui::Color32 {
     let fill = theme::over(t.bg, p.surface);
     let spread = fill.r().max(fill.g()).max(fill.b()) - fill.r().min(fill.g()).min(fill.b());
     if selected && spread <= 6 && theme::contrast(fill, p.selected_row) < SELECTED_PILL_STEP {
-        if p.dark { egui::Color32::from_rgb(0x4a, 0x4a, 0x47) } else { egui::Color32::from_rgb(0xd2, 0xd1, 0xcb) }
+        if p.dark { egui::Color32::from_rgb(0x4a, 0x4a, 0x47) } else { egui::Color32::from_rgb(0xcd, 0xcc, 0xc6) }
     } else {
         fill
     }
@@ -1768,14 +1774,29 @@ mod tests {
 
     #[test]
     fn new_pill_keeps_a_fill_on_a_selected_row() {
-        for (p, step) in [(&theme::LIGHT, egui::Color32::from_rgb(0xd2, 0xd1, 0xcb)), (&theme::DARK, egui::Color32::from_rgb(0x4a, 0x4a, 0x47))] {
+        for (p, step) in [(&theme::LIGHT, egui::Color32::from_rgb(0xcd, 0xcc, 0xc6)), (&theme::DARK, egui::Color32::from_rgb(0x4a, 0x4a, 0x47))] {
             let new = theme::status_tint("New", "new", p, &Default::default());
             assert_eq!(status_fill(&new, p, true), step, "dark={}", p.dark);
             assert_eq!(status_fill(&new, p, false), theme::over(new.bg, p.surface), "plain rows keep the wash");
             assert!(theme::contrast(step, p.selected_row) >= SELECTED_PILL_STEP);
+            // Round 10 (L2): light and dark step about as far (1.20 / 1.23).
+            assert!(theme::contrast(step, p.selected_row) >= 1.19, "dark={}: {:.3}", p.dark, theme::contrast(step, p.selected_row));
             // A hued wash keeps its colour on the selection.
             let ip = theme::status_tint("In Progress", "indeterminate", p, &Default::default());
             assert_eq!(status_fill(&ip, p, true), status_fill(&ip, p, false), "dark={}", p.dark);
+        }
+    }
+
+    #[test]
+    fn light_selected_stripes_take_the_text_tone() {
+        for s in 0..theme::EPIC_SLOTS {
+            let t = theme::slot_tint(s, &theme::LIGHT);
+            assert_eq!(row_stripe(&t, &theme::LIGHT, true), t.fg);
+            assert_eq!(row_stripe(&t, &theme::LIGHT, false), t.stripe);
+            let c = theme::contrast(row_stripe(&t, &theme::LIGHT, true), theme::LIGHT.selected_row);
+            assert!(c >= 4.6, "slot {s}: {c:.2}");
+            let d = theme::slot_tint(s, &theme::DARK);
+            assert_eq!(row_stripe(&d, &theme::DARK, true), d.stripe, "dark unchanged");
         }
     }
 
