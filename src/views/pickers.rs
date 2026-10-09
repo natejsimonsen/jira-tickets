@@ -52,7 +52,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                     Picker::Assign { key, items, current, cursor, filter } => {
                         title(ui, p, &format!("Assign {key}"));
                         let r = ui.add(field(filter, "Type a name", p));
-                        ui.add_space(8.0);
+                        ui.add_space(ASSIGN_FIELD_GAP);
                         // Not under the help overlay, or typing would land in the filter behind it.
                         if !help_open {
                             r.request_focus();
@@ -129,11 +129,17 @@ fn picker_key(p: &Picker) -> &str {
     }
 }
 
-/// The dialog's top edge: 20% down the window and 8 more, so at 900 it clears the detail pane's pill row
-/// instead of cutting across it.
+/// The dialog's top edge: 20% down the window less 6, so at 900 (174) it sits above the detail pane's pill row
+/// under a two-line title (175–192.5) instead of cutting across it (188 did; round 11 G1).
 pub fn dialog_top(window_h: f32) -> f32 {
-    (window_h * 0.2).round() + 8.0
+    ((window_h * 0.2).round() - DIALOG_LIFT).max(0.0)
 }
+
+/// How far the dialog sits above the window's 20% line.
+const DIALOG_LIFT: f32 = 6.0;
+
+/// The Assign filter field → the first row (round 11 G2: 8 left the field and the cursor row reading as one).
+const ASSIGN_FIELD_GAP: f32 = 12.0;
 
 /// Rows the Assign list holds: Unassigned, up to ASSIGN_USERS users, and the "9 of N · type to see more" line.
 const ASSIGN_ROWS: f32 = (crate::app::ASSIGN_USERS + 2) as f32;
@@ -271,7 +277,8 @@ mod tests {
 
     #[test]
     fn dialog_sits_a_fifth_down() {
-        assert_eq!(super::dialog_top(900.0), 188.0);
-        assert_eq!(super::dialog_top(0.0), 8.0);
+        assert_eq!(super::dialog_top(900.0), 174.0, "above the two-line-title pill row (175)");
+        assert_eq!(super::dialog_top(0.0), 0.0);
+        assert_eq!(super::ASSIGN_FIELD_GAP, 12.0);
     }
 }
