@@ -2183,7 +2183,8 @@ mod tests {
         let l = &theme::LIGHT;
         assert!(theme::contrast(crate::views::selected_pill_edge(l), l.selected_row) >= 3.3);
         let d = &theme::DARK;
-        assert_eq!(crate::views::selected_pill_edge(d), crate::views::selected_edge(d), "dark unchanged");
+        let c = theme::contrast(crate::views::selected_pill_edge(d), d.selected_row);
+        assert!((2.4..=3.0).contains(&c), "C2: the dark outline 2.4–3:1 on the selection: {c:.2}");
         let t = theme::slot_tint(0, l);
         assert_eq!(row_stripe(&t, l, true), t.fg, "the epic outline takes the stripe's tone");
     }

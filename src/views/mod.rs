@@ -952,9 +952,10 @@ pub fn outline_pill_selected(ui: &mut Ui, text: &str, p: &Palette, margin: egui:
 }
 
 /// A neutral pill's outline on a selected row: light #77766f (≥ 3.3:1 on the #dfdfda selection; the
-/// `selected_edge` rule tone read 2.88), dark the `selected_edge` (round 11 C3).
+/// `selected_edge` rule tone read 2.88), dark #7a7974 (2.5:1 on the #3d3d3a selection; the `selected_edge` tone
+/// read 1.6, round 13 C2).
 pub fn selected_pill_edge(p: &Palette) -> Color32 {
-    if p.dark { selected_edge(p) } else { Color32::from_rgb(0x77, 0x76, 0x6f) }
+    if p.dark { Color32::from_rgb(0x7a, 0x79, 0x74) } else { Color32::from_rgb(0x77, 0x76, 0x6f) }
 }
 
 /// A scrollbar thumb at rest and hovered: at rest the tone `muted` at about half alpha, at THUMB_REST, made on the
@@ -1034,7 +1035,7 @@ pub fn no_scroll_fade(ui: &mut Ui) {
 pub const NO_FADE: egui::style::ScrollFadeStyle = egui::style::ScrollFadeStyle { strength: 0.0, size: 0.0 };
 
 /// Muted text on a dialog's cursor row (the picker's "current" marker and muted names there): `muted` lifted
-/// on `dialog_cursor_fill` where it would fall under 5.0:1 (dark #cccbc6; light `muted`, which needs no lift).
+/// on `dialog_cursor_fill` where it would fall under 5.0:1 (dark #c0bfba; light `muted`, which needs no lift).
 pub fn muted_on_selected(p: &Palette) -> Color32 {
     theme::muted_on(dialog_cursor_fill(p), p)
 }

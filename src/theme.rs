@@ -65,8 +65,9 @@ pub const LIGHT: Palette = Palette {
     muted: hex(0x585753),
     accent: hex(0x2a64c8),
     on_accent: hex(0xffffff),
-    on_track: hex(0x267a4b),
-    at_risk: hex(0x8f6208),
+    // ≥ 5.2:1 on surface_2 (round 13 L4: #267a4b and #8f6208 sat near 4.6).
+    on_track: hex(0x22703f),
+    at_risk: hex(0x835a07),
     off_track: hex(0xb5352f),
     no_health: hex(0x8a8984),
     done: hex(0x6b6a66),
@@ -337,10 +338,10 @@ fn visuals(p: &Palette) -> Visuals {
 }
 
 /// Placeholder text: a step below `muted` in both themes (light #63625e under muted #585753, 1.19:1 apart; dark
-/// #979691), so an empty field never reads as filled in; light 4.79:1 on the #e4e4df input, dark ≥ 4.5:1 on the
-/// dialog field.
+/// #9c9b96, under the dialog's lifted muted #b3b2ad), so an empty field never reads as filled in; light 4.79:1 on
+/// the #e4e4df input, dark 4.85:1 on the #2e2e2c dialog field (#979691 was 4.59; round 13 L2).
 pub fn placeholder(p: &Palette) -> Color32 {
-    if p.dark { hex(0x979691) } else { hex(0x63625e) }
+    if p.dark { hex(0x9c9b96) } else { hex(0x63625e) }
 }
 
 /// A hovered control (button, chip, combo) that rests on `surface_2`: in light the old #e6e6e2 step, since the
@@ -351,7 +352,7 @@ pub fn control_hover(p: &Palette) -> Color32 {
 
 /// Muted text on a fill other than the page's (a selected or cursor row, a dialog): `muted` where it keeps
 /// MUTED_MIN there, else the first of the theme's lifts that does (light #4d4c48 darker; dark #b3b2ad, then
-/// #c0bfba, then #cccbc6 for the dialog cursor row #4e4e4b), else the last lift. Dark's first lift stays ≥ 1.75
+/// #c0bfba, which the #474744 dialog cursor row stops at, then #cccbc6), else the last lift. Dark's first lift stays ≥ 1.75
 /// off `text` (#c0bfba was 1.54 and read as text in dialogs and on selected rows; round 11 L1).
 pub fn muted_on(fill: Color32, p: &Palette) -> Color32 {
     let lifts: &[Color32] = if p.dark { &MUTED_LIFTS_DARK } else { &MUTED_LIFTS_LIGHT };
@@ -419,14 +420,16 @@ pub const DARK_DIALOG: Color32 = hex(0x383836);
 pub const DARK_EDGE: Color32 = hex(0x545350);
 /// The dark dialog's chip step (help keys): 1.32:1 off the dialog, quieter than DARK_EDGE's 1.54.
 const DARK_DIALOG_CHIP: Color32 = hex(0x454542);
-/// The cursor row in a dark dialog: 1.42:1 off #333331 (selected_row was 1.16).
-pub const DARK_DIALOG_CURSOR: Color32 = hex(0x4e4e4b);
+/// The cursor row in a dark dialog: 1.26:1 off the #383836 dialog (selected_row was 1.16), so muted on it needs
+/// only the second lift, #c0bfba at 5.06:1 and 1.54 off `text` (#4e4e4b forced the last, #cccbc6, 1.36 off text;
+/// round 13 L1).
+pub const DARK_DIALOG_CURSOR: Color32 = hex(0x474744);
 /// A chip's fill must stand at least this far off its container (1.14:1 read as flat).
 const CHIP_STEP: f32 = 1.17;
 
 /// The fill for a chip (inline code, a code block, a help key) inside a `container`: the first step of the
 /// theme's neutral ramp at least CHIP_STEP off it, darker in light and lighter in dark (a key reads raised).
-/// On the page (surface) that is #ebebe7 light, #333331 dark; in a comment card #dfdfda / #3a3a37.
+/// On the page (surface) that is #ebebe7 light, #333331 dark; in a comment card #dfdfda / #383836.
 pub fn chip_fill_on(container: Color32, p: &Palette) -> Color32 {
     let ramp: &[Color32] = if p.dark {
         &[p.surface_2, DARK_DIALOG, p.border, p.selected_row, DARK_DIALOG_CHIP, DARK_EDGE]
@@ -968,8 +971,19 @@ mod tests {
     }
 
     #[test]
+    fn light_health_colours_read_on_surface_2() {
+        // L3 (round 13 L4): ≥ 5.2:1 on surface_2, the lightest fill they sit on besides white.
+        for c in [LIGHT.on_track, LIGHT.at_risk] {
+            assert!(contrast(c, LIGHT.surface_2) >= 5.2, "{c:?}: {:.2}", contrast(c, LIGHT.surface_2));
+        }
+    }
+
+    #[test]
     fn placeholders_read_apart_from_typed_text() {
-        assert_eq!(placeholder(&DARK), hex(0x979691));
+        assert_eq!(placeholder(&DARK), hex(0x9c9b96));
+        // L2: 4.85 on the dark dialog field, and still a step under the dialog's muted.
+        assert!(contrast(placeholder(&DARK), dialog_input_fill(&DARK)) >= 4.8, "{:.2}", contrast(placeholder(&DARK), dialog_input_fill(&DARK)));
+        assert!(contrast(placeholder(&DARK), DARK.text) > contrast(muted_on(DARK_DIALOG, &DARK), DARK.text), "under the dialog muted");
         assert_eq!(placeholder(&LIGHT), hex(0x63625e));
         assert!(contrast(placeholder(&LIGHT), LIGHT_INPUT) >= 4.75, "light page input");
         assert!(contrast(LIGHT_INPUT, LIGHT.surface_2) >= 1.1, "a light field never reads as a button");
@@ -995,8 +1009,9 @@ mod tests {
                 assert!(contrast(muted_on(fill, p), fill) >= 4.5, "dark={} {fill:?}: {:.2}", p.dark, contrast(muted_on(fill, p), fill));
             }
         }
-        assert_eq!(muted_on(DARK_DIALOG_CURSOR, &DARK), hex(0xcccbc6), "the picker's current marker on the cursor row");
+        assert_eq!(muted_on(DARK_DIALOG_CURSOR, &DARK), hex(0xc0bfba), "L1: the cursor row stops at the second lift");
         assert!(contrast(muted_on(DARK_DIALOG_CURSOR, &DARK), DARK_DIALOG_CURSOR) >= 5.0);
+        assert!(contrast(DARK.text, muted_on(DARK_DIALOG_CURSOR, &DARK)) >= 1.5, "apart from text");
         assert_eq!(muted_on(DARK.surface, &DARK), DARK.muted, "narrow: only where muted falls short");
         // Round 9: light muted #585753 clears 5.0 on the selected row (5.41), so it needs no lift there.
         assert_eq!(muted_on(LIGHT.selected_row, &LIGHT), LIGHT.muted, "light muted 5.41 on the selected row");
@@ -1014,7 +1029,7 @@ mod tests {
                 assert!(contrast(muted_on(fill, p), fill) >= MUTED_MIN, "dark={} {fill:?}: {:.2}", p.dark, contrast(muted_on(fill, p), fill));
             }
         }
-        assert!(contrast(DARK_DIALOG_CURSOR, DARK_DIALOG) >= 1.4);
+        assert!(contrast(DARK_DIALOG_CURSOR, DARK_DIALOG) >= 1.25, "{:.2}", contrast(DARK_DIALOG_CURSOR, DARK_DIALOG));
     }
 
     #[test]
