@@ -376,6 +376,16 @@ const INNER_X: f32 = 12.0;
 const CHEVRON_GAP: f32 = 8.0;
 /// egui's chevron slot.
 const CHEVRON_W: f32 = 14.0;
+/// The chevron's half width (to its stroke's centre) and stroke.
+const CHEVRON_HALF_W: f32 = 4.0;
+const CHEVRON_STROKE: f32 = 1.5;
+
+/// The chevron's centre x in a combo whose right edge is `right`: its ink box (stroke included) ends INNER_X
+/// in, like the label's inset on the left (it sat in egui's 14 px slot, 14 in).
+pub fn chevron_centre_x(right: f32) -> f32 {
+    right - INNER_X - CHEVRON_HALF_W - CHEVRON_STROKE / 2.0
+}
+
 /// Room a combo needs beside its text: the inset either side, the chevron and its gap (egui truncates the
 /// text at that width), plus 2 px so rounding never cuts the last glyph.
 const COMBO_CHROME: f32 = 2.0 * INNER_X + CHEVRON_GAP + CHEVRON_W + 2.0;
@@ -468,6 +478,8 @@ pub enum PopupEdge {
 
 /// A popup frame's side margin, so a selected row's fill sits 4 in from the popup edge (margin 3 + stroke 1).
 const POPUP_MARGIN: i8 = 3;
+/// The popup thumb's outer margin: with the frame's 3 it sits 4 in from the edge, mirroring the rows' 4 on the left.
+const POPUP_THUMB_OUTER: f32 = 1.0;
 /// A popup frame's top and bottom margin: 4 inside the stroke (round 8 measured 3).
 const POPUP_MARGIN_Y: i8 = 4;
 /// A popup frame's margin and stroke, both sides.
@@ -521,9 +533,10 @@ fn combo(
         let color = if muted { p.muted } else { p.text };
         let g = painter.layout_no_wrap(shown, font.clone(), color);
         painter.galley(egui::pos2(rect.left() + INNER_X, (rect.center().y - g.size().y / 2.0).round()), g, color);
-        let c = egui::pos2(rect.right() - INNER_X - CHEVRON_W / 2.0, rect.center().y);
-        let pts = vec![c + vec2(-4.0, -2.0), c + vec2(0.0, 2.0), c + vec2(4.0, -2.0)];
-        painter.add(egui::Shape::line(pts, Stroke::new(1.5, p.muted)));
+        let c = egui::pos2(chevron_centre_x(rect.right()), rect.center().y);
+        let half = CHEVRON_HALF_W;
+        let pts = vec![c + vec2(-half, -2.0), c + vec2(0.0, 2.0), c + vec2(half, -2.0)];
+        painter.add(egui::Shape::line(pts, Stroke::new(CHEVRON_STROKE, p.muted)));
     }
     let pop_w = popup_width(w, widest, POPUP_ROW_PAD, pane.1 - pane.0);
     let left = match edge {
@@ -549,7 +562,7 @@ fn combo(
             ui.spacing_mut().interact_size.y = POPUP_ROW_H;
             ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
             let visibility = if bar {
-                ui.spacing_mut().scroll = egui::style::ScrollStyle::solid();
+                ui.spacing_mut().scroll = egui::style::ScrollStyle { bar_outer_margin: POPUP_THUMB_OUTER, ..egui::style::ScrollStyle::solid() };
                 // The solid thumb paints in the widgets' `bg_fill` (rows use `weak_bg_fill`, so they keep theirs).
                 crate::views::set_thumb_fills(ui, p);
                 egui::scroll_area::ScrollBarVisibility::AlwaysVisible
@@ -1633,6 +1646,15 @@ mod tests {
         // No right border: the cover sits on its 1 px column, inside the top and bottom borders.
         let rect = Rect::from_min_max(egui::pos2(0.0, 10.0), egui::pos2(300.0, 52.0));
         assert_eq!(right_border_cover(rect), (299.5, 11.0, 51.0));
+    }
+
+    #[test]
+    fn combo_chevron_and_popup_thumb_mirror_their_insets() {
+        // B1: the chevron's ink box ends INNER_X (12) from the combo's right edge, like the label's left inset.
+        let right = 300.0;
+        assert_eq!(right - (chevron_centre_x(right) + CHEVRON_HALF_W + CHEVRON_STROKE / 2.0), INNER_X);
+        // B2: the popup thumb sits 4 in (it measured 3, the frame margin alone), mirroring the rows' 4 on the left.
+        assert_eq!(f32::from(POPUP_MARGIN) + POPUP_THUMB_OUTER, 4.0);
     }
 
     #[test]
