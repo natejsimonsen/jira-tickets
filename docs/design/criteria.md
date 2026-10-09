@@ -90,10 +90,25 @@ These were decided in earlier rounds; raters treat them as correct and do not sc
 - **Shared light fill.** Help key chips and light dialog fields may share a fill (#ebebe7): the help overlay has no
   fields, so a chip and a field never appear together.
 - **Units.** Criteria values are logical points (pt), not device pixels: at 2x, 1 pt is two device pixels. The
-  scrollbar's track inset is 2 pt.
+  scrollbar's track inset is 2 pt, measured from the inner edge of the border it sits beside.
 - **Muted Enter in the note.** The count-row note's mono "Enter" stays `muted`: the note is a sentence, not a key
   hint; only the hint bar draws keys in `text`.
 - **Dark placeholder step.** The dark placeholder sits 1.09:1 off dark `muted` (light: 1.19); the smaller step is
   accepted so the placeholder keeps its 4.5:1 headroom on the dark dialog field.
 - **Epic popup width.** The epic popup is sized to the widest row in the whole list, rows below the fold included,
   so it never resizes while scrolling.
+- **Empty detail placement.** The detail pane's "Select an issue" sits in the upper third on purpose, at eye level
+  with the list's first rows; it is not vertically centred.
+- **Dark dialog muted.** The dark dialog's muted/text separation of 1.78:1 (light 2.28) is accepted: the dialog's
+  muted must reach 5:1 on its fill, which leaves no room for a wider step.
+- **Trailing caret.** The trailing caret sits at the glyph advance, so its gap to the last glyph varies with the
+  glyph; standard editor behaviour, accepted.
+- **Count row vs hint bar dots.** The count row is a sentence: " · " at word spacing. The hint bar is a key list
+  with 12 pt around its dots. Both are correct.
+- **Dark overlay muted.** `muted_on(DARK_DIALOG)` (#b3b2ad) is the dark overlay's muted (help headings, "or");
+  the bar on the page uses `muted`. The dark cursor-row "current" marker uses `muted_on_selected` (#c0bfba), the
+  ruled cursor-row muted.
+- **Inline spinner slot.** The inline count-row ring is the 12 pt spinner slot even though the cap height is 9;
+  the ring is centred on the cap midline.
+- **List rhythm.** List items in a description are 24 apart (4 pt item spacing); wrapped lines inside an item are
+  20.
