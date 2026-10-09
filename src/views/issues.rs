@@ -545,12 +545,14 @@ fn combo(
         let pts = vec![c + vec2(-half, -2.0), c + vec2(0.0, 2.0), c + vec2(half, -2.0)];
         painter.add(egui::Shape::line(pts, Stroke::new(CHEVRON_STROKE, p.muted)));
     }
-    let pop_w = popup_width(w, widest, POPUP_ROW_PAD, pane.1 - pane.0);
+    let ppp = ui.ctx().pixels_per_point();
+    let pop_w = snap_px(popup_width(w, widest, POPUP_ROW_PAD, pane.1 - pane.0), ppp);
     let left = match edge {
         PopupEdge::Start => popup_left(rect.left(), pop_w, pane.0, pane.1),
         PopupEdge::End => popup_left_end(rect.right(), pop_w, pane.0),
     };
-    let anchor = Rect::from_min_max(egui::pos2(left, rect.top()), egui::pos2(left + pop_w, rect.bottom()));
+    // On whole physical pixels, so the frame's edges are crisp and its 4 margins measure 4 (round 12 B1).
+    let anchor = snap_rect(Rect::from_min_max(egui::pos2(left, rect.top()), egui::pos2(left + pop_w, rect.bottom())), ppp);
     let inner = pop_w - POPUP_FRAME;
     let (scroll_h, bar) = popup_scroll(n_rows);
     egui::Popup::menu(&resp)
@@ -586,6 +588,16 @@ fn combo(
                 contents(ui, row_w)
             });
         });
+}
+
+/// `v` rounded to a whole physical pixel.
+pub fn snap_px(v: f32, ppp: f32) -> f32 {
+    (v * ppp).round() / ppp
+}
+
+/// `r` with every edge on a whole physical pixel.
+pub fn snap_rect(r: Rect, ppp: f32) -> Rect {
+    Rect::from_min_max(egui::pos2(snap_px(r.min.x, ppp), snap_px(r.min.y, ppp)), egui::pos2(snap_px(r.max.x, ppp), snap_px(r.max.y, ppp)))
 }
 
 /// The search box's placeholder: it filters, searches, and runs JQL on Enter.
@@ -764,19 +776,27 @@ fn filters(app: &mut App, ui: &mut Ui, p: &Palette) {
 /// count before it), "· JQL" for a typed search's rows, "· text" for a text search's, or (nothing to show
 /// yet) a loading line.
 pub fn count_label(shown: usize, total: Option<usize>, loading_first: bool, suffix: CountSuffix) -> String {
+    let (count, mode) = count_parts(shown, total, loading_first, suffix);
+    format!("{count}{mode}")
+}
+
+/// `count_label` in its two inks: the count (`text`, or muted while stale) and the mode suffix ("· JQL",
+/// "· text match", or empty), always `muted` like the Enter note (round 12 D1).
+pub fn count_parts(shown: usize, total: Option<usize>, loading_first: bool, suffix: CountSuffix) -> (String, String) {
     if shown == 0 && loading_first {
-        return "Loading issues…".to_string();
+        return ("Loading issues…".to_string(), String::new());
     }
     let noun = |n: usize| if n == 1 { "issue" } else { "issues" };
     let base = match total {
         Some(t) if t != shown => format!("{shown} of {t} {}", noun(t)),
         _ => format!("{shown} {}", noun(shown)),
     };
-    match suffix {
-        CountSuffix::None => base,
-        CountSuffix::Jql => format!("{base}{COUNT_SEP}JQL"),
-        CountSuffix::Text => format!("{base}{COUNT_SEP}text match"),
-    }
+    let mode = match suffix {
+        CountSuffix::None => String::new(),
+        CountSuffix::Jql => count_note("JQL"),
+        CountSuffix::Text => count_note("text match"),
+    };
+    (base, mode)
 }
 
 /// The count row's note while JQL-looking text sits in the box unrun (the local filter is off for it).
@@ -872,7 +892,7 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
     let text_filter = !app.filter.text.trim().is_empty() && !filter::looks_like_jql(&app.filter.text) && !text_rows_shown(app);
     let total = locally_narrowed(app.filter.mine, app.filter.roadmap, text_filter).then(|| rows_without_narrowing(app));
     let showing_search = src == ListId::Search && app.store.lists.contains_key(&ListId::Search);
-    let label = count_label(rows.len(), total, loading_first, count_suffix(app.typed_shown, app.text_shown.is_some(), showing_search));
+    let (label, mode) = count_parts(rows.len(), total, loading_first, count_suffix(app.typed_shown, app.text_shown.is_some(), showing_search));
     let box_text = !app.filter.text.trim().is_empty() || (app.typed_search && app.search_active);
     let show_clear = clear_visible(app.filter.quick.is_some(), app.filter.mine, app.filter.roadmap, box_text);
     ui.allocate_ui_with_layout(vec2(ui.available_width(), COUNT_H), egui::Layout::left_to_right(egui::Align::Center), |ui| {
@@ -889,17 +909,16 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
             }
             ui.label(RichText::new(label).color(color).size(12.0));
         } else {
+            // One line: the count, then in `muted` the mode suffix and (JQL-looking text unrun, so the rows are not
+            // filtered by it) what Enter does, each after the same "·".
+            let mut job = egui::text::LayoutJob::default();
+            let fmt = |c: egui::Color32| egui::TextFormat { font_id: theme::body(12.0), color: c, ..Default::default() };
+            job.append(&label, 0.0, fmt(color));
+            job.append(&mode, 0.0, fmt(p.muted));
             if !row_spinner && jql_awaiting_enter(&app.filter.text, app.last_search_jql.as_deref(), app.typed_search && app.search_active, pending) {
-                // The rows are not filtered by JQL-looking text; say what Enter does with it, in the count's own
-                // line so its "·" is spaced like the mode suffixes'.
-                let mut job = egui::text::LayoutJob::default();
-                let fmt = |c: egui::Color32| egui::TextFormat { font_id: theme::body(12.0), color: c, ..Default::default() };
-                job.append(&label, 0.0, fmt(color));
                 job.append(&count_note(JQL_ENTER_NOTE), 0.0, fmt(p.muted));
-                ui.label(job);
-            } else {
-                ui.label(RichText::new(label).color(color).size(12.0));
             }
+            ui.label(job);
             if row_spinner {
                 crate::views::icons::spinner(ui, crate::views::icons::INLINE_SPINNER, p);
                 ui.label(RichText::new("Updating…").color(p.muted).size(12.0));
@@ -1505,6 +1524,10 @@ mod tests {
         assert_eq!(count_label(1, None, false, CountSuffix::None), "1 issue");
         assert_eq!(count_label(20, None, true, CountSuffix::None), "20 issues", "previous rows stay with their count while updating");
         assert_eq!(count_label(2, None, false, CountSuffix::Jql), "2 issues · JQL");
+        // D1: the suffix is its own (muted) part; the count alone keeps `text`.
+        assert_eq!(count_parts(2, None, false, CountSuffix::Jql), ("2 issues".into(), " · JQL".into()));
+        assert_eq!(count_parts(3, Some(9), false, CountSuffix::Text), ("3 of 9 issues".into(), " · text match".into()));
+        assert_eq!(count_parts(5, None, false, CountSuffix::None), ("5 issues".into(), String::new()));
         assert_eq!(count_label(3, Some(20), false, CountSuffix::None), "3 of 20 issues", "local text filter");
         assert_eq!(count_label(20, Some(20), false, CountSuffix::None), "20 issues", "a filter that hides nothing");
         // B1: Mine and Roadmap narrow locally too, so they count "N of M" like the text filter; server results don't.
@@ -1838,6 +1861,17 @@ mod tests {
         assert_eq!(bottom_sliver(&rows, 87.0), Some((87.0, 87.0)), "only the shared seam: nothing to cover");
         assert_eq!(sliver_row(&rows, 92.0), Some(2), "its stripe is not drawn");
         assert_eq!(sliver_row(&rows, 100.0), None);
+    }
+
+    #[test]
+    fn popups_sit_on_whole_pixels() {
+        // B1: a fractional combo rect (and width) lands the popup frame on whole physical pixels.
+        let r = snap_rect(Rect::from_min_max(egui::pos2(10.3, 100.26), egui::pos2(210.7, 128.26)), 2.0);
+        assert_eq!((r.min.x, r.min.y, r.max.x, r.max.y), (10.5, 100.5, 210.5, 128.5));
+        assert_eq!(snap_px(199.8, 1.0), 200.0);
+        // The frame around whole rows stays whole: rows × 28 + 2 × (4 + 1).
+        let (h, _) = popup_scroll(12);
+        assert_eq!((h + POPUP_FRAME).fract(), 0.0);
     }
 
     #[test]

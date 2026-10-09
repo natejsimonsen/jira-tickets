@@ -533,9 +533,9 @@ pub fn toast_centre_x(window_w: f32, detail: Option<(f32, f32)>) -> f32 {
     detail.map_or(window_w / 2.0, |(l, r)| (l + r) / 2.0)
 }
 
-/// The toast's padding: 16 either side; 7 above and 9 below, because the 14 px line box carries its leading
-/// under the glyphs, so 8/8 set the text ~2 pt low.
-const TOAST_MARGIN: Margin = Margin { left: 16, right: 16, top: 7, bottom: 9 };
+/// The toast's padding: 16 either side; 6 above and 10 below, because the 14 px line box carries its leading
+/// under the glyphs (8/8 set the text ~2 pt low, 7/9 still 1; round 12 D2).
+const TOAST_MARGIN: Margin = Margin { left: 16, right: 16, top: 6, bottom: 10 };
 
 /// The toast's shadow: heavier in dark, where a light shadow vanishes on the near-black page.
 pub fn toast_shadow(p: &Palette) -> egui::Shadow {
@@ -1489,6 +1489,7 @@ mod widget_tests {
         assert_eq!(toast_centre_x(1440.0, Some((604.0, 1440.0))), 1022.0);
         assert!(toast_shadow(&theme::DARK).color.a() > toast_shadow(&theme::LIGHT).color.a());
         assert_eq!(TOAST_MARGIN.left, TOAST_MARGIN.right);
+        assert_eq!((TOAST_MARGIN.top, TOAST_MARGIN.bottom), (6, 10), "D2: the text 1 up, the box height kept");
     }
 
     #[test]
