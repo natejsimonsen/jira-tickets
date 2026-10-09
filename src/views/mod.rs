@@ -121,6 +121,12 @@ pub fn read_only_color(p: &Palette) -> Color32 {
     p.text
 }
 
+/// The header's "Read-only" galley, laid out in `read_only_color` (the painter's colour argument only tints
+/// placeholder-coloured glyphs, so the layout colour is the ink; round 12 A1).
+pub fn read_only_galley(painter: &egui::Painter, p: &Palette) -> std::sync::Arc<egui::Galley> {
+    painter.layout_no_wrap("Read-only".into(), theme::body(12.0), read_only_color(p))
+}
+
 /// The name's width cap: a run of "m" glyphs. It only cuts very long names; it never reserves space.
 pub fn name_cap(m_w: f32) -> f32 {
     (m_w * NAME_MAX_M).ceil()
@@ -233,7 +239,7 @@ fn header(app: &mut App, ui: &mut Ui, p: &Palette) -> (egui::Rect, Option<egui::
                     let shown = truncate_text(&me.display_name, cap, |t| painter.layout_no_wrap(t.to_string(), theme::body(12.0), p.muted).size().x);
                     (painter.layout_no_wrap(shown, theme::body(12.0), p.muted), me.display_name.clone())
                 });
-                let ro = read_only.then(|| painter.layout_no_wrap("Read-only".into(), theme::body(12.0), p.muted));
+                let ro = read_only.then(|| read_only_galley(&painter, p));
                 let dot = painter.layout_no_wrap("·".into(), theme::body(12.0), p.muted);
                 let at = header_right(right, name.as_ref().map(|(g, _)| g.size().x), ro.as_ref().map(|g| g.size().x), dot.size().x);
                 let help = icons::icon_button(ui, icons::Icon::Help, "Keyboard help (?)", p);
@@ -1014,6 +1020,19 @@ pub fn error_banner(ui: &mut Ui, p: &Palette, title: &str, raw: &str) -> bool {
 
 #[cfg(test)]
 mod widget_tests {
+    #[test]
+    fn read_only_is_inked_in_text() {
+        // A1: the galley's glyphs carry `text`, the colour the painter actually draws; the name stays muted.
+        crate::testutil::with_ui(|ui| {
+            for p in [&crate::theme::LIGHT, &crate::theme::DARK] {
+                let g = super::read_only_galley(ui.painter(), p);
+                assert!(g.rows.iter().all(|r| r.visuals.mesh.vertices.iter().all(|v| v.color == p.text)), "dark={}", p.dark);
+                assert!(g.job.sections.iter().all(|s| s.format.color == p.text), "dark={}", p.dark);
+                assert_ne!(p.text, p.muted);
+            }
+        });
+    }
+
     #[test]
     fn sign_in_shows_the_hint_bar() {
         assert!(super::hint_bar_shown(false, false), "the sign-in form");
