@@ -631,6 +631,12 @@ pub const fn input_margin(pad_x: f32) -> Margin {
     Margin { left: pad_x as i8, right: pad_x as i8, top: 2, bottom: 5 }
 }
 
+/// The list pane's search box margin: SEARCH_PAD_X either side and an even 4 above and below, so its galley is
+/// centred in the box like the combos' and chips' text beside it (2 / 5 put it 1.5 high of them; round 11 B2).
+pub const fn search_margin() -> Margin {
+    Margin { left: SEARCH_PAD_X as i8, right: SEARCH_PAD_X as i8, top: 4, bottom: 4 }
+}
+
 /// A modal dialog's fill: plain surface in light; in dark #333331, a step past surface_2, so the dialog lifts
 /// off the dimmed page about as far as the light one does (the backdrop stays at 110).
 pub fn dialog_fill(p: &Palette) -> Color32 {

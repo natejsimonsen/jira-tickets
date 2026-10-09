@@ -54,14 +54,20 @@ pub fn roadmap_epics(app: &App) -> BTreeSet<String> {
     filter::roadmap_epic_keys(&app.store.list(ListId::Epics), &app.cfg.roadmap.initiative_label)
 }
 
-/// How many rows the list would show without the local text filter (for "3 of 20 issues").
-pub fn rows_without_text_filter(app: &App) -> usize {
+/// How many rows the list would show without any local narrowing (Mine, Roadmap, the text filter), for
+/// "4 of 18 issues".
+pub fn rows_without_narrowing(app: &App) -> usize {
     let src = app.rows_list();
     let all = filter::action_items(&app.store.list(src));
     let me = app.me.as_ref().map(|m| m.display_name.as_str());
-    let roadmap_epics = if app.filter.roadmap { roadmap_epics(app) } else { Default::default() };
-    let f = filter::IssueFilter { text: String::new(), roadmap_epics, ..app.filter.clone() };
+    let f = filter::IssueFilter { text: String::new(), mine: false, roadmap: false, roadmap_epics: Default::default(), ..app.filter.clone() };
     filter::visible(&all, &f, src == ListId::Search, me).len()
+}
+
+/// Whether the rows on screen are narrowed locally (B1): Mine, Roadmap or the local text filter. Server results
+/// alone (a search, a text match) are not: they count as "N issues".
+pub fn locally_narrowed(mine: bool, roadmap: bool, text_filter: bool) -> bool {
+    mine || roadmap || text_filter
 }
 
 /// The rows on screen are the server text search for exactly what the box holds.
@@ -476,10 +482,11 @@ pub enum PopupEdge {
     End,
 }
 
-/// A popup frame's side margin, so a selected row's fill sits 4 in from the popup edge (margin 3 + stroke 1).
-const POPUP_MARGIN: i8 = 3;
-/// The popup thumb's outer margin: with the frame's 3 it sits 4 in from the edge, mirroring the rows' 4 on the left.
-const POPUP_THUMB_OUTER: f32 = 1.0;
+/// A popup frame's side margin: a selected row's fill sits 4 inside the stroke, as at the top and bottom
+/// (POPUP_MARGIN_Y; it measured 3 at the sides, round 11 B3).
+const POPUP_MARGIN: i8 = 4;
+/// The popup thumb's outer margin: with the frame's 4 it sits 4 in, mirroring the rows' 4 on the left.
+const POPUP_THUMB_OUTER: f32 = 0.0;
 /// A popup frame's top and bottom margin: 4 inside the stroke (round 8 measured 3).
 const POPUP_MARGIN_Y: i8 = 4;
 /// A popup frame's margin and stroke, both sides.
@@ -575,7 +582,7 @@ fn combo(
 }
 
 /// The search box's placeholder: it filters, searches, and runs JQL on Enter.
-pub const SEARCH_HINT: &str = "Filter or search, Enter for JQL (⌘F)";
+pub const SEARCH_HINT: &str = "Filter or search, Enter run as JQL (⌘F)";
 
 /// What Enter in the search box runs as typed JQL: whatever it holds, plain text included (the hint says
 /// "Enter run as JQL"); the text stays in the box.
@@ -730,11 +737,7 @@ fn filters(app: &mut App, ui: &mut Ui, p: &Palette) {
             app.actions.push(Action::RunSearch(String::new()));
         }
     }
-    let r = ui.add(
-        crate::views::input_field(&mut app.filter.text, SEARCH_HINT, theme::body(14.0), p)
-            .margin(crate::views::input_margin(crate::views::SEARCH_PAD_X))
-            .id(id),
-    );
+    let r = ui.add(crate::views::input_field(&mut app.filter.text, SEARCH_HINT, theme::body(14.0), p).margin(crate::views::search_margin()).id(id));
     if r.changed() {
         app.text_edited = Some(std::time::Instant::now());
     }
@@ -764,13 +767,21 @@ pub fn count_label(shown: usize, total: Option<usize>, loading_first: bool, suff
     };
     match suffix {
         CountSuffix::None => base,
-        CountSuffix::Jql => format!("{base} · JQL"),
-        CountSuffix::Text => format!("{base} · text match"),
+        CountSuffix::Jql => format!("{base}{COUNT_SEP}JQL"),
+        CountSuffix::Text => format!("{base}{COUNT_SEP}text match"),
     }
 }
 
 /// The count row's note while JQL-looking text sits in the box unrun (the local filter is off for it).
-pub const JQL_ENTER_NOTE: &str = "· Enter to run as JQL";
+pub const JQL_ENTER_NOTE: &str = "Enter run as JQL";
+
+/// The separator before anything the count row adds after the count: mode suffixes and the Enter note alike.
+pub const COUNT_SEP: &str = " · ";
+
+/// The count row's Enter note as it follows the count in the same line: the suffixes' own separator (B4).
+pub fn count_note(note: &str) -> String {
+    format!("{COUNT_SEP}{note}")
+}
 
 /// Whether the box holds JQL-looking text that has not been run: not the typed search on screen (`typed_shown`
 /// with `last_jql`) and nothing in flight.
@@ -852,7 +863,7 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
     let debouncing = text_debouncing(term, app.text_search.as_deref(), typed);
     let row_spinner = crate::views::spinner_slots(syncing, pending, app.search_from_refresh, loading_first).1 || debouncing;
     let text_filter = !app.filter.text.trim().is_empty() && !filter::looks_like_jql(&app.filter.text) && !text_rows_shown(app);
-    let total = text_filter.then(|| rows_without_text_filter(app));
+    let total = locally_narrowed(app.filter.mine, app.filter.roadmap, text_filter).then(|| rows_without_narrowing(app));
     let showing_search = src == ListId::Search && app.store.lists.contains_key(&ListId::Search);
     let label = count_label(rows.len(), total, loading_first, count_suffix(app.typed_shown, app.text_shown.is_some(), showing_search));
     let box_text = !app.filter.text.trim().is_empty() || (app.typed_search && app.search_active);
@@ -871,10 +882,16 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
             }
             ui.label(RichText::new(label).color(color).size(12.0));
         } else {
-            ui.label(RichText::new(label).color(color).size(12.0));
             if !row_spinner && jql_awaiting_enter(&app.filter.text, app.last_search_jql.as_deref(), app.typed_search && app.search_active, pending) {
-                // The rows are not filtered by JQL-looking text; say what Enter does with it.
-                ui.label(RichText::new(JQL_ENTER_NOTE).color(p.muted).size(12.0));
+                // The rows are not filtered by JQL-looking text; say what Enter does with it, in the count's own
+                // line so its "·" is spaced like the mode suffixes'.
+                let mut job = egui::text::LayoutJob::default();
+                let fmt = |c: egui::Color32| egui::TextFormat { font_id: theme::body(12.0), color: c, ..Default::default() };
+                job.append(&label, 0.0, fmt(color));
+                job.append(&count_note(JQL_ENTER_NOTE), 0.0, fmt(p.muted));
+                ui.label(job);
+            } else {
+                ui.label(RichText::new(label).color(color).size(12.0));
             }
             if row_spinner {
                 crate::views::icons::spinner(ui, crate::views::icons::INLINE_SPINNER, p);
@@ -1462,6 +1479,13 @@ mod tests {
         assert_eq!(count_label(2, None, false, CountSuffix::Jql), "2 issues · JQL");
         assert_eq!(count_label(3, Some(20), false, CountSuffix::None), "3 of 20 issues", "local text filter");
         assert_eq!(count_label(20, Some(20), false, CountSuffix::None), "20 issues", "a filter that hides nothing");
+        // B1: Mine and Roadmap narrow locally too, so they count "N of M" like the text filter; server results don't.
+        assert!(locally_narrowed(true, false, false), "Mine");
+        assert!(locally_narrowed(false, true, false), "Roadmap");
+        assert!(locally_narrowed(false, false, true), "text filter");
+        assert!(!locally_narrowed(false, false, false), "server results alone: N issues");
+        assert_eq!(count_label(4, Some(18), false, CountSuffix::None), "4 of 18 issues", "Mine or Roadmap");
+        assert_eq!(count_label(3, Some(9), false, CountSuffix::Text), "3 of 9 issues · text match", "Mine over a text match");
         assert_eq!(count_label(0, Some(1), false, CountSuffix::None), "0 of 1 issue");
         assert_eq!(count_label(3, Some(20), false, CountSuffix::Jql), "3 of 20 issues · JQL");
         assert_eq!(count_label(14, None, false, CountSuffix::Text), "14 issues · text match", "a text search's rows");
@@ -1546,7 +1570,7 @@ mod tests {
         assert_eq!(enter_jql(" status = Blocked "), Some("status = Blocked".into()));
         assert_eq!(enter_jql("alpha"), Some("alpha".into()), "plain text too, as the hint says");
         assert_eq!(enter_jql("  "), None);
-        assert_eq!(SEARCH_HINT, "Filter or search, Enter for JQL (⌘F)");
+        assert_eq!(SEARCH_HINT, "Filter or search, Enter run as JQL (⌘F)", "the hint bar's words (B4)");
     }
 
     #[test]
@@ -1585,12 +1609,12 @@ mod tests {
 
     #[test]
     fn one_popup_width_rule() {
-        // Rows pad 12 either side; the frame is 8; 2 px rounding room.
-        assert_eq!(popup_width(190.0, 100.0, 12.0, 500.0), 190.0, "the combo's width when the options fit");
-        assert_eq!(popup_width(120.0, 100.0, 12.0, 500.0), 134.0, "the widest option is never cut");
-        assert_eq!(popup_width(190.0, 300.0, 12.0, 500.0), 334.0, "grows for a wide option");
-        assert_eq!(popup_width(190.0, 900.0, 12.0, 500.0), 500.0, "capped at the pane's right edge");
-        assert_eq!(popup_width(190.0, 900.0, 12.0, 100.0), 190.0, "never narrower than the combo");
+        // Rows pad POPUP_ROW_PAD (7) either side; the frame is 10 (4 + stroke 1, each side); 2 px rounding room.
+        assert_eq!(popup_width(190.0, 100.0, POPUP_ROW_PAD, 500.0), 190.0, "the combo's width when the options fit");
+        assert_eq!(popup_width(120.0, 100.0, POPUP_ROW_PAD, 500.0), 126.0, "the widest option is never cut");
+        assert_eq!(popup_width(190.0, 300.0, POPUP_ROW_PAD, 500.0), 326.0, "grows for a wide option");
+        assert_eq!(popup_width(190.0, 900.0, POPUP_ROW_PAD, 500.0), 500.0, "capped at the pane's right edge");
+        assert_eq!(popup_width(190.0, 900.0, POPUP_ROW_PAD, 100.0), 190.0, "never narrower than the combo");
         assert_eq!(POPUP_ROW_PAD + POPUP_FRAME / 2.0, INNER_X, "popup text starts where the combo's does");
     }
 
@@ -1615,7 +1639,7 @@ mod tests {
         let (h, bar) = popup_scroll(35);
         assert!(bar, "35 epics: the bar shows while open");
         assert_eq!(h % POPUP_ROW_H, 0.0, "never a row cut mid-text");
-        assert_eq!(POPUP_FRAME / 2.0, 4.0, "selected-row fill inset 4");
+        assert_eq!(POPUP_FRAME / 2.0 - 1.0, 4.0, "selected-row fill 4 inside the stroke");
     }
 
     #[test]
@@ -1735,10 +1759,21 @@ mod tests {
         assert_eq!(right - (chevron_centre_x(right) + CHEVRON_HALF_W + CHEVRON_STROKE / 2.0), INNER_X);
         // B2: the popup thumb sits 4 in (it measured 3, the frame margin alone), mirroring the rows' 4 on the left.
         assert_eq!(f32::from(POPUP_MARGIN) + POPUP_THUMB_OUTER, 4.0);
+        // B3 (round 11): rows sit 4 inside the stroke on all four sides.
+        assert_eq!(POPUP_MARGIN, POPUP_MARGIN_Y);
+        assert_eq!(POPUP_MARGIN, 4);
     }
 
     #[test]
     fn the_count_says_enter_runs_unrun_jql() {
+        // B4 (round 11): the note uses the bar's words and the suffixes' separator, in one line with the count.
+        assert_eq!(JQL_ENTER_NOTE, "Enter run as JQL");
+        assert_eq!(count_note(JQL_ENTER_NOTE), " · Enter run as JQL");
+        assert!(count_label(2, None, false, CountSuffix::Jql).ends_with(&count_note("JQL")), "one separator");
+        // B2: the search box's text is centred like a combo's (even margins top and bottom).
+        let m = crate::views::search_margin();
+        assert_eq!((m.top, m.bottom), (4, 4));
+        assert_eq!(f32::from(m.left), crate::views::SEARCH_PAD_X);
         assert!(jql_awaiting_enter("status = Blocked", None, false, false), "typed, not run");
         assert!(!jql_awaiting_enter("status = Blocked", Some("status = Blocked"), true, false), "its rows are on screen");
         assert!(jql_awaiting_enter("status = Done", Some("status = Blocked"), true, false), "edited after a run");
