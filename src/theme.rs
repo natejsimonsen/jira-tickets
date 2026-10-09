@@ -85,7 +85,7 @@ pub const DARK: Palette = Palette {
     on_accent: hex(0x171716),
     on_track: hex(0x5cc28a),
     at_risk: hex(0xe6b04a),
-    off_track: hex(0xec6d66),
+    off_track: hex(0xf48a83),
     no_health: hex(0x7d7b76),
     done: hex(0xa3a29d),
     today: hex(0xec6d66),
@@ -127,7 +127,7 @@ const AMBER: u32 = 0xb07a0c;
 
 /// Ten epic hues, evenly spaced 36° apart from 18°, at one luminance so all ten read alike. Epic pills are
 /// outline-only (status is the one filled pill), so the palette needs no room around the status hues.
-/// Hues go to epics in order of first appearance (`extend_epic_slots`).
+/// Hues go to the epics on screen first, farthest free hue first (`assign_epic_slots`).
 pub const EPIC_HUES: [u32; 10] = [0xb6572e, 0x7d741f, 0x507f20, 0x21842b, 0x208264, 0x287b9e, 0x4053ff, 0x9a3ef6, 0xc231b4, 0xd23464];
 
 /// `#rrggbb` or `rrggbb`.
@@ -149,10 +149,10 @@ fn mix(c: Color32, toward: u8, t: f32) -> Color32 {
 /// (accent-tinted) selected-row fill.
 const LIGHT_WASH: u8 = 76;
 const DARK_WASH: u8 = 72;
-/// Dark stripe (and epic outline): a third of the way to white, so it holds >3.6:1 on the selected row.
-const DARK_STRIPE_MIX: f32 = 0.35;
+/// Dark stripe (and epic outline): 42% of the way to white, so it holds ≥4:1 on the selected row.
+const DARK_STRIPE_MIX: f32 = 0.42;
 /// Dark pill text: a little past halfway to white, so it holds 4.5:1 on the lighter selected row too.
-const DARK_TEXT_MIX: f32 = 0.55;
+const DARK_TEXT_MIX: f32 = 0.62;
 
 /// A translucent wash of the hue behind text in a darker (light theme) or
 /// lighter (dark theme) shade of it, for at least 4.5:1 contrast. The row's edge stripe is the
@@ -187,19 +187,52 @@ pub fn status_tint(status_name: &str, category: &str, p: &Palette, overrides: &B
     tint_from_hue(base, p)
 }
 
-/// Gives each epic key not yet in `slots` the next hue slot, in the order `keys` arrive: the loaded epic list
-/// in Jira rank order first, then any other parent seen on screen. Slots never change once given, so an epic
-/// keeps its hue in every list for the session; after ten epics the hues repeat in the same order.
-pub fn extend_epic_slots<'a>(slots: &mut BTreeMap<String, usize>, keys: impl IntoIterator<Item = &'a str>) {
-    for k in keys {
+/// The order hue slots are handed out in: farthest free hue first, so the first epics on screen sit ≥72° apart.
+pub const EPIC_SLOT_ORDER: [usize; 10] = [0, 5, 2, 7, 1, 6, 3, 8, 4, 9];
+
+/// Gives epics their hue slots, kept in `slots` for the session. `visible` are the epics of the rows on screen
+/// (in row order, then the selected issue's), `rest` the loaded epic list. Visible epics come first: one that
+/// already has a slot no other visible epic holds keeps it; a new one, or one whose slot another visible epic
+/// already holds, takes the first free slot in EPIC_SLOT_ORDER. So up to ten visible epics always get ten
+/// distinct hues, and an epic keeps its hue across lists unless keeping it would make two visible epics alike.
+/// The rest of the epic list then takes slots in order. Config overrides are applied on top (`epic_tint_in`).
+pub fn assign_epic_slots<'a>(slots: &mut BTreeMap<String, usize>, visible: impl IntoIterator<Item = &'a str>, rest: impl IntoIterator<Item = &'a str>) {
+    let mut seen: Vec<&str> = Vec::new();
+    for k in visible {
+        if !seen.contains(&k) {
+            seen.push(k);
+        }
+    }
+    let mut used = [false; EPIC_HUES.len()];
+    let mut pending = Vec::new();
+    for &k in &seen {
+        match slots.get(k) {
+            Some(&s) if !used[s % EPIC_HUES.len()] => used[s % EPIC_HUES.len()] = true,
+            _ => pending.push(k),
+        }
+    }
+    for k in pending {
+        match EPIC_SLOT_ORDER.iter().find(|&&s| !used[s]) {
+            Some(&s) => {
+                used[s] = true;
+                slots.insert(k.to_string(), s);
+            }
+            // More than ten epics on screen: a known epic keeps its hue, a new one takes the next in order.
+            None => {
+                let next = EPIC_SLOT_ORDER[slots.len() % EPIC_HUES.len()];
+                slots.entry(k.to_string()).or_insert(next);
+            }
+        }
+    }
+    for k in rest {
         if !slots.contains_key(k) {
-            let next = slots.len() % EPIC_HUES.len();
+            let next = EPIC_SLOT_ORDER[slots.len() % EPIC_HUES.len()];
             slots.insert(k.to_string(), next);
         }
     }
 }
 
-/// An epic's tint: the config override for its exact key wins, else its slot's hue (see `extend_epic_slots`).
+/// An epic's tint: the config override for its exact key wins, else its slot's hue (see `assign_epic_slots`).
 pub fn epic_tint_in(epic_key: &str, slots: &BTreeMap<String, usize>, p: &Palette, overrides: &BTreeMap<String, String>) -> Tint {
     let slot = slots.get(epic_key).copied().unwrap_or(0);
     let base = overrides.get(epic_key).and_then(|v| parse_hex(v)).unwrap_or_else(|| hex(EPIC_HUES[slot % EPIC_HUES.len()]));
@@ -354,6 +387,7 @@ fn fonts() -> FontDefinitions {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeSet;
 
     fn none() -> BTreeMap<String, String> {
         BTreeMap::new()
@@ -571,23 +605,45 @@ mod tests {
     }
 
     #[test]
-    fn epic_hues_go_by_first_appearance() {
+    fn visible_epics_get_distinct_hues() {
+        let keys: Vec<String> = (100..134).map(|n| format!("CI-{n}")).collect();
+        let all: Vec<&str> = keys.iter().map(String::as_str).collect();
         let mut slots = BTreeMap::new();
-        // The epic list in rank order first; two epics named alike are still two keys, two hues.
-        extend_epic_slots(&mut slots, ["CI-9", "CI-3", "CI-7"]);
-        assert_eq!((slots["CI-9"], slots["CI-3"], slots["CI-7"]), (0, 1, 2));
-        // Rows seen later: known keys keep their slot, new ones take the next.
-        extend_epic_slots(&mut slots, ["CI-7", "CI-1", "CI-9"]);
-        assert_eq!((slots["CI-7"], slots["CI-1"], slots["CI-9"]), (2, 3, 0), "same key, same hue in every list");
-        // Distinct until the palette is exhausted, then repeating in order.
-        let keys: Vec<String> = (100..120).map(|n| format!("CI-{n}")).collect();
-        let mut fresh = BTreeMap::new();
-        extend_epic_slots(&mut fresh, keys.iter().map(String::as_str));
-        let first: std::collections::BTreeSet<_> = keys[..EPIC_HUES.len()].iter().map(|k| fresh[k]).collect();
-        assert_eq!(first.len(), EPIC_HUES.len());
-        assert_eq!(fresh[&keys[EPIC_HUES.len()]], 0);
-        let t = |k: &str, s: &BTreeMap<String, usize>| epic_tint_in(k, s, &LIGHT, &none());
-        assert_ne!(t("CI-9", &slots), t("CI-3", &slots));
+        // The full 34-epic list arrives first (nothing on screen yet): slots wrap mod 10.
+        assign_epic_slots(&mut slots, [], all.iter().copied());
+        // Then rows show nine epics whose list slots collide (CI-100, CI-110 and CI-120 share slot 0, ...).
+        let visible = ["CI-100", "CI-110", "CI-120", "CI-101", "CI-111", "CI-102", "CI-112", "CI-103", "CI-113"];
+        assign_epic_slots(&mut slots, visible, all.iter().copied());
+        let hues: BTreeSet<usize> = visible.iter().map(|k| slots[*k]).collect();
+        assert_eq!(hues.len(), visible.len(), "≤10 distinct visible epics, distinct hues: {slots:?}");
+        // Ten on screen: all ten hues.
+        let ten: Vec<&str> = all[20..30].to_vec();
+        assign_epic_slots(&mut slots, ten.iter().copied(), all.iter().copied());
+        assert_eq!(ten.iter().map(|k| slots[*k]).collect::<BTreeSet<_>>().len(), 10);
+        // Stable: running again (every frame) moves nothing.
+        let before = slots.clone();
+        assign_epic_slots(&mut slots, ten.iter().copied(), all.iter().copied());
+        assert_eq!(slots, before);
+    }
+
+    #[test]
+    fn epic_hues_go_farthest_first_and_stay_across_lists() {
+        let mut slots = BTreeMap::new();
+        assign_epic_slots(&mut slots, ["CI-9", "CI-3", "CI-7", "CI-9"], ["CI-1", "CI-2"]);
+        assert_eq!((slots["CI-9"], slots["CI-3"], slots["CI-7"]), (0, 5, 2), "farthest free hue first, row order");
+        assert_eq!((slots["CI-1"], slots["CI-2"]), (EPIC_SLOT_ORDER[3], EPIC_SLOT_ORDER[4]), "then the rest of the list");
+        // The first four slots are ≥72° apart (36° a slot).
+        for (i, a) in EPIC_SLOT_ORDER[..4].iter().enumerate() {
+            for b in &EPIC_SLOT_ORDER[i + 1..4] {
+                let d = (*a as i32 - *b as i32).rem_euclid(10).min((*b as i32 - *a as i32).rem_euclid(10));
+                assert!(d * 36 >= 72, "{a} {b}");
+            }
+        }
+        // Another list: a known key keeps its hue; a new one takes a slot free on screen.
+        assign_epic_slots(&mut slots, ["CI-7", "CI-4", "CI-3"], []);
+        assert_eq!((slots["CI-7"], slots["CI-3"]), (2, 5), "same key, same hue in every list");
+        assert!(![2, 5].contains(&slots["CI-4"]));
+        assert_eq!(EPIC_SLOT_ORDER.iter().collect::<BTreeSet<_>>().len(), 10);
     }
 
     #[test]
@@ -613,7 +669,7 @@ mod tests {
             let s = tint_from_hue(hex(h), &LIGHT).stripe;
             assert!(contrast(s, LIGHT.surface) >= 4.0, "{h:06x}: {:.2}", contrast(s, LIGHT.surface));
         }
-        assert_eq!(tint_from_hue(base, &DARK).stripe, mix(base, 255, 0.35), "dark stripe a third to white");
+        assert_eq!(tint_from_hue(base, &DARK).stripe, mix(base, 255, DARK_STRIPE_MIX), "dark stripe 42% to white");
         for &h in &EPIC_HUES {
             let s = tint_from_hue(hex(h), &DARK).stripe;
             assert!(contrast(s, DARK.selected_row) > 3.6, "{h:06x}: {:.2}", contrast(s, DARK.selected_row));

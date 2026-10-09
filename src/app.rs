@@ -237,7 +237,7 @@ pub struct App {
     pub text_shown: Option<String>,
     /// Jira rejected a configured member, so team queries match labels only until restart.
     pub members_disabled: bool,
-    /// Each epic's hue slot, given in order of first appearance and kept for the session (`theme::extend_epic_slots`).
+    /// Each epic's hue slot, given to the epics on screen first and kept for the session (`theme::assign_epic_slots`).
     pub epic_slots: std::collections::BTreeMap<String, usize>,
     /// Unposted comment text, keyed by issue key.
     pub drafts: HashMap<String, String>,

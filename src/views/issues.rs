@@ -9,19 +9,13 @@ use crate::views::{outline_pill, outline_pill_selected, pill_outlined, small_lin
 use egui::{CornerRadius, Frame, Margin, Rect, RichText, Sense, Stroke, Ui, vec2};
 use std::collections::BTreeSet;
 
-/// Gives hue slots to epics not seen yet this session: the loaded epic list in rank order, then the parents of
-/// the rows on screen and of the selected issue (see `theme::extend_epic_slots`).
+/// Gives hue slots to the epics on screen first (row order, then the selected issue's parent), then to the
+/// rest of the loaded epic list (see `theme::assign_epic_slots`).
 pub fn track_epics(app: &mut App) {
     let selected = app.selected.as_ref().and_then(|k| app.store.get(k)).and_then(|i| i.parent_key.clone());
-    let keys: Vec<String> = app
-        .store
-        .list(ListId::Epics)
-        .iter()
-        .map(|e| e.key.clone())
-        .chain(current_rows(app).iter().filter_map(|i| i.parent_key.clone()))
-        .chain(selected)
-        .collect();
-    theme::extend_epic_slots(&mut app.epic_slots, keys.iter().map(String::as_str));
+    let visible: Vec<String> = current_rows(app).iter().filter_map(|i| i.parent_key.clone()).chain(selected).collect();
+    let rest: Vec<String> = app.store.list(ListId::Epics).iter().map(|e| e.key.clone()).collect();
+    theme::assign_epic_slots(&mut app.epic_slots, visible.iter().map(String::as_str), rest.iter().map(String::as_str));
 }
 
 /// Keys of the loaded epics labelled as roadmap initiatives (cheap: a few dozen epics).
@@ -154,6 +148,49 @@ pub fn fit_pills(pills: &[(PillKind, f32, f32)], available: f32, spacing: f32) -
         }
     }
     out
+}
+
+/// An epic name shortened to `max_chars` (counting the "…"): whole when it fits; else without a trailing
+/// parenthetical ("Cluster (on-prem)" → "Cluster"); else cut at a word boundary with "…"; a single word
+/// too long for the room is cut mid-word only as a last resort.
+pub fn shorten_epic(name: &str, max_chars: usize) -> String {
+    let len = |t: &str| t.chars().count();
+    if len(name) <= max_chars {
+        return name.to_string();
+    }
+    let base = match name.trim_end().strip_suffix(')').and_then(|t| t.rfind(" (").map(|i| &name[..i])) {
+        Some(b) if !b.trim().is_empty() => b.trim_end(),
+        _ => name,
+    };
+    if len(base) <= max_chars {
+        return base.to_string();
+    }
+    let room = max_chars.saturating_sub(1);
+    let mut out = String::new();
+    for w in base.split_whitespace() {
+        let next = if out.is_empty() { w.to_string() } else { format!("{out} {w}") };
+        if len(&next) > room {
+            break;
+        }
+        out = next;
+    }
+    // Never end on a connector or punctuation ("Cost Insights &…").
+    while let Some(last) = out.split_whitespace().last() {
+        if last.chars().all(|c| c.is_alphanumeric()) && !["and", "or", "of", "for", "the", "to", "a"].contains(&last.to_lowercase().as_str()) {
+            break;
+        }
+        out = out[..out.len() - last.len()].trim_end().to_string();
+    }
+    if out.is_empty() {
+        out = base.chars().take(room).collect();
+    }
+    format!("{}…", out.trim_end())
+}
+
+/// The longest `shorten_epic` form that fits `max_w` by `measure`.
+pub fn fit_epic(name: &str, max_w: f32, measure: impl Fn(&str) -> f32) -> String {
+    let n = name.chars().count();
+    (1..=n).rev().map(|c| shorten_epic(name, c)).find(|t| measure(t) <= max_w).unwrap_or_else(|| "…".to_string())
 }
 
 /// The key column's width: the widest key in the list, so every summary starts on one edge.
@@ -338,7 +375,8 @@ pub fn sprint_combo_text(answered: bool, label: &str) -> (String, bool) {
 
 /// The combo widths, in row order team, sprint, epic, and whether the team combo uses its short labels.
 /// One rule for all three: each is its widest option (`*_nat`, text + chevron), never the current label, so
-/// nothing moves when a selection changes; only the search box stretches. When the row is short, sprint is
+/// nothing moves when a selection changes; only the search box stretches. The one exception: in its short form
+/// the team combo is its current short label's width (`team_short_nat`). When the row is short, sprint is
 /// never cut; epic gives way first, down to EPIC_MIN; then team falls back to its short labels, then is cut.
 pub fn combo_widths(team_full_nat: f32, team_short_nat: f32, sprint_nat: f32, epic_nat: f32, available: f32) -> ([f32; 3], bool) {
     let room = (available - 2.0 * GAP).max(0.0);
@@ -494,7 +532,9 @@ fn filters(app: &mut App, ui: &mut Ui, p: &Palette) {
 
     let widest = |ui: &Ui, rows: &mut dyn Iterator<Item = String>| rows.map(|r| text_w(ui, &r)).fold(0.0, f32::max);
     let team_widest = widest(ui, &mut team_options.iter().map(|(_, l)| l.clone()));
-    let team_short_nat = widest(ui, &mut team_options.iter().map(|(_, l)| team_combo_label(l, false).to_string())) + COMBO_CHROME;
+    // Once the team combo falls back to its short label it is sized to that label ("PLAT"), not to the widest
+    // short option, so a narrow row does not carry ~60 px of slack (B8).
+    let team_short_nat = text_w(ui, team_combo_label(&team_label, false)) + COMBO_CHROME;
     let sprint_widest = widest(ui, &mut sprint_options.iter().map(|(_, l)| l.clone()));
     let epic_widest = widest(ui, &mut epics.iter().map(|(k, s)| format!("{}{}", entry(k, s), suffix(k))).chain(["All epics".to_string()]));
     // The combos' own widths come from constant samples, so nothing moves when sprints or issues land; the
@@ -743,9 +783,10 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
                     ui.set_width(ui.available_width());
                     ui.spacing_mut().item_spacing.y = ROW_LINE_GAP;
                     ui.horizontal(|ui| {
-                        let g = ui.painter().layout_no_wrap(i.key.clone(), theme::mono(12.5), p.muted);
+                        let key_color = row_key_color(is_sel, p);
+                        let g = ui.painter().layout_no_wrap(i.key.clone(), theme::mono(12.5), key_color);
                         let (kr, _) = ui.allocate_exact_size(vec2(key_w, g.size().y), Sense::hover());
-                        ui.painter().galley(kr.min, g, p.muted);
+                        ui.painter().galley(kr.min, g, key_color);
                         let painter = ui.painter().clone();
                         let title = crate::views::truncate_text(&i.summary, ui.available_width(), |t| {
                             painter.layout_no_wrap(t.to_string(), theme::bold(13.5), p.text).size().x
@@ -783,6 +824,8 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
                     pills.sort_by_key(|(k, _, _)| pill_rank(*k));
                     ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing = vec2(PILL_GAP, 4.0);
+                        // The pill row starts on the key's ink, not its side bearing.
+                        ui.add_space(KEY_INK_INSET);
                         let painter = ui.painter().clone();
                         let measure = |t: &str| painter.layout_no_wrap(t.to_string(), theme::body(12.0), p.text).size().x;
                         let pad = 2.0 * crate::views::ROW_PILL_MARGIN.x;
@@ -792,7 +835,11 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
                         for (((kind, full, look), w), (_, full_w, _)) in pills.iter().zip(fit).zip(&widths) {
                             let Some(w) = w else { continue };
                             let source = if *kind == PillKind::Assignee && w < *full_w { short(*kind, full) } else { full.clone() };
-                            let text = crate::views::truncate_text(&source, w - pad, measure);
+                            let text = if *kind == PillKind::Epic {
+                                fit_epic(&source, w - pad, measure)
+                            } else {
+                                crate::views::truncate_text(&source, w - pad, measure)
+                            };
                             let r = match look {
                                 PillLook::Tint(bg, fg) => pill_outlined(ui, &text, *bg, *fg),
                                 PillLook::Epic(fg, edge) => {
@@ -878,17 +925,19 @@ const COUNT_GAP: f32 = 7.0;
 /// Count row → first card.
 const COUNT_TO_ROWS: f32 = 4.0;
 /// Space between a row's pills.
-const PILL_GAP: f32 = 6.0;
+const PILL_GAP: f32 = 8.0;
+/// The mono key's left side bearing at 12.5: the pill row moves in by it so pills and key share an ink edge.
+const KEY_INK_INSET: f32 = 1.0;
 /// Clearance under the last row: a toast's height (~34) plus its 16 px gap, rounded up.
 const LIST_BOTTOM_PAD: f32 = 56.0;
 /// Rows stack as one list: −1 overlaps neighbouring borders, so a single 1 px divider separates rows, and
 /// only the list's outer corners are rounded (no doubled lines or notches at the seams).
 const ROW_GAP: f32 = -1.0;
 /// Row inner vertical padding. The title's line box carries ~4 px of leading above the caps, so 0 above reads
-/// as ~4–5, like the 4 under the pills; with 1 px between the lines and the pills at their 8/2 padding (18
-/// tall) the pitch stays 44 px, rule 10's two-line row, and 15 full rows fit at 1440×900.
+/// as ~4–5; 6 under the pills (round 6 measured the pitch at 42 with 4) makes the pitch 44 px, rule 10's
+/// two-line row, and 15 full rows still fit at 1440×900.
 const ROW_PAD_TOP: i8 = 0;
-const ROW_PAD_BOTTOM: i8 = 4;
+const ROW_PAD_BOTTOM: i8 = 6;
 const ROW_LINE_GAP: f32 = 1.0;
 /// One row's pitch (rows overlap by ROW_GAP's 1 px), for the density check.
 pub const ROW_PITCH: f32 = 44.0;
@@ -905,6 +954,12 @@ fn row_id(key: &str) -> egui::Id {
 }
 
 /// One selection state: the selected row is filled; any other row fills only under the pointer.
+/// The key's colour: `muted` on plain and hovered rows, `text` on the selected row, where muted only reaches
+/// ~4.6:1 on the selection fill (round-4 T2, restored in round 6).
+pub fn row_key_color(selected: bool, p: &Palette) -> egui::Color32 {
+    if selected { p.text } else { p.muted }
+}
+
 pub fn row_fill(selected: bool, hovered: bool, p: &Palette) -> egui::Color32 {
     match (selected, hovered) {
         (true, _) => p.selected_row,
@@ -1199,6 +1254,30 @@ mod tests {
         assert_eq!(sprint_combo_text(false, "All sprints"), ("Active sprint".to_string(), true));
         assert_eq!(sprint_combo_text(true, "Sprint 91 (active)"), ("Sprint 91 (active)".to_string(), false));
         assert_eq!(sprint_combo_text(true, "All sprints"), ("All sprints".to_string(), false), "a board with no active sprint");
+    }
+
+    #[test]
+    fn epic_names_shorten_at_word_boundaries() {
+        assert_eq!(shorten_epic("Cluster (on-prem)", 40), "Cluster (on-prem)", "fits whole");
+        assert_eq!(shorten_epic("Cluster (on-prem)", 14), "Cluster", "the parenthetical goes first");
+        assert_eq!(shorten_epic("Cost Insights & Analytics", 20), "Cost Insights…", "a word boundary, no dangling &");
+        assert_eq!(shorten_epic("Cost Insights & Analytics", 12), "Cost…");
+        assert_eq!(shorten_epic("Observability and dashboards", 20), "Observability…", "no dangling connector");
+        assert_eq!(shorten_epic("Supercalifragilistic", 8), "Superca…", "one long word: cut as a last resort");
+        assert!(shorten_epic("Cluster (on-prem migration) upgrades", 12).ends_with('…'));
+        let m = |t: &str| t.chars().count() as f32 * 7.0;
+        assert_eq!(fit_epic("Cluster (on-prem)", 100.0, m), "Cluster");
+        assert_eq!(fit_epic("Cluster (on-prem)", 200.0, m), "Cluster (on-prem)");
+    }
+
+    #[test]
+    fn selected_row_key_reads_in_text() {
+        for p in [&theme::LIGHT, &theme::DARK] {
+            assert_eq!(row_key_color(true, p), p.text);
+            assert_eq!(row_key_color(false, p), p.muted);
+            assert!(theme::contrast(row_key_color(true, p), p.selected_row) >= 7.0, "dark={}", p.dark);
+            assert!(theme::contrast(row_key_color(false, p), p.hover_row) >= 4.5, "dark={}", p.dark);
+        }
     }
 
     #[test]
