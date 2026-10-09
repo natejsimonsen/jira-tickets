@@ -516,10 +516,13 @@ pub fn dialog_button(text: &str, p: &Palette) -> egui::Button<'static> {
     button(text, p).fill(dialog_button_fill(p)).stroke(dialog_stroke(p))
 }
 
-/// The dialog button's fill: `surface_2` on the white light dialog; in dark the next step up (#3d3d3a).
+/// The dialog button's fill: `surface_2` on the white light dialog; in dark a raised #424240 (DARK_CANCEL).
 pub fn dialog_button_fill(p: &Palette) -> Color32 {
-    if p.dark { p.selected_row } else { p.surface_2 }
+    if p.dark { DARK_CANCEL } else { p.surface_2 }
 }
+
+/// The dark dialog's raised button fill (Cancel): a step past `selected_row` (#3d3d3a read 1.08:1 off the dialog).
+const DARK_CANCEL: Color32 = Color32::from_rgb(0x42, 0x42, 0x40);
 
 /// Placeholder text for a field, muted, starting exactly where typed text does (the first keystroke moves
 /// nothing).
@@ -975,9 +978,10 @@ mod widget_tests {
         }
         let fill = theme::DARK.tooltip;
         let (b, f) = (theme::DARK.border, fill);
-        // Neutral like `border`: R = G, B a touch lower in the same ratio.
+        // Neutral like `border`: R = G, B a touch lower in about the same ratio (#4a4a47, ruled final in round 8).
         assert_eq!(f.r(), f.g());
-        assert!(((f32::from(f.b()) / f32::from(f.r())) - (f32::from(b.b()) / f32::from(b.r()))).abs() < 0.01, "{f:?}");
+        assert!(((f32::from(f.b()) / f32::from(f.r())) - (f32::from(b.b()) / f32::from(b.r()))).abs() < 0.015, "{f:?}");
+        assert_eq!((theme::LIGHT.tooltip, fill), (Color32::from_rgb(0x3a, 0x3a, 0x37), Color32::from_rgb(0x4a, 0x4a, 0x47)), "round-8 L4 ruling");
         assert!(theme::contrast(theme::DARK.tooltip_text, fill) >= 6.0, "{:.2}", theme::contrast(theme::DARK.tooltip_text, fill));
         for p in [&theme::LIGHT, &theme::DARK] {
             assert_eq!(toast_stroke(p), Stroke::NONE, "shadow only (dark={})", p.dark);
@@ -1005,7 +1009,7 @@ mod widget_tests {
         for p in [&theme::LIGHT, &theme::DARK] {
             let edge = dialog_stroke(p).color;
             assert!(theme::contrast(edge, p.bg) >= 1.3, "field edge on its bg fill, dark={}", p.dark);
-            assert!(theme::contrast(dialog_button_fill(p), dialog_fill(p)) >= 1.05, "Cancel steps off the dialog, dark={}", p.dark);
+            assert!(theme::contrast(dialog_button_fill(p), dialog_fill(p)) >= if p.dark { 1.15 } else { 1.05 }, "Cancel steps off the dialog, dark={}", p.dark);
             assert!(theme::contrast(edge, dialog_button_fill(p)) >= 1.2, "Cancel's edge shows, dark={}", p.dark);
             assert!(theme::contrast(p.text, dialog_button_fill(p)) >= 7.0);
         }
