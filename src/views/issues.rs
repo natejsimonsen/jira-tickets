@@ -246,7 +246,7 @@ pub fn hints_panel(app: &App, ui: &mut Ui, p: &Palette) {
                     has_selection: app.selected.is_some(),
                     focus,
                     search_shown: esc_clears_search(app.search_active, app.typed_search, app.text_search.is_some()),
-                    read_only: crate::jira::READ_ONLY.load(std::sync::atomic::Ordering::Relaxed),
+                    read_only: super::detail::composer_read_only(),
                     placeholder,
                 });
                 hint_bar(ui, crate::keys::hints(c), p);

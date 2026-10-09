@@ -94,10 +94,7 @@ pub fn show(app: &mut App, ui: &mut Ui) {
                     // surface_2, fill only (like code blocks), in both themes; code inside steps off it (`chip_fill_on`).
                     Frame::new().fill(p.surface_2).corner_radius(theme::RADIUS).inner_margin(Margin::same(12)).show(ui, |ui| {
                         ui.set_width(ui.available_width());
-                        ui.horizontal(|ui| {
-                            ui.label(RichText::new(&c.author).font(theme::bold(13.5)));
-                            ui.label(RichText::new(short_date(&c.created)).color(p.muted).size(12.0));
-                        });
+                        comment_header(ui, p, &c.author, &short_date(&c.created));
                         ui.add_space(4.0);
                         adf_view::show_value(ui, &c.body, p, p.surface_2);
                     });
@@ -107,7 +104,12 @@ pub fn show(app: &mut App, ui: &mut Ui) {
                 if !issue.comments.is_empty() {
                     ui.add_space(4.0);
                 }
-                composer(app, ui, p, &key);
+                if composer_shown(crate::jira::READ_ONLY.load(std::sync::atomic::Ordering::Relaxed), snapshot_composer()) {
+                    composer(app, ui, p, &key);
+                } else {
+                    // Read-only: one muted line where the box would be; nothing to type into or press.
+                    ui.label(RichText::new(READ_ONLY_NOTE).size(14.0).color(p.muted));
+                }
             });
             ui.add_space(FIELDS_GUTTER);
             ui.vertical(|ui| {
@@ -136,8 +138,51 @@ const LABEL_TO_BOX: f32 = 16.0;
 const COMMENT_GAP: f32 = 12.0;
 /// The composer's fixed height.
 const COMPOSER_H: f32 = 72.0;
-/// The composer's inner margin, the same as a comment card's.
-const COMPOSER_PAD: f32 = 12.0;
+/// The composer's inner margin: with its 1 px stroke, text sits 12 in, on a comment card's text edge.
+const COMPOSER_PAD: f32 = 11.0;
+/// The composer's stroke.
+const COMPOSER_STROKE: f32 = 1.0;
+/// Comment author → date.
+const COMMENT_META_GAP: f32 = 8.0;
+/// What read-only mode shows instead of the composer.
+pub const READ_ONLY_NOTE: &str = "Read-only, comments can't be posted";
+
+/// A comment card's header: the author in bold, 8, the date muted. Returns both labels' rects.
+pub fn comment_header(ui: &mut Ui, p: &Palette, author: &str, date: &str) -> (egui::Rect, egui::Rect) {
+    ui.horizontal(|ui| {
+        // Set here: the detail pane zeroes item spacing for its column gutter, and this row inherits it.
+        ui.spacing_mut().item_spacing.x = COMMENT_META_GAP;
+        let a = ui.label(RichText::new(author).font(theme::bold(13.5))).rect;
+        let d = ui.label(RichText::new(date).color(p.muted).size(12.0)).rect;
+        (a, d)
+    })
+    .inner
+}
+
+/// Whether the composer box and Comment button are drawn: not in read-only mode, unless the snapshot-only
+/// override asks for the writable UI (writes stay blocked by READ_ONLY either way).
+pub fn composer_shown(read_only: bool, snapshot_override: bool) -> bool {
+    !read_only || snapshot_override
+}
+
+/// Captures only: `JIRA_TICKETS_SNAPSHOT_COMPOSER=1` in a `snapshot` build draws the writable composer so it
+/// can be rated, while every write is still refused by READ_ONLY. Always false in a normal build.
+pub fn snapshot_composer() -> bool {
+    #[cfg(feature = "snapshot")]
+    {
+        static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *ON.get_or_init(|| std::env::var("JIRA_TICKETS_SNAPSHOT_COMPOSER").as_deref() == Ok("1"))
+    }
+    #[cfg(not(feature = "snapshot"))]
+    {
+        false
+    }
+}
+
+/// Writes are blocked and the composer is not drawn: the hint bar offers no composer keys.
+pub fn composer_read_only() -> bool {
+    !composer_shown(crate::jira::READ_ONLY.load(std::sync::atomic::Ordering::Relaxed), snapshot_composer())
+}
 
 /// A section heading; the 24 px above it comes from SECTION_GAP, 8 below.
 fn section_heading(ui: &mut Ui, p: &Palette, text: &str) {
@@ -154,23 +199,22 @@ pub fn composer_id(key: &str) -> egui::Id {
 fn composer(app: &mut App, ui: &mut Ui, p: &Palette, key: &str) {
     let id = composer_id(key);
     let focused = ui.memory(|m| m.has_focus(id));
-    let read_only = crate::jira::READ_ONLY.load(std::sync::atomic::Ordering::Relaxed);
     let draft = app.drafts.entry(key.to_string()).or_default();
     let resp = Frame::new()
         // The one input rule: a step under the detail pane's surface.
         .fill(theme::input_fill(p.surface, p))
-        .stroke(Stroke::new(1.0, if focused { p.accent } else { p.border }))
+        .stroke(Stroke::new(COMPOSER_STROKE, if focused { p.accent } else { p.border }))
         .corner_radius(theme::RADIUS)
-        // The comment cards' 12 on every side.
+        // 11 + the 1 px stroke: the comment cards' 12 to the text on every side.
         .inner_margin(Margin::same(COMPOSER_PAD as i8))
         .show(ui, |ui| {
             ui.add_sized(
-                [ui.available_width(), COMPOSER_H - 2.0 * COMPOSER_PAD],
+                [ui.available_width(), COMPOSER_H - 2.0 * (COMPOSER_PAD + COMPOSER_STROKE)],
                 egui::TextEdit::multiline(draft)
                     .id(id)
                     .frame(Frame::new())
                     .margin(vec2(0.0, 0.0))
-                    .hint_text(RichText::new(composer_hint(read_only)).color(p.muted)),
+                    .hint_text(RichText::new(COMPOSER_HINT).color(theme::placeholder(p))),
             )
         })
         .inner;
@@ -181,7 +225,7 @@ fn composer(app: &mut App, ui: &mut Ui, p: &Palette, key: &str) {
     ui.add_space(BOX_TO_BUTTON - ui.spacing().item_spacing.y);
     ui.allocate_ui_with_layout(vec2(ui.available_width(), crate::views::BUTTON_H), egui::Layout::right_to_left(egui::Align::Center), |ui| {
         ui.spacing_mut().item_spacing.x = 8.0;
-        if ui.add(primary_button_if("Comment", comment_primary(enabled, read_only), p)).on_hover_text(comment_tip(read_only)).clicked() || (post && enabled) {
+        if ui.add(primary_button_if("Comment", enabled, p)).on_hover_text(COMMENT_TIP).clicked() || (post && enabled) {
             app.actions.push(Action::Comment);
         }
         if app.posting.is_some() {
@@ -190,15 +234,11 @@ fn composer(app: &mut App, ui: &mut Ui, p: &Palette, key: &str) {
     });
 }
 
-/// The Comment button's tooltip: in read-only mode the greyed button says why.
-pub fn comment_tip(read_only: bool) -> &'static str {
-    if read_only { "Read-only" } else { "Post the comment (⌘Enter)" }
-}
+/// The Comment button's tooltip.
+pub const COMMENT_TIP: &str = "Post the comment (⌘Enter)";
 
-/// The composer's placeholder: in read-only mode it says nothing can be posted rather than promising ⌘Enter.
-pub fn composer_hint(read_only: bool) -> &'static str {
-    if read_only { "Read-only, comments can't be posted" } else { "Add a comment (⌘Enter to post)" }
-}
+/// The composer's placeholder.
+pub const COMPOSER_HINT: &str = "Add a comment (⌘Enter to post)";
 
 /// Label, 4, value, then 16 to the next group.
 fn field(ui: &mut Ui, p: &Palette, name: &str, value: &str) {
@@ -226,12 +266,6 @@ pub fn detail_columns(window_w: f32, available: f32) -> (f32, f32) {
 /// Composer box → Comment button.
 const BOX_TO_BUTTON: f32 = 12.0;
 
-/// The Comment button is the accent primary only when a post would be sent: never in read-only mode
-/// (⌘Enter still posts there, and the refusal toast explains).
-pub fn comment_primary(enabled: bool, read_only: bool) -> bool {
-    enabled && !read_only
-}
-
 /// The Comment button and ⌘Enter work when the draft has text and no post is in flight.
 pub fn comment_enabled(draft: &str, posting: &Option<String>) -> bool {
     !draft.trim().is_empty() && posting.is_none()
@@ -258,18 +292,24 @@ mod tests {
     }
 
     #[test]
-    fn read_only_composer_promises_nothing() {
-        assert_eq!(composer_hint(true), "Read-only, comments can't be posted");
-        assert_eq!(comment_tip(true), "Read-only");
-        assert_eq!(comment_tip(false), "Post the comment (⌘Enter)");
-        assert_eq!(composer_hint(false), "Add a comment (⌘Enter to post)");
+    fn read_only_draws_no_composer() {
+        assert!(!composer_shown(true, false), "read-only: only the note");
+        assert!(composer_shown(false, false));
+        assert!(composer_shown(true, true), "the snapshot override draws the writable UI");
+        assert!(!snapshot_composer() || cfg!(feature = "snapshot"), "never on outside snapshot builds");
+        assert_eq!(READ_ONLY_NOTE, "Read-only, comments can't be posted");
+        assert_eq!((COMMENT_TIP, COMPOSER_HINT), ("Post the comment (⌘Enter)", "Add a comment (⌘Enter to post)"));
+        assert_eq!(COMPOSER_PAD + COMPOSER_STROKE, 12.0, "text on the comment cards' 12 px edge");
     }
 
     #[test]
-    fn read_only_keeps_the_comment_button_quiet() {
-        assert!(comment_primary(true, false));
-        assert!(!comment_primary(true, true));
-        assert!(!comment_primary(false, false));
+    fn comment_author_and_date_stand_apart() {
+        // Regression (round 7): "Alan Turing2026-07-29 13:28" — the pane's zero item spacing leaked in.
+        let (a, d) = crate::testutil::with_ui(|ui| {
+            ui.spacing_mut().item_spacing.x = 0.0;
+            comment_header(ui, &crate::theme::LIGHT, "Alan Turing", "2026-07-29 13:28")
+        });
+        assert!(d.left() - a.right() >= 8.0, "gap {}", d.left() - a.right());
     }
 
     #[test]

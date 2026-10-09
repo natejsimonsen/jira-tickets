@@ -95,14 +95,17 @@ flow issues-goto 'key:cmd+k;shot:01-box.png;type:CI-1860;shot:02-typed.png;key:e
     '01-box.png|Go-to box (cmd+k) open' \
     '02-typed.png|Go-to box with an issue key typed'
 flow issues-detail 'key:j;key:j;wait:1500;shot:01-detail.png;key:j;wait:1500;shot:02-detail-next.png' \
-    '01-detail.png|Second row selected, detail pane loaded' \
+    '01-detail.png|Second row selected, detail pane loaded (read-only: a muted note instead of the composer)' \
     '02-detail-next.png|Next row selected, detail pane follows'
 # The issues-detail-01 issue (second row): its description is short, so the composer is on screen.
-# Snapshot mode is read-only, so the composer's placeholder is the read-only one. The pointer moves to an empty
-# stretch of the header before the draft shot, so it is not in the frame.
-flow issues-composer "key:j;key:j;wait:1500;shot:00-rest.png;click:comments can't be posted;type:This is a draft comment that will not be posted;hover:900,24;wait:200;shot:01-draft.png" \
-    '00-rest.png|Composer at rest (hint text, disabled Comment)' \
-    '01-draft.png|Comment composer focused with an unposted draft (Comment enabled)'
+# Snapshot mode is read-only, where the app shows only a muted note instead of the composer (see issues-detail).
+# JIRA_TICKETS_SNAPSHOT_COMPOSER=1 (snapshot builds only) draws the writable composer for this flow while every
+# write stays blocked by read-only mode. The pointer moves to an empty stretch of the header before the draft shot.
+flow_env=(JIRA_TICKETS_SNAPSHOT_COMPOSER=1)
+flow issues-composer "key:j;key:j;wait:1500;shot:00-rest.png;click:Add a comment;type:This is a draft comment that will not be posted;hover:900,24;wait:200;shot:01-draft.png" \
+    '00-rest.png|Writable composer at rest (JIRA_TICKETS_SNAPSHOT_COMPOSER=1; writes still blocked): placeholder, quiet Comment' \
+    '01-draft.png|Writable composer focused with an unposted draft, Comment primary (JIRA_TICKETS_SNAPSHOT_COMPOSER=1)'
+flow_env=()
 flow pickers-transition 'key:j;wait:800;key:t;wait:1500;shot:01-open.png;key:down;shot:02-moved.png;key:enter;wait:800;shot:03-readonly-toast.png' \
     '01-open.png|Transition picker open' \
     '02-moved.png|Transition picker cursor moved down' \

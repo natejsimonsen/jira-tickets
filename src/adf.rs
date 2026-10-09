@@ -58,7 +58,7 @@ fn block(n: &Value) -> Option<Block> {
         "heading" => Block::Heading { level: n["attrs"]["level"].as_u64().unwrap_or(1) as u8, spans: spans(n.get("content")) },
         "bulletList" | "orderedList" => Block::List {
             ordered: t == "orderedList",
-            items: n["content"].as_array().map(|a| a.iter().map(|li| blocks(li.get("content"))).collect()).unwrap_or_default(),
+            items: n["content"].as_array().map(|a| a.iter().map(|li| list_item(blocks(li.get("content")))).collect()).unwrap_or_default(),
         },
         "codeBlock" => Block::Code { lang: n["attrs"]["language"].as_str().map(String::from), text: collect_text(n) },
         "blockquote" => Block::Quote(blocks(n.get("content"))),
@@ -95,6 +95,16 @@ fn block(n: &Value) -> Option<Block> {
             Block::Paragraph(vec![Span { text, ..Default::default() }])
         }
     })
+}
+
+/// A list item's blocks without its empty paragraphs (Jira often ends an item with one), which would
+/// otherwise paint a blank line and an extra gap before whatever follows the list.
+pub fn list_item(blocks: Vec<Block>) -> Vec<Block> {
+    blocks.into_iter().filter(|b| !is_empty_paragraph(b)).collect()
+}
+
+fn is_empty_paragraph(b: &Block) -> bool {
+    matches!(b, Block::Paragraph(s) if s.iter().all(|sp| sp.text.trim().is_empty()))
 }
 
 /// Splits bare `http(s)://` URLs out of plain (non-link, non-code) spans as link spans.
@@ -332,6 +342,21 @@ mod tests {
         let out = super::tidy_code_spans(&[code("foo bar  "), code("ok"), code("  ")]);
         let got: Vec<(&str, bool)> = out.iter().map(|s| (s.text.as_str(), s.code)).collect();
         assert_eq!(got, [("foo bar", true), ("  ", false), ("ok", true), ("  ", true)]);
+    }
+
+    #[test]
+    fn list_items_drop_empty_paragraphs() {
+        let v = serde_json::json!({"content": [{"type": "bulletList", "content": [
+            {"type": "listItem", "content": [
+                {"type": "paragraph", "content": [{"type": "text", "text": "one"}]},
+                {"type": "paragraph", "content": [{"type": "text", "text": " "}]},
+                {"type": "paragraph"}
+            ]}
+        ]}, {"type": "paragraph", "content": [{"type": "text", "text": "after"}]}]});
+        let d = super::parse(&v);
+        let super::Block::List { items, .. } = &d.blocks[0] else { panic!() };
+        assert_eq!(items[0].len(), 1, "only the paragraph with text: {:?}", items[0]);
+        assert_eq!(d.blocks.len(), 2);
     }
 
     #[test]

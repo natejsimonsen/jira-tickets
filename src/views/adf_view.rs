@@ -172,8 +172,9 @@ fn block(ui: &mut Ui, b: &Block, p: &Palette, size: f32, chip: egui::Color32) {
 
 /// The text format one span is painted with. Links are accent and always underlined (hue alone is too weak
 /// in dark). A smart-link issue key is mono like keys elsewhere. Inline code is mono at exactly 0.9× the
-/// surrounding size; its chip is painted under it by `spans` (see `code_runs`).
-fn span_format(sp: &Span, p: &Palette, size: f32, heading: bool) -> TextFormat {
+/// surrounding size; its chip is painted under it by `spans` (see `code_runs`). Mono runs sit on the body's
+/// baseline: `fit` gives each its line height for that (`mono_line_height`), bottom-aligned.
+fn span_format(sp: &Span, p: &Palette, size: f32, heading: bool, fit: &MonoFit) -> TextFormat {
     let mut fmt = TextFormat {
         font_id: if sp.bold || heading { theme::bold(size) } else { theme::body(size) },
         color: p.text,
@@ -181,16 +182,14 @@ fn span_format(sp: &Span, p: &Palette, size: f32, heading: bool) -> TextFormat {
         ..Default::default()
     };
     if sp.code {
-        // Its own natural line box (the row keeps the body's 20), so the chip hugs the glyphs.
-        fmt.line_height = None;
         fmt.font_id = theme::mono(code_size(size));
-        // Centre the smaller mono run on the surrounding text's line.
-        fmt.valign = egui::Align::Center;
+        fmt.line_height = Some(fit.code);
+        fmt.valign = egui::Align::Max;
     }
     if is_key_link(sp) {
-        fmt.line_height = None;
         fmt.font_id = theme::mono(size * KEY_SCALE);
-        fmt.valign = egui::Align::Center;
+        fmt.line_height = Some(fit.key);
+        fmt.valign = egui::Align::Max;
     }
     if sp.italic {
         fmt.italics = true;
@@ -203,6 +202,54 @@ fn span_format(sp: &Span, p: &Palette, size: f32, heading: bool) -> TextFormat {
         fmt.underline = Stroke::new(1.0, p.accent);
     }
     fmt
+}
+
+/// The line heights inline code and key links take in one paragraph so their baselines meet the body's.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MonoFit {
+    pub code: f32,
+    pub key: f32,
+}
+
+impl MonoFit {
+    /// Measures the fonts of a context of `size`: each run's baseline from its own row top.
+    pub fn measure(fonts: &mut egui::epaint::text::FontsView<'_>, size: f32, heading: bool) -> Self {
+        let mut baseline = |font: egui::FontId, lh: Option<f32>| {
+            let mut job = LayoutJob::default();
+            job.append("x", 0.0, TextFormat { font_id: font, line_height: lh, ..Default::default() });
+            let g = fonts.layout_job(job);
+            g.rows.first().and_then(|r| r.row.glyphs.first()).map_or(0.0, |gl| gl.pos.y)
+        };
+        let body = baseline(if heading { theme::bold(size) } else { theme::body(size) }, Some(line_height(size)));
+        let code = baseline(theme::mono(code_size(size)), None);
+        let key = baseline(theme::mono(size * KEY_SCALE), None);
+        let row = line_height(size);
+        MonoFit { code: mono_line_height(row, body, code), key: mono_line_height(row, body, key) }
+    }
+}
+
+/// A bottom-aligned mono run in a `row_h` row is drawn at its ascent + (row_h − its line height) (egui's
+/// valign), and a body run at the body's ascent; this line height makes the two baselines meet. Never taller
+/// than the row, so a mono run never grows a body line.
+pub fn mono_line_height(row_h: f32, body_baseline: f32, mono_baseline: f32) -> f32 {
+    (row_h - (body_baseline - mono_baseline)).min(row_h)
+}
+
+/// Each laid-out row's top and the paragraph's height when every row takes at least `line_h` (rows of only
+/// mono text are shorter): the row sits at the bottom of its slot so its baseline lands where a body row's
+/// would.
+pub fn row_tops(heights: &[f32], line_h: f32) -> (Vec<f32>, f32) {
+    let mut y = 0.0;
+    let tops = heights
+        .iter()
+        .map(|&h| {
+            let pitch = h.max(line_h);
+            let top = y + (pitch - h);
+            y += pitch;
+            top
+        })
+        .collect();
+    (tops, y)
 }
 
 /// Inline code's size in a context of `size`: 0.9×, at most 0.9× body.
@@ -286,16 +333,18 @@ pub fn row_inset(glyphs: &[GlyphBox]) -> f32 {
     }
 }
 
-/// The leading space before span `i`: the chip's pad before inline code and before what follows it, except
-/// where punctuation hugs the code ("(`07-31`)" sets no gap between the paren and the chip).
+/// The leading space before span `i`: the chip's pad before inline code and before what follows it. Only
+/// where punctuation hugs the code ("(`07-31`)", "`x`, then") is the gap the chip's tight reach instead, so
+/// the mark sits just outside the fill. The text's own whitespace is never touched: " every" after a chip
+/// keeps its space on top of the pad.
 pub fn span_lead(s: &[Span], i: usize) -> f32 {
     let sp = &s[i];
     let prev = i.checked_sub(1).map(|j| &s[j]);
     if sp.code {
         let hugged = prev.is_some_and(|q| !q.code && q.text.chars().last().is_some_and(opens));
-        if hugged { 0.0 } else { CODE_PAD_X }
+        if hugged { CODE_PAD_TIGHT } else { CODE_PAD_X }
     } else if prev.is_some_and(|q| q.code) {
-        if sp.text.chars().next().is_some_and(closes) { 0.0 } else { CODE_PAD_X }
+        if sp.text.chars().next().is_some_and(closes) { CODE_PAD_TIGHT } else { CODE_PAD_X }
     } else {
         0.0
     }
@@ -304,63 +353,91 @@ pub fn span_lead(s: &[Span], i: usize) -> f32 {
 /// A chip's fill reach past its glyphs on a side that hugs punctuation.
 const CODE_PAD_TIGHT: f32 = 2.0;
 
+/// One paragraph's layout job, and per char whether it is inline code.
+pub fn paragraph_job(s: &[Span], p: &Palette, size: f32, heading: bool, fit: &MonoFit) -> (LayoutJob, Vec<(char, bool)>) {
+    let mut job = LayoutJob::default();
+    let mut chars: Vec<(char, bool)> = Vec::new();
+    for (i, sp) in s.iter().enumerate() {
+        job.append(&sp.text, span_lead(s, i), span_format(sp, p, size, heading, fit));
+        chars.extend(sp.text.chars().map(|c| (c, sp.code)));
+    }
+    (job, chars)
+}
+
+/// Lays `job` out in `width`: rows that start with a chip move in by its pad, every row takes at least the
+/// body line height (`row_tops`), and the chips' rects (relative to the galley) come back with it.
+pub fn layout_paragraph(
+    fonts: &mut egui::epaint::text::FontsView<'_>,
+    mut job: LayoutJob,
+    chars: &[(char, bool)],
+    width: f32,
+    line_h: f32,
+) -> (egui::Galley, Vec<egui::Rect>) {
+    // 8 px narrower so a row moved in by `row_inset` (and a chip's pad at the row end) still fits.
+    job.wrap.max_width = (width - 2.0 * CODE_PAD_X).max(1.0);
+    let laid = fonts.layout_job(job);
+    let mut g = (*laid).clone();
+    let (tops, height) = row_tops(&g.rows.iter().map(|r| r.row.size.y).collect::<Vec<_>>(), line_h);
+    let dy = height - g.rect.height();
+    let mut runs: Vec<(f32, CodeRun)> = Vec::new();
+    // Glyphs come in text order; a row ending in a newline drops it, so walk the chars alongside.
+    let mut at_char = 0;
+    for (row, top) in g.rows.iter_mut().zip(tops) {
+        row.pos.y = top;
+        let boxes: Vec<GlyphBox> = row
+            .row
+            .glyphs
+            .iter()
+            .map(|gl| {
+                while at_char < chars.len() && chars[at_char].0 != gl.chr {
+                    at_char += 1;
+                }
+                let code = chars.get(at_char).is_some_and(|c| c.1);
+                at_char += 1;
+                let lr = gl.logical_rect();
+                // The run's own font box (not its fitted line height), so the chip hugs the glyphs.
+                let glyph_top = gl.pos.y - gl.font_ascent;
+                (gl.chr, code, lr.left(), lr.right(), glyph_top, glyph_top + gl.font_height)
+            })
+            .collect();
+        let shift = row_inset(&boxes);
+        row.pos.x += shift;
+        for run in code_runs(&boxes) {
+            runs.push((row.pos.y, CodeRun { left: run.left + row.pos.x, right: run.right + row.pos.x, ..run }));
+        }
+    }
+    let widest = g.rows.iter().map(|r| r.pos.x + r.row.size.x).fold(0.0, f32::max);
+    g.rect.max.x = g.rect.max.x.max(g.rect.min.x + widest);
+    g.rect.max.y += dy;
+    g.mesh_bounds.max.x = g.mesh_bounds.max.x.max(g.mesh_bounds.min.x + widest);
+    g.mesh_bounds.max.y += dy;
+    let pad = |tight: bool| if tight { CODE_PAD_TIGHT } else { CODE_PAD_X };
+    let chips = runs
+        .into_iter()
+        .map(|(y, run)| {
+            egui::Rect::from_min_max(
+                egui::pos2(run.left - pad(run.tight_left), y + run.top - CODE_PAD_Y),
+                egui::pos2(run.right + pad(run.tight_right), y + run.bottom + CODE_PAD_Y),
+            )
+        })
+        .collect();
+    (g, chips)
+}
+
 fn spans(ui: &mut Ui, s: &[Span], p: &Palette, size: f32, heading: bool, chip: egui::Color32) {
     let s = adf::tidy_code_spans(&adf::linkify(s));
     let has_link = s.iter().any(|sp| sp.link.is_some());
-    let mut job = LayoutJob::default();
-    // Each char of the job's text, and whether it is inline code.
-    let mut chars: Vec<(char, bool)> = Vec::new();
-    for (i, sp) in s.iter().enumerate() {
-        job.append(&sp.text, span_lead(&s, i), span_format(sp, p, size, heading));
-        chars.extend(sp.text.chars().map(|c| (c, sp.code)));
-    }
+    let fit = ui.fonts_mut(|f| MonoFit::measure(f, size, heading));
+    let (job, chars) = paragraph_job(&s, p, size, heading, &fit);
     let sense = if has_link { egui::Sense::click() } else { egui::Sense::hover() };
     let chips = ui.painter().add(egui::Shape::Noop);
-    let r = if chars.iter().any(|c| c.1) {
-        // Lay the paragraph out ourselves, 8 px narrower so a row moved in by `row_inset` (and a chip's pad at
-        // the row end) still fits; move rows that start with a chip in by its pad; paint a padded fill around
-        // each run of code glyphs, row by row; then show that exact galley.
-        let mut j = job;
-        j.wrap.max_width = (ui.available_width() - 2.0 * CODE_PAD_X).max(1.0);
-        let laid = ui.fonts_mut(|f| f.layout_job(j));
-        let mut g = (*laid).clone();
-        let mut runs: Vec<(f32, CodeRun)> = Vec::new();
-        // Glyphs come in text order; a row ending in a newline drops it, so walk the chars alongside.
-        let mut at_char = 0;
-        for row in &mut g.rows {
-            let boxes: Vec<GlyphBox> = row
-                .row
-                .glyphs
-                .iter()
-                .map(|gl| {
-                    while at_char < chars.len() && chars[at_char].0 != gl.chr {
-                        at_char += 1;
-                    }
-                    let code = chars.get(at_char).is_some_and(|c| c.1);
-                    at_char += 1;
-                    let lr = gl.logical_rect();
-                    (gl.chr, code, lr.left(), lr.right(), lr.top(), lr.bottom())
-                })
-                .collect();
-            let shift = row_inset(&boxes);
-            row.pos.x += shift;
-            for run in code_runs(&boxes) {
-                runs.push((row.pos.y, CodeRun { left: run.left + row.pos.x, right: run.right + row.pos.x, ..run }));
-            }
-        }
-        let widest = g.rows.iter().map(|r| r.pos.x + r.row.size.x).fold(0.0, f32::max);
-        g.rect.max.x = g.rect.max.x.max(g.rect.min.x + widest);
-        g.mesh_bounds.max.x = g.mesh_bounds.max.x.max(g.mesh_bounds.min.x + widest);
+    let r = if chars.iter().any(|c| c.1) || s.iter().any(is_key_link) {
+        // Lay the paragraph out ourselves (see `layout_paragraph`), paint the chips under it, then show that
+        // exact galley.
+        let width = ui.available_width();
+        let (g, rects) = ui.fonts_mut(|f| layout_paragraph(f, job, &chars, width, line_height(size)));
         let r = ui.add(egui::Label::new(std::sync::Arc::new(g)).sense(sense));
-        let shapes = runs
-            .into_iter()
-            .map(|(y, run)| {
-                let pad = |tight: bool| if tight { CODE_PAD_TIGHT } else { CODE_PAD_X };
-                let min = r.rect.min + egui::vec2(run.left - pad(run.tight_left), y + run.top - CODE_PAD_Y);
-                let max = r.rect.min + egui::vec2(run.right + pad(run.tight_right), y + run.bottom + CODE_PAD_Y);
-                egui::Shape::rect_filled(egui::Rect::from_min_max(min, max), 4.0, chip)
-            })
-            .collect();
+        let shapes = rects.into_iter().map(|rc| egui::Shape::rect_filled(rc.translate(r.rect.min.to_vec2()), 4.0, chip)).collect();
         ui.painter().set(chips, egui::Shape::Vec(shapes));
         r
     } else {
@@ -409,6 +486,8 @@ mod tests {
         }
     }
 
+    const FIT: MonoFit = MonoFit { code: 18.0, key: 18.5 };
+
     fn span(text: &str) -> Span {
         Span { text: text.into(), bold: false, italic: false, code: false, strike: false, link: None }
     }
@@ -416,33 +495,33 @@ mod tests {
     #[test]
     fn span_format_maps_marks() {
         let p = palette();
-        let plain = span_format(&span("a"), &p, 14.0, false);
+        let plain = span_format(&span("a"), &p, 14.0, false, &FIT);
         assert_eq!(plain.font_id, theme::body(14.0));
         assert_eq!(plain.color, p.text);
         assert_eq!(plain.underline, Stroke::NONE);
 
-        let bold = span_format(&Span { bold: true, ..span("b") }, &p, 14.0, false);
+        let bold = span_format(&Span { bold: true, ..span("b") }, &p, 14.0, false, &FIT);
         assert_eq!(bold.font_id, theme::bold(14.0));
-        assert_eq!(span_format(&span("h"), &p, 18.0, true).font_id, theme::bold(18.0));
+        assert_eq!(span_format(&span("h"), &p, 18.0, true, &FIT).font_id, theme::bold(18.0));
 
-        let code = span_format(&Span { code: true, ..span("c") }, &p, 14.0, false);
+        let code = span_format(&Span { code: true, ..span("c") }, &p, 14.0, false, &FIT);
         assert_eq!(code.font_id, theme::mono(14.0 * 0.9), "exactly 0.9 × 14");
         assert_eq!(code.background, Color32::TRANSPARENT, "the chip is painted under the label, not by the section");
-        assert_eq!(span_format(&Span { code: true, ..span("c") }, &p, 18.0, true).font_id, theme::mono(14.0 * 0.9), "capped at 0.9 × body in a heading");
+        assert_eq!(span_format(&Span { code: true, ..span("c") }, &p, 18.0, true, &FIT).font_id, theme::mono(14.0 * 0.9), "capped at 0.9 × body in a heading");
         assert_eq!(code_size(13.0), 13.0 * 0.9, "smaller contexts keep the ratio");
 
-        let styled = span_format(&Span { italic: true, strike: true, ..span("s") }, &p, 14.0, false);
+        let styled = span_format(&Span { italic: true, strike: true, ..span("s") }, &p, 14.0, false, &FIT);
         assert!(styled.italics);
         assert_eq!(styled.strikethrough, Stroke::new(1.0, p.muted));
 
         let link = Span { link: Some("https://x".into()), ..span("l") };
-        assert_eq!(span_format(&link, &p, 14.0, false).color, p.accent);
-        assert_eq!(span_format(&link, &p, 14.0, false).underline, Stroke::new(1.0, p.accent), "links are always underlined");
+        assert_eq!(span_format(&link, &p, 14.0, false, &FIT).color, p.accent);
+        assert_eq!(span_format(&link, &p, 14.0, false, &FIT).underline, Stroke::new(1.0, p.accent), "links are always underlined");
 
         let key = Span { link: Some("https://x.atlassian.net/browse/CI-1".into()), ..span("CI-1") };
-        let k = span_format(&key, &p, 14.0, false);
+        let k = span_format(&key, &p, 14.0, false, &FIT);
         assert_eq!((k.font_id, k.color), (theme::mono(12.5), p.accent), "a smart-link key is mono 12.5 in the link colour");
-        assert_eq!(span_format(&Span { text: "see CI-1".into(), ..key }, &p, 14.0, false).font_id, theme::body(14.0));
+        assert_eq!(span_format(&Span { text: "see CI-1".into(), ..key }, &p, 14.0, false, &FIT).font_id, theme::body(14.0));
     }
 
     #[test]
@@ -467,7 +546,11 @@ mod tests {
         assert!(!r[1].tight_left && !r[1].tight_right, "spaces either side");
         let s = |text: &str, code: bool| Span { code, ..span(text) };
         let para = [s("(", false), s("07-31", true), s(") then ", false), s("x", true), s(" y", false)];
-        assert_eq!([span_lead(&para, 1), span_lead(&para, 2), span_lead(&para, 3), span_lead(&para, 4)], [0.0, 0.0, CODE_PAD_X, CODE_PAD_X]);
+        assert_eq!(
+            [span_lead(&para, 1), span_lead(&para, 2), span_lead(&para, 3), span_lead(&para, 4)],
+            [CODE_PAD_TIGHT, CODE_PAD_TIGHT, CODE_PAD_X, CODE_PAD_X],
+            "punctuation sits at the fill's tight reach; words keep the full pad"
+        );
         assert_eq!(span_lead(&para, 0), 0.0);
     }
 
@@ -495,13 +578,97 @@ mod tests {
         assert_eq!((heading_size(1), heading_size(2), heading_size(3), heading_size(6)), (15.0, 15.0, 14.0, 14.0));
         let sp = |code: bool| Span { text: "x".into(), bold: false, italic: false, code, strike: false, link: None };
         let p = palette();
-        assert_eq!(span_format(&sp(false), &p, 14.0, false).line_height, Some(20.0));
-        assert_eq!(span_format(&sp(true), &p, 14.0, false).line_height, None, "code keeps its natural box");
+        assert_eq!(span_format(&sp(false), &p, 14.0, false, &FIT).line_height, Some(20.0));
+        let code = span_format(&sp(true), &p, 14.0, false, &FIT);
+        assert_eq!((code.line_height, code.valign), (Some(FIT.code), egui::Align::Max), "code sits on the body baseline");
     }
 
     #[test]
     fn headings_get_24_above_except_first() {
         assert_eq!(heading_space_above(true), 0.0);
         assert_eq!(heading_space_above(false) + BLOCK_GAP, 24.0);
+    }
+
+    fn with_fonts<R>(f: impl FnOnce(&mut egui::epaint::text::FontsView<'_>) -> R) -> R {
+        crate::testutil::with_ui(|ui| ui.fonts_mut(f))
+    }
+
+    /// (glyph left, glyph right) of every glyph, in text order, of a paragraph laid out wide.
+    fn glyph_xs(s: &[Span]) -> Vec<(char, f32, f32)> {
+        with_fonts(|f| {
+            let p = palette();
+            let fit = MonoFit::measure(f, 14.0, false);
+            let s = adf::tidy_code_spans(s);
+            let (job, chars) = paragraph_job(&s, &p, 14.0, false, &fit);
+            let (g, _) = layout_paragraph(f, job, &chars, 2000.0, 20.0);
+            g.rows.iter().flat_map(|r| r.row.glyphs.iter().map(|gl| (gl.chr, gl.pos.x, gl.pos.x + gl.advance_width))).collect()
+        })
+    }
+
+    #[test]
+    fn a_word_after_a_chip_keeps_its_space() {
+        // Regression (round 7): "`base-workloads.yml` every" read "base-workloads.yml,every".
+        let s = |text: &str, code: bool| Span { code, ..span(text) };
+        let g = glyph_xs(&[s("triggers ", false), s("config.yml", true), s(" every", false)]);
+        let text: String = g.iter().map(|c| c.0).collect();
+        assert_eq!(text, "triggers config.yml every", "the space survives layout");
+        let l = g.iter().position(|c| c.0 == 'l').unwrap();
+        let (sp, e) = (g[l + 1], g[l + 2]);
+        assert_eq!(sp.0, ' ');
+        assert!(sp.2 - sp.1 > 2.0, "a real space glyph, {sp:?}");
+        assert!(e.1 - g[l].2 >= CODE_PAD_X + 2.0, "pad and space between the chip and the word: {}", e.1 - g[l].2);
+        // A space inside the code mark moves out and still separates the word.
+        let g = glyph_xs(&[s("config.yml ", true), s("every", false)]);
+        assert_eq!(g.iter().map(|c| c.0).collect::<String>(), "config.yml every");
+    }
+
+    #[test]
+    fn punctuation_after_a_chip_hugs_it_then_keeps_its_space() {
+        let s = |text: &str, code: bool| Span { code, ..span(text) };
+        let g = glyph_xs(&[s("known_hosts", true), s(", with", false)]);
+        assert_eq!(g.iter().map(|c| c.0).collect::<String>(), "known_hosts, with");
+        let comma = g.iter().position(|c| c.0 == ',').unwrap();
+        let gap = g[comma].1 - g[comma - 1].2;
+        assert!((1.0..CODE_PAD_X).contains(&gap), "the comma sits at the chip's tight reach (2, pixel-snapped): {gap}");
+        assert_eq!(g[comma + 1].0, ' ');
+        assert!(g[comma + 2].1 - g[comma].2 > 2.0, "the space after the comma survives");
+    }
+
+    #[test]
+    fn mono_runs_share_the_body_baseline() {
+        assert_eq!(mono_line_height(20.0, 15.0, 12.0), 17.0);
+        assert_eq!(mono_line_height(20.0, 12.0, 13.0), 20.0, "never taller than the row");
+        let (base_body, base_code) = with_fonts(|f| {
+            let p = palette();
+            let fit = MonoFit::measure(f, 14.0, false);
+            let s = [Span { code: true, ..span("code") }, span(" word")];
+            let (job, _) = paragraph_job(&s, &p, 14.0, false, &fit);
+            let g = f.layout_job(job);
+            let gl = &g.rows[0].row.glyphs;
+            (gl.iter().find(|g| g.chr == 'w').unwrap().pos.y, gl.iter().find(|g| g.chr == 'c').unwrap().pos.y)
+        });
+        assert!((base_body - base_code).abs() <= 0.5, "body {base_body} vs code {base_code}");
+    }
+
+    #[test]
+    fn every_row_takes_the_body_line_height() {
+        let (tops, h) = row_tops(&[20.0, 15.0, 15.0, 20.0], 20.0);
+        assert_eq!(tops, [0.0, 25.0, 45.0, 60.0], "short rows sit at the bottom of a 20 slot");
+        assert_eq!(h, 80.0);
+        let (tops, h) = row_tops(&[24.0], 20.0);
+        assert_eq!((tops, h), (vec![0.0], 24.0), "a taller row keeps its height");
+        // A wrapped all-code paragraph: separate chips, 20 apart.
+        let chips = with_fonts(|f| {
+            let p = palette();
+            let fit = MonoFit::measure(f, 14.0, false);
+            let s = [Span { code: true, ..span("b54249f25c21c feat(build): add workflow_pr_comment action") }];
+            let (job, chars) = paragraph_job(&s, &p, 14.0, false, &fit);
+            layout_paragraph(f, job, &chars, 200.0, 20.0).1
+        });
+        assert!(chips.len() >= 2, "{chips:?}");
+        for w in chips.windows(2) {
+            assert!((w[1].top() - w[0].top() - 20.0).abs() < 0.01, "20 px pitch: {w:?}");
+            assert!(w[1].top() > w[0].bottom(), "fills never merge: {w:?}");
+        }
     }
 }

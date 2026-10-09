@@ -282,7 +282,11 @@ browser, `⌘R` refresh, `Esc` back.
 Detail: summary, status bar, rendered description, a fields column
 (assignee, reporter, priority, labels, epic, sprint, created, updated,
 story points), comments rendered from ADF, and a comment box with `⌘Enter`
-to post.
+to post. In read-only mode (`JIRA_TICKETS_READONLY=1`) there is no box and no
+button: one muted line, "Read-only, comments can't be posted", sits under the
+Comments label, and the hint bar shows no composer keys. Snapshot builds alone
+honour `JIRA_TICKETS_SNAPSHOT_COMPOSER=1`, which draws the writable composer
+for captures while every write stays blocked.
 
 Every mutation runs on a background thread, shows a toast, and refetches
 that issue.

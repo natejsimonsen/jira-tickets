@@ -58,4 +58,23 @@ fn main() -> eframe::Result {
 pub mod testutil {
     /// Tests that set process env vars lock this so they never interleave.
     pub static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// Runs `f` in a pass of a headless context with the app's theme and fonts (they load on the pass after
+    /// `theme::apply`, so one empty pass goes first).
+    pub fn with_ui<R>(f: impl FnOnce(&mut egui::Ui) -> R) -> R {
+        let ctx = egui::Context::default();
+        crate::theme::apply(&ctx);
+        let input = || egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1440.0, 900.0))), ..Default::default() };
+        ctx.run_ui(input(), |_| {}).textures_delta.clear();
+        let mut f = Some(f);
+        let mut out = None;
+        ctx.run_ui(input(), |ui| {
+            if let Some(f) = f.take() {
+                out = Some(f(ui));
+            }
+        })
+        .textures_delta
+        .clear();
+        out.expect("one pass")
+    }
 }

@@ -106,8 +106,6 @@ pub enum HintContext {
     SearchEmpty,
     /// The comment composer has focus.
     Composer,
-    /// The composer has focus in read-only mode: nothing can be posted.
-    ComposerReadOnly,
     EditPicker,
     /// The Assign picker: its filter box has focus.
     AssignPicker,
@@ -155,7 +153,7 @@ pub struct HintState {
     pub focus: Focus,
     /// A server search (text or JQL) is on screen, so Esc clears it even with the box unfocused.
     pub search_shown: bool,
-    /// Writes are blocked (JIRA_TICKETS_READONLY).
+    /// Writes are blocked and no composer is drawn (`detail::composer_read_only`): no composer keys.
     pub read_only: bool,
     /// A screen that is not built yet (Grooming, Team, Roadmap).
     pub placeholder: bool,
@@ -180,8 +178,7 @@ pub fn hint_context(s: HintState) -> HintContext {
             Focus::Search { clear: true, plain: true } => HintContext::SearchText,
             Focus::Search { clear: true, plain: false } => HintContext::Search,
             Focus::Search { clear: false, .. } => HintContext::SearchEmpty,
-            Focus::Composer if read_only => HintContext::ComposerReadOnly,
-            Focus::Composer => HintContext::Composer,
+            Focus::Composer if !read_only => HintContext::Composer,
             Focus::None if has_selection && search_shown => HintContext::SelectedSearch,
             Focus::None if has_selection => HintContext::Selected,
             Focus::None if search_shown => HintContext::BrowseSearch,
@@ -200,7 +197,6 @@ pub fn hints(c: HintContext) -> &'static [Hint] {
         HintContext::SearchText => &[&[K("Enter"), W("run as JQL")], &[K("Esc"), W("clear")]],
         HintContext::SearchEmpty => &[&[K("Enter"), W("search JQL")], &[K("Esc"), W("done")]],
         HintContext::Composer => &[&[K("⌘Enter"), W("post")], &[K("Esc"), W("leave, draft kept")]],
-        HintContext::ComposerReadOnly => &[&[K("Esc"), W("leave, draft kept")], &[W("read-only, can't post")]],
         HintContext::EditPicker => &[&[K("Tab/⇧Tab"), W("field")], &[K("Enter"), W("confirm")], &[K("Esc"), W("cancel")]],
         HintContext::AssignPicker => &[&[W("Type to filter")], &[K("↑/↓"), W("move")], &[K("Enter"), W("confirm")], &[K("Esc"), W("cancel")]],
         HintContext::Picker => &[&[K("j/k"), W("or"), K("↑/↓"), W("move")], &[K("Enter"), W("confirm")], &[K("Esc"), W("cancel")]],
@@ -333,7 +329,8 @@ mod tests {
         assert_eq!(hint_context(st(false, false, None, false, Focus::None)), Browse);
         assert_eq!(hint_text(hints(Composer)), "⌘Enter post · Esc leave, draft kept");
         let ro = HintState { read_only: true, has_selection: true, ..HintState::new(Focus::Composer) };
-        assert_eq!(hint_text(hints(hint_context(ro))), "Esc leave, draft kept · read-only, can't post", "read-only says why");
+        let bar = hint_text(hints(hint_context(ro)));
+        assert!(!bar.contains("⌘Enter") && !bar.contains("draft"), "read-only has no composer, so no composer keys: {bar}");
         assert_eq!(hint_text(hints(Help)), "? or Esc close");
         assert_eq!(hint_text(hints(GoTo)), "Enter open · Esc close");
         assert_eq!(hint_text(hints(Search)), "Enter search JQL · Esc clear");
