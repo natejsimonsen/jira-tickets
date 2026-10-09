@@ -84,7 +84,8 @@ pub mod testutil {
         let ctx = egui::Context::default();
         crate::theme::apply(&ctx);
         ctx.set_pixels_per_point(2.0);
-        let input = || egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)), ..Default::default() };
+        // A focused window, so focused fields paint their caret.
+        let input = || egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)), focused: true, ..Default::default() };
         let mut shapes = Vec::new();
         for _ in 0..3 {
             let mut o = ctx.run_ui(input(), &mut f);

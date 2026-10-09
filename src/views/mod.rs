@@ -107,6 +107,15 @@ pub fn header_rule(header: egui::Rect) -> egui::Rect {
     egui::Rect::from_x_y_ranges(header.x_range(), bottom - 1.0..=bottom)
 }
 
+/// The active tab's underline span for a label galley at `origin`: its ink, not its advance (round 13 J3: the bar
+/// overhung "Team"'s ink by 2 on the right), on whole pixels.
+pub fn tab_underline_x(origin: f32, label: &egui::Galley) -> egui::Rangef {
+    let ink = theme::ink_rect(label);
+    let ppp = label.pixels_per_point.max(1.0);
+    let (l, r) = if ink.is_positive() { (ink.left(), ink.right()) } else { (0.0, label.size().x) };
+    egui::Rangef::new(issues::snap_px(origin + l, ppp), issues::snap_px(origin + r, ppp))
+}
+
 /// The active tab's 2 px accent bar across the tab's width, its bottom on the rule's bottom, so it covers the
 /// rule there and shows whole (1 px above it, 1 px on it).
 pub fn underline_rect(tab_x: egui::Rangef, rule: egui::Rect) -> egui::Rect {
@@ -232,11 +241,11 @@ fn header(app: &mut App, ui: &mut Ui, p: &Palette) -> (egui::Rect, Option<egui::
                 ui.add_space(origins[i] - ui.cursor().left());
                 let (rect, r) = ui.allocate_exact_size(vec2(galley.size().x, 32.0), Sense::click());
                 let pos = egui::pos2(rect.left(), top_for_baseline(line, baseline(&galley)));
-                ui.painter().galley(pos, galley, p.text);
                 if active {
-                    // Painted by `main` after the rule (see `underline_rect`).
-                    active_tab = Some(rect.x_range());
+                    // Painted by `main` after the rule (see `underline_rect`), across the label's ink.
+                    active_tab = Some(tab_underline_x(rect.left(), &galley));
                 }
+                ui.painter().galley(pos, galley, p.text);
                 let r = tooltip(r, format!("{name} (⌘{})", i + 1));
                 if r.clicked() {
                     app.actions.push(Action::SetScreen(s));
@@ -446,7 +455,7 @@ pub fn sign_in(app: &mut App, ui: &mut Ui) {
                 ui.add(egui::Label::new(aside).extend());
                 ui.add_space(ASIDE_TO_FIELD);
                 ui.visuals_mut().text_edit_bg_color = Some(theme::input_fill(p.surface, p));
-                let r = ui.add(input_field(&mut app.token_input, "API token", theme::body(14.0), p).id(egui::Id::new("token-input")).password(true));
+                let r = add_field(ui, None, &mut app.token_input, |t| input_field(t, "API token", theme::body(14.0), p).id(egui::Id::new("token-input")).password(true));
                 if ui.memory(|m| m.focused().is_none()) {
                     r.request_focus();
                 }
@@ -504,13 +513,7 @@ pub fn tip_job(text: &str, p: &Palette) -> egui::text::LayoutJob {
     let plain = egui::TextFormat { font_id: theme::body(TIP_TEXT), color: p.text, ..Default::default() };
     let mut job = egui::text::LayoutJob::default();
     job.append(before, 0.0, plain.clone());
-    let k = issues::key_job(key, p.text);
-    let base = job.text.len();
-    job.text.push_str(&k.text);
-    job.sections.extend(k.sections.into_iter().map(|mut s| {
-        s.byte_range = egui::text::ByteIndex(s.byte_range.start.0 + base)..egui::text::ByteIndex(s.byte_range.end.0 + base);
-        s
-    }));
+    issues::append_job(&mut job, issues::key_job(key, p.text));
     job.append(after, 0.0, plain);
     job
 }
@@ -757,6 +760,61 @@ pub fn caret_margin(m: Margin, empty: bool) -> Margin {
     if empty { Margin { left: m.left - CARET_LEAD, ..m } } else { m }
 }
 
+/// How far past the last glyph's advance a trailing caret's left edge sits, in device pixels (round 13 I3: egui
+/// centres the caret's stroke on the advance, so it touched round glyphs).
+pub const CARET_TRAIL_PX: f32 = 1.0;
+
+/// The x shift that puts a caret of `stroke_w` CARET_TRAIL_PX clear of the advance it is centred on.
+pub fn caret_trail(stroke_w: f32, ppp: f32) -> f32 {
+    stroke_w / 2.0 + CARET_TRAIL_PX / ppp
+}
+
+/// Adds a field (`edit`, made over `text`) and, when its caret sits after the last glyph of non-empty text, puts
+/// the painted caret `caret_trail` right of that glyph's advance. Every field goes through here (search, go-to, sign-in, pickers,
+/// composer); an empty field's caret keeps the CARET_LEAD rule.
+pub fn add_field(ui: &mut Ui, size: Option<egui::Vec2>, text: &mut String, edit: impl FnOnce(&mut String) -> egui::TextEdit<'_>) -> egui::Response {
+    let from = ui.painter().add(egui::Shape::Noop);
+    let r = match size {
+        Some(s) => ui.add_sized(s, edit(text)),
+        None => ui.add(edit(text)),
+    };
+    let n = text.chars().count();
+    let at_end = n > 0
+        && r.has_focus()
+        && egui::TextEdit::load_state(ui.ctx(), r.id).and_then(|s| s.cursor.char_range()).is_some_and(|c| c.is_empty() && c.primary.index.0 == n);
+    if at_end {
+        let caret = ui.visuals().text_cursor.stroke;
+        let dx = caret_trail(caret.width, ui.ctx().pixels_per_point());
+        let layer = ui.layer_id();
+        ui.ctx().graphics_mut(|g| {
+            let list = g.entry(layer);
+            let range = from.0..list.next_idx().0;
+            // The text's last advance, from the field's painted galley.
+            let mut end = None;
+            for c in list.all_entries().skip(from.0).take(range.len()) {
+                if let egui::Shape::Text(t) = &c.shape
+                    && let Some(row) = t.galley.rows.last()
+                    && let Some(gl) = row.row.glyphs.last()
+                {
+                    end = Some(t.pos.x + row.pos.x + gl.max_x());
+                }
+            }
+            let Some(end) = end else { return };
+            for i in range {
+                list.mutate_shape(egui::layers::ShapeIdx(i), |c| {
+                    if let egui::Shape::LineSegment { points, stroke } = &mut c.shape
+                        && *stroke == caret
+                    {
+                        points[0].x = end + dx;
+                        points[1].x = end + dx;
+                    }
+                });
+            }
+        });
+    }
+    r
+}
+
 /// The placeholder for a field laid out with `caret_margin`: shown only while empty, so always led CARET_LEAD.
 pub fn empty_field_hint(text: &str, font: egui::FontId, p: &Palette) -> egui::text::LayoutJob {
     field_hint_at(text, font, p, f32::from(CARET_LEAD))
@@ -907,10 +965,24 @@ pub fn small_link(ui: &mut Ui, text: &str, p: &Palette) -> egui::Response {
     text_link(ui, text, theme::body(12.0), p.accent)
 }
 
+/// `small_link` whose slot ends at its last glyph's ink, not its advance, so links right-aligned in one place end
+/// on one ink edge whatever their last letter.
+pub fn small_link_ink_right(ui: &mut Ui, text: &str, p: &Palette) -> egui::Response {
+    let galley = ui.painter().layout_no_wrap(text.to_string(), theme::body(12.0), p.accent);
+    let ink = theme::ink_rect(&galley);
+    let trim = if ink.is_positive() { galley.size().x - ink.right() } else { 0.0 };
+    link_in(ui, galley, p.accent, trim)
+}
+
 /// A text link (no frame) in `color`, underlined while hovered.
 pub fn text_link(ui: &mut Ui, text: &str, font: egui::FontId, color: Color32) -> egui::Response {
     let galley = ui.painter().layout_no_wrap(text.to_string(), font, color);
-    let (rect, resp) = ui.allocate_exact_size(galley.size(), Sense::click());
+    link_in(ui, galley, color, 0.0)
+}
+
+/// A link's slot: the galley's size less `trim` on the right.
+fn link_in(ui: &mut Ui, galley: std::sync::Arc<egui::Galley>, color: Color32, trim: f32) -> egui::Response {
+    let (rect, resp) = ui.allocate_exact_size(galley.size() - vec2(trim, 0.0), Sense::click());
     if ui.is_rect_visible(rect) {
         if resp.hovered() {
             ui.painter().hline(rect.x_range(), rect.bottom() - 1.0, Stroke::new(1.0, color));
@@ -1379,6 +1451,42 @@ mod widget_tests {
     }
 
     #[test]
+    fn a_trailing_caret_clears_the_last_glyph() {
+        // Round 13 I3: at the end of non-empty text the caret's stroke starts a device pixel past the last glyph's
+        // advance; an empty field's caret keeps the CARET_LEAD rule (no shift).
+        let p = theme::LIGHT;
+        for typed in ["abco", ""] {
+            let id = egui::Id::new("caret-test");
+            let mut text = typed.to_string();
+            let mut end_x = 0.0;
+            let shapes = crate::testutil::paint_at2(vec2(800.0, 200.0), |ui| {
+                let mut st = egui::text_edit::TextEditState::default();
+                let n = text.chars().count();
+                st.cursor.set_char_range(Some(egui::text_selection::CCursorRange::one(egui::text::CCursor::new(n))));
+                st.store(ui.ctx(), id);
+                ui.memory_mut(|m| m.request_focus(id));
+                add_field(ui, None, &mut text, |t| input_field(t, "", theme::body(14.0), &p).id(id));
+            });
+            fn walk(s: &egui::Shape, typed: &str, lines: &mut Vec<f32>, end: &mut f32) {
+                match s {
+                    egui::Shape::LineSegment { points, .. } => lines.push(points[0].x),
+                    egui::Shape::Text(t) if t.galley.job.text == typed => *end = t.pos.x + t.galley.rows[0].row.glyphs.last().map_or(0.0, |g| g.max_x()),
+                    egui::Shape::Vec(v) => v.iter().for_each(|s| walk(s, typed, lines, end)),
+                    _ => {}
+                }
+            }
+            let mut lines = Vec::new();
+            shapes.iter().for_each(|c| walk(&c.shape, typed, &mut lines, &mut end_x));
+            let caret = *lines.last().expect("a caret");
+            if typed.is_empty() {
+                continue;
+            }
+            let w = crate::testutil::with_ui(|ui| ui.visuals().text_cursor.stroke.width);
+            assert!((caret - w / 2.0 - end_x - 0.5).abs() < 0.01, "caret {caret}, advance end {end_x}, stroke {w}");
+        }
+    }
+
+    #[test]
     fn tooltip_keys_take_the_key_style() {
         // Round 13 F1: the key token in a tip is mono like the hint bar's; prose stays proportional.
         assert_eq!(tip_key_split("⌘Enter"), ("", "⌘Enter", ""));
@@ -1501,6 +1609,11 @@ mod widget_tests {
                     let gap = ink(xs[i], &tabs[i]).min - ink(xs[i - 1], &tabs[i - 1]).max;
                     assert!((gap - TAB_GAP).abs() <= 0.5, "tab {i}: {gap}");
                     assert_eq!(xs[i] * 2.0, (xs[i] * 2.0).round(), "on whole pixels");
+                }
+                for (i, g) in tabs.iter().enumerate() {
+                    let u = tab_underline_x(xs[i], g);
+                    let ink = ink(xs[i], g);
+                    assert!((u.min - ink.min).abs() <= 0.25 && (u.max - ink.max).abs() <= 0.25, "J3: the underline spans the ink: {u:?} vs {ink:?}");
                 }
                 let (name, dot, ro) = (lay("Shawn Sorichetti", theme::body(12.0)), lay("·", theme::body(12.0)), read_only_galley(ui.painter(), p));
                 let gaps = [theme::ink_gap(&name, &dot, LABEL_GAP), theme::ink_gap(&dot, &ro, LABEL_GAP)];

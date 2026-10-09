@@ -48,7 +48,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                     }
                     Picker::Assign { key, items, current, cursor, filter } => {
                         title(ui, p, &format!("Assign {key}"));
-                        let r = ui.add(field(filter, "Type a name", p));
+                        let r = crate::views::add_field(ui, None, filter, |t| field(t, "Type a name", p));
                         ui.add_space(gap_space(ASSIGN_FIELD_GAP, ui.spacing().item_spacing.y));
                         // Not under the help overlay, or typing would land in the filter behind it.
                         if !help_open {
@@ -83,15 +83,15 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                     Picker::Edit { key, labels, priority, points, .. } => {
                         title(ui, p, &format!("Edit {key}"));
                         let labels_id = egui::Id::new("edit-labels");
-                        let r = edit_group(ui, p, "Labels, comma separated", field(labels, "", p).id(labels_id));
+                        let r = edit_group(ui, p, "Labels, comma separated", labels, |t| field(t, "", p).id(labels_id));
                         // Labels takes focus on open (and whenever no field holds it); Tab moves on.
                         if !help_open && ui.memory(|m| m.focused().is_none()) {
                             r.request_focus();
                         }
                         ui.add_space(group_space(ui, "Priority"));
-                        edit_group(ui, p, "Priority", field(priority, crate::app::PRIORITY_HINT, p));
+                        edit_group(ui, p, "Priority", priority, |t| field(t, crate::app::PRIORITY_HINT, p));
                         ui.add_space(group_space(ui, "Story points"));
-                        edit_group(ui, p, "Story points", field(points, crate::app::POINTS_HINT, p));
+                        edit_group(ui, p, "Story points", points, |t| field(t, crate::app::POINTS_HINT, p));
                     }
                 }
                 ui.add_space(BUTTONS_GAP);
@@ -195,10 +195,10 @@ pub(crate) fn field<'a>(text: &'a mut String, hint: &str, p: &Palette) -> egui::
 }
 
 /// A small muted label, 4 px, then the field (full width).
-fn edit_group(ui: &mut egui::Ui, p: &Palette, label: &str, field: egui::TextEdit<'_>) -> egui::Response {
+fn edit_group(ui: &mut egui::Ui, p: &Palette, label: &str, text: &mut String, field: impl FnOnce(&mut String) -> egui::TextEdit<'_>) -> egui::Response {
     ui.label(RichText::new(label).color(crate::views::dialog_muted(p)).size(12.0));
     ui.add_space(4.0);
-    ui.add(field)
+    crate::views::add_field(ui, None, text, field)
 }
 
 /// One picker row's text; `muted` for the synthetic "no value" row (Unassigned); `current` marks the
@@ -319,9 +319,9 @@ mod tests {
                 ui.set_width(440.0);
                 crate::views::dialog_fields(ui, &p);
                 super::title(ui, &p, "Edit CI-3779");
-                super::edit_group(ui, &p, "Labels, comma separated", super::field(&mut labels, "", &p));
+                super::edit_group(ui, &p, "Labels, comma separated", &mut labels, |t| super::field(t, "", &p));
                 ui.add_space(super::group_space(ui, "Priority"));
-                super::edit_group(ui, &p, "Priority", super::field(&mut String::new(), "Hint", &p));
+                super::edit_group(ui, &p, "Priority", &mut String::new(), |t| super::field(t, "Hint", &p));
             });
         });
         let fills = crate::testutil::fills(&shapes);

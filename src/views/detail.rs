@@ -308,7 +308,10 @@ fn composer(app: &mut App, ui: &mut Ui, p: &Palette, key: &str) {
         .corner_radius(theme::RADIUS)
         // 11 + the 1 px stroke: the comment cards' 12 to the text at the sides; the text 1 lower (COMPOSER_DROP).
         .inner_margin(composer_margin())
-        .show(ui, |ui| ui.add_sized([ui.available_width(), COMPOSER_H - 2.0 * (COMPOSER_PAD + COMPOSER_STROKE)], composer_edit(draft, p).id(id)))
+        .show(ui, |ui| {
+            let size = vec2(ui.available_width(), COMPOSER_H - 2.0 * (COMPOSER_PAD + COMPOSER_STROKE));
+            crate::views::add_field(ui, Some(size), draft, |t| composer_edit(t, p).id(id))
+        })
         .inner;
     // Clicking the frame's padding focuses the box too.
     let enabled = comment_enabled(draft, &app.posting);

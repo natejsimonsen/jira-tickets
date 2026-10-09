@@ -5,7 +5,7 @@ use crate::filter;
 use crate::jira::Issue;
 use crate::store::ListId;
 use crate::theme::{self, Palette};
-use crate::views::{outline_pill, outline_pill_selected, pill_outlined, small_link, toggle_chip};
+use crate::views::{outline_pill, outline_pill_selected, pill_outlined, toggle_chip};
 use egui::{CornerRadius, Frame, Margin, Rect, RichText, Sense, Stroke, Ui, vec2};
 use std::collections::BTreeSet;
 
@@ -763,7 +763,12 @@ fn filters(app: &mut App, ui: &mut Ui, p: &Palette) {
             app.actions.push(Action::RunSearch(String::new()));
         }
     }
-    let r = ui.add(crate::views::input_field_in(&mut app.filter.text, SEARCH_HINT, theme::body(14.0), p, crate::views::search_margin()).id(id));
+    // On whole points, so its 1 px border is one crisp row and its height reads 28 (round 13 I2).
+    let top = ui.cursor().top();
+    ui.add_space(top.round() - top);
+    let r = crate::views::add_field(ui, None, &mut app.filter.text, |t| {
+        crate::views::input_field_in(t, SEARCH_HINT, theme::body(14.0), p, crate::views::search_margin()).id(id)
+    });
     if r.changed() {
         app.text_edited = Some(std::time::Instant::now());
     }
@@ -808,6 +813,19 @@ pub fn count_parts(shown: usize, total: Option<usize>, loading_first: bool, suff
 
 /// The count row's note while JQL-looking text sits in the box unrun (the local filter is off for it).
 pub const JQL_ENTER_NOTE: &str = "Enter run as JQL";
+
+/// The Enter note's key, drawn in the key style.
+pub const JQL_ENTER_KEY: &str = "Enter";
+
+/// Appends `other`'s text and sections to `job`.
+pub fn append_job(job: &mut egui::text::LayoutJob, other: egui::text::LayoutJob) {
+    let base = job.text.len();
+    job.text.push_str(&other.text);
+    job.sections.extend(other.sections.into_iter().map(|mut s| {
+        s.byte_range = egui::text::ByteIndex(s.byte_range.start.0 + base)..egui::text::ByteIndex(s.byte_range.end.0 + base);
+        s
+    }));
+}
 
 /// The separator before anything the count row adds after the count: mode suffixes and the Enter note alike.
 pub const COUNT_SEP: &str = " · ";
@@ -924,7 +942,11 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
             job.append(&label, 0.0, fmt(color));
             job.append(&mode, 0.0, fmt(p.muted));
             if !row_spinner && jql_awaiting_enter(&app.filter.text, app.last_search_jql.as_deref(), app.typed_search && app.search_active, pending) {
-                job.append(&count_note(JQL_ENTER_NOTE), 0.0, fmt(p.muted));
+                // The key in the key style, like the hint bar's (round 13 I4).
+                let (key, rest) = JQL_ENTER_NOTE.split_at(JQL_ENTER_KEY.len());
+                job.append(COUNT_SEP, 0.0, fmt(p.muted));
+                append_job(&mut job, key_job(key, p.muted));
+                job.append(rest, 0.0, fmt(p.muted));
             }
             ui.label(job);
             if row_spinner {
@@ -933,7 +955,9 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
         }
         if show_clear {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if small_link(ui, clear_label(box_text), p).clicked() {
+                // Right-aligned by the ink: "Clear search" and "Clear filters" end their last glyph on one edge
+                // (round 13 B2: their boxes did, 0.5–1 apart in ink).
+                if crate::views::small_link_ink_right(ui, clear_label(box_text), p).clicked() {
                     app.actions.push(Action::ClearFilters);
                 }
             });
@@ -1512,7 +1536,7 @@ fn goto_box(app: &mut App, ctx: &egui::Context, p: &Palette) {
                 ui.set_width(goto_inner_w(crate::views::dialog_stroke(p).width));
                 goto_title(ui, p);
                 // Proportional 14 like the search box: mono is for rendered ids, not input.
-                let r = ui.add(crate::views::input_field(text, "9001, CI-9001, or a browse link", theme::body(14.0), p));
+                let r = crate::views::add_field(ui, None, text, |t| crate::views::input_field(t, "9001, CI-9001, or a browse link", theme::body(14.0), p));
                 // The box keeps focus while open, so Enter counts whether or not the field just gave it up.
                 if (r.has_focus() || r.lost_focus()) && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                     go = true;
@@ -1925,6 +1949,7 @@ mod tests {
         // B4 (round 11): the note uses the bar's words and the suffixes' separator, in one line with the count.
         assert_eq!(JQL_ENTER_NOTE, "Enter run as JQL");
         assert_eq!(count_note(JQL_ENTER_NOTE), " · Enter run as JQL");
+        assert!(JQL_ENTER_NOTE.starts_with(JQL_ENTER_KEY), "the note leads with its key");
         assert!(count_label(2, None, false, CountSuffix::Jql).ends_with(&count_note("JQL")), "one separator");
         // B2: the search box's text is centred like a combo's (even margins top and bottom).
         let m = crate::views::search_margin();
