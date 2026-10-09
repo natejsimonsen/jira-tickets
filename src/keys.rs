@@ -197,7 +197,7 @@ pub fn hints(c: HintContext) -> &'static [Hint] {
         HintContext::Search => &[&[K("Enter"), W("search JQL")], &[K("Esc"), W("clear")]],
         HintContext::SearchText => &[&[K("Enter"), W("run as JQL")], &[K("Esc"), W("clear")]],
         HintContext::SearchEmpty => &[&[K("Enter"), W("search JQL")], &[K("Esc"), W("done")]],
-        HintContext::Composer => &[&[K("⌘Enter"), W("post")], &[K("Esc"), W("leave, draft kept")]],
+        HintContext::Composer => &[&[K("⌘Enter"), W("post")], &[K("Esc"), W("done, draft kept")]],
         HintContext::EditPicker => &[&[K("Tab/⇧Tab"), W("field")], &[K("Enter"), W("confirm")], &[K("Esc"), W("cancel")]],
         HintContext::AssignPicker => &[&[W("Type to filter")], &[K("↑/↓"), W("move")], &[K("Enter"), W("confirm")], &[K("Esc"), W("cancel")]],
         HintContext::Picker => &[&[K("↑/↓"), W("or"), K("j/k"), W("move")], &[K("Enter"), W("confirm")], &[K("Esc"), W("cancel")]],
@@ -333,7 +333,7 @@ mod tests {
         assert_eq!(hint_context(st(false, false, None, true, Focus::None)), Selected);
         assert_eq!(hint_context(st(false, false, None, true, Focus::OtherText)), Browse, "letters type into the field, so no selection hints");
         assert_eq!(hint_context(st(false, false, None, false, Focus::None)), Browse);
-        assert_eq!(hint_text(hints(Composer)), "⌘Enter post · Esc leave, draft kept");
+        assert_eq!(hint_text(hints(Composer)), "⌘Enter post · Esc done, draft kept");
         let ro = HintState { read_only: true, has_selection: true, ..HintState::new(Focus::Composer) };
         let bar = hint_text(hints(hint_context(ro)));
         assert!(!bar.contains("⌘Enter") && !bar.contains("draft"), "read-only has no composer, so no composer keys: {bar}");

@@ -55,3 +55,5 @@ These were decided in earlier rounds; raters treat them as correct and do not sc
 - **⌘1–4 and ⌘R** are discoverable through the tab and sync tooltips and the help overlay, not the hint bar.
 - **Header right cluster.** "?" and sync are outermost at the 16 px right edge; the name and "Read-only" sit to
   their left and grow leftward, so the buttons never move whatever the name.
+- **Disabled buttons.** One disabled style: the neutral fill with a `muted` label (e.g. Comment with an empty
+  draft); it is not a contrast defect.

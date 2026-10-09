@@ -902,7 +902,7 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
                         let (kr, _) = ui.allocate_exact_size(vec2(key_w, g.size().y), Sense::hover());
                         ui.painter().galley(kr.min, g, key_color);
                         let painter = ui.painter().clone();
-                        let title = crate::views::truncate_text(&i.summary, ui.available_width(), |t| {
+                        let title = crate::views::truncate_title(&i.summary, ui.available_width(), |t| {
                             painter.layout_no_wrap(t.to_string(), theme::bold(13.5), p.text).size().x
                         });
                         let r = ui.add(egui::Label::new(RichText::new(&title).font(theme::bold(13.5)).color(p.text)).extend().selectable(false));

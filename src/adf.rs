@@ -47,8 +47,25 @@ pub fn parse(v: &Value) -> Doc {
     Doc { blocks: blocks(v.get("content")) }
 }
 
+/// A node's child blocks, without empty or hardBreak-only paragraphs (each would paint a blank line and a
+/// second block gap), and with each paragraph's leading and trailing hardBreaks dropped.
 fn blocks(content: Option<&Value>) -> Vec<Block> {
-    content.and_then(Value::as_array).map(|a| a.iter().filter_map(block).collect()).unwrap_or_default()
+    content.and_then(Value::as_array).map(|a| a.iter().filter_map(block).map(trim_breaks).filter(|b| !is_empty_paragraph(b)).collect()).unwrap_or_default()
+}
+
+/// A paragraph without hardBreak spans at its start or end.
+fn trim_breaks(b: Block) -> Block {
+    match b {
+        Block::Paragraph(mut s) => {
+            let brk = |sp: &Span| sp.text == "\n" && sp.link.is_none();
+            while s.last().is_some_and(brk) {
+                s.pop();
+            }
+            let lead = s.iter().take_while(|sp| brk(sp)).count();
+            Block::Paragraph(s.split_off(lead))
+        }
+        other => other,
+    }
 }
 
 fn block(n: &Value) -> Option<Block> {
@@ -342,6 +359,22 @@ mod tests {
         let out = super::tidy_code_spans(&[code("foo bar  "), code("ok"), code("  ")]);
         let got: Vec<(&str, bool)> = out.iter().map(|s| (s.text.as_str(), s.code)).collect();
         assert_eq!(got, [("foo bar", true), ("  ", false), ("ok", true), ("  ", true)]);
+    }
+
+    #[test]
+    fn empty_and_break_only_paragraphs_are_skipped() {
+        // Round 8 (CI-2119): an empty paragraph after a list doubled the gap before the next block.
+        let v = serde_json::json!({"content": [
+            {"type": "bulletList", "content": [{"type": "listItem", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "three"}]}]}]},
+            {"type": "paragraph"},
+            {"type": "paragraph", "content": [{"type": "hardBreak"}, {"type": "hardBreak"}]},
+            {"type": "paragraph", "content": [{"type": "hardBreak"}, {"type": "text", "text": "next"}, {"type": "hardBreak"}, {"type": "text", "text": "line"}, {"type": "hardBreak"}]}
+        ]});
+        let d = super::parse(&v);
+        assert_eq!(d.blocks.len(), 2, "{:?}", d.blocks);
+        let super::Block::Paragraph(s) = &d.blocks[1] else { panic!() };
+        let texts: Vec<&str> = s.iter().map(|sp| sp.text.as_str()).collect();
+        assert_eq!(texts, ["next", "\n", "line"], "inner breaks stay, outer ones go");
     }
 
     #[test]

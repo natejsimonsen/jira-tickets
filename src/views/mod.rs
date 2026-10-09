@@ -755,6 +755,19 @@ pub fn pill_sized(ui: &mut Ui, text: &str, bg: Color32, fg: Color32, stroke: Str
 
 /// `text` cut to fit `max_w` (as `measure` lays it out) with "…"; trailing whitespace is trimmed before the
 /// ellipsis. Unchanged when it already fits.
+/// `truncate_text` for titles: a cut that leaves a word fragment of 3 characters or fewer ("…to PR c…") backs
+/// up to the end of the previous word instead ("…to PR…").
+pub fn truncate_title(text: &str, max_w: f32, measure: impl Fn(&str) -> f32) -> String {
+    let cut = truncate_text(text, max_w, measure);
+    let Some(kept) = cut.strip_suffix('…') else { return cut };
+    // Mid-word: the original continues with a letter or digit right after what was kept.
+    let mid_word = text[kept.len()..].starts_with(|c: char| c.is_alphanumeric());
+    match kept.rfind(char::is_whitespace) {
+        Some(at) if mid_word && kept[at..].trim().chars().count() <= 3 && !kept[..at].trim().is_empty() => format!("{}…", kept[..at].trim_end()),
+        _ => cut,
+    }
+}
+
 pub fn truncate_text(text: &str, max_w: f32, measure: impl Fn(&str) -> f32) -> String {
     if measure(text) <= max_w {
         return text.to_string();
@@ -824,6 +837,10 @@ mod widget_tests {
         assert_eq!(truncate_text("abcdefgh", 5.0, w), "abcd…");
         assert_eq!(truncate_text("abc", 0.0, w), "…");
         assert_eq!(truncate_text("ééééé", 3.0, w), "éé…", "char boundaries");
+        assert_eq!(truncate_title("Move the chart to PR checks", 23.0, w), "Move the chart to PR…", "a 1-letter fragment backs up a word");
+        assert_eq!(truncate_title("Move the chart to PR checks", 21.0, w), "Move the chart to PR…", "an exact word end stays");
+        assert_eq!(truncate_title("Move the chart to PR checks", 26.0, w), "Move the chart to PR chec…", "a 4-letter fragment stays");
+        assert_eq!(truncate_title("Supercalifragilistic", 3.0, w), "Su…", "one long word is still cut");
     }
 
     #[test]

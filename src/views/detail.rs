@@ -112,7 +112,9 @@ pub fn show(app: &mut App, ui: &mut Ui) {
                 if composer_shown(crate::jira::READ_ONLY.load(std::sync::atomic::Ordering::Relaxed), snapshot_composer()) {
                     composer(app, ui, p, &key);
                 } else {
-                    // Read-only: one muted line where the box would be; nothing to type into or press.
+                    // Read-only: one muted line where the box would be; nothing to type into or press. Its ink
+                    // starts where a card's edge would.
+                    ui.add_space(-NOTE_LIFT);
                     ui.label(RichText::new(READ_ONLY_NOTE).size(14.0).color(p.muted));
                 }
             });
@@ -149,11 +151,15 @@ const COMPOSER_PAD: f32 = 11.0;
 const COMPOSER_STROKE: f32 = 1.0;
 /// Comment author → date.
 const COMMENT_META_GAP: f32 = 8.0;
-/// What read-only mode shows instead of the composer.
 /// The detail content's right inset, inside the scroll area: the pane's 16 px gutter, which holds the floating
 /// scrollbar (its width + 4 at least).
 pub const DETAIL_RIGHT: f32 = 16.0;
 
+/// The read-only note's line box carries this much more above its ink than a card's edge does (round 8
+/// measured label → note 21 vs label → first card 17.5), so the note moves up by it.
+const NOTE_LIFT: f32 = 3.5;
+
+/// What read-only mode shows instead of the composer.
 pub const READ_ONLY_NOTE: &str = "Read-only, comments can't be posted";
 
 /// A comment card's header: the author in bold, 8, the date muted. Returns both labels' rects.
@@ -307,6 +313,7 @@ mod tests {
         assert!(composer_shown(true, true), "the snapshot override draws the writable UI");
         assert!(!snapshot_composer() || cfg!(feature = "snapshot"), "never on outside snapshot builds");
         assert_eq!(READ_ONLY_NOTE, "Read-only, comments can't be posted");
+        assert_eq!(21.0 - NOTE_LIFT, 17.5, "the note's ink sits where the first card's edge does");
         let bar = egui::style::ScrollStyle::floating();
         assert!(DETAIL_RIGHT >= bar.bar_width + bar.bar_outer_margin + 4.0, "the scrollbar sits clear of the content");
         assert_eq!((COMMENT_TIP, COMPOSER_HINT), ("Post the comment (⌘Enter)", "Add a comment (⌘Enter to post)"));
