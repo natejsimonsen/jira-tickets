@@ -98,7 +98,9 @@ flow issues-detail 'key:j;key:j;wait:1500;shot:01-detail.png;key:j;wait:1500;sho
     '01-detail.png|Second row selected, detail pane loaded' \
     '02-detail-next.png|Next row selected, detail pane follows'
 # The issues-detail-01 issue (second row): its description is short, so the composer is on screen.
-flow issues-composer 'key:j;key:j;wait:1500;shot:00-rest.png;click:Add a comment;type:This is a draft comment that will not be posted;wait:200;shot:01-draft.png' \
+# Snapshot mode is read-only, so the composer's placeholder is the read-only one. The pointer moves to an empty
+# stretch of the header before the draft shot, so it is not in the frame.
+flow issues-composer "key:j;key:j;wait:1500;shot:00-rest.png;click:comments can't be posted;type:This is a draft comment that will not be posted;hover:900,24;wait:200;shot:01-draft.png" \
     '00-rest.png|Composer at rest (hint text, disabled Comment)' \
     '01-draft.png|Comment composer focused with an unposted draft (Comment enabled)'
 flow pickers-transition 'key:j;wait:800;key:t;wait:1500;shot:01-open.png;key:down;shot:02-moved.png;key:enter;wait:800;shot:03-readonly-toast.png' \
