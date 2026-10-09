@@ -203,6 +203,9 @@ pub struct App {
     pub sprint_default_applied: bool,
     /// The board's sprints have answered (or failed) once, so the sprint combo shows the real scope.
     pub sprints_answered: bool,
+    /// The sprint scope came from the last run's cached sprint list (`filter::launch_sprint_scope`), so the combo
+    /// and epic hues treat it as known before the board answers.
+    pub sprints_cached: bool,
     /// Set by ⌘F or `/`; the search box takes focus on its next frame.
     pub focus_search: bool,
     /// The ⌘K box text while it is open.
@@ -296,12 +299,17 @@ impl App {
             });
         }
         let cfg = Arc::new(cfg);
-        let filter = crate::filter::IssueFilter {
+        let mut filter = crate::filter::IssueFilter {
             team: crate::filter::TeamScope::Label(cfg.scope.team_label.clone()),
             team_labels: cfg.scope.team_labels(),
             team_members: cfg.scope.team_members(&cfg.team.members),
             ..Default::default()
         };
+        let cached_sprints: Vec<Sprint> = crate::cache::load(&sprints_cache_key(cfg.scope.board_id)).unwrap_or_default();
+        let launch_scope = crate::filter::launch_sprint_scope(&cached_sprints);
+        if let Some(scope) = &launch_scope {
+            filter.sprint = scope.clone();
+        }
         let app = App {
             cfg: cfg.clone(),
             store: Store::for_launch(Store::load_cached()),
@@ -319,7 +327,8 @@ impl App {
             detail_loading: Default::default(),
             detail_fetched: HashMap::new(),
             filter,
-            sprints: Vec::new(),
+            sprints_cached: launch_scope.is_some(),
+            sprints: cached_sprints,
             sprint_default_applied: false,
             sprints_answered: false,
             focus_search: false,
@@ -758,15 +767,12 @@ impl App {
             }
             Msg::BoardSprints(Ok(sprints)) => {
                 self.sprints_answered = true;
+                crate::cache::store(&sprints_cache_key(self.cfg.scope.board_id), &sprints);
                 self.sprints = sprints;
-                let next = if self.sprint_default_applied {
-                    crate::filter::sprint_scope_after_refresh(&self.filter.sprint, &self.sprints)
-                } else {
-                    crate::filter::default_sprint_scope(&self.sprints)
-                };
-                if !self.sprint_default_applied || next != self.filter.sprint {
+                let next = crate::filter::sprint_scope_on_answer(&self.filter.sprint, self.sprint_default_applied, &self.sprints);
+                self.sprint_default_applied = true;
+                if next != self.filter.sprint {
                     self.filter.sprint = next;
-                    self.sprint_default_applied = true;
                     self.cursor = 0;
                 }
             }
@@ -836,6 +842,8 @@ impl App {
             }
             Action::SetSprint(s) => {
                 self.filter.sprint = s;
+                // A pick made before the board answers is kept (`sprint_scope_on_answer`).
+                self.sprint_default_applied = true;
                 self.cursor = 0;
             }
             Action::SetTeam(t) => {
@@ -1250,6 +1258,11 @@ impl App {
 }
 
 /// The toast for a finished write: done, blocked by read-only mode (a notice, not a failure), or failed.
+/// The cache key of a board's sprint list (the first frame's sprint scope, `filter::launch_sprint_scope`).
+pub fn sprints_cache_key(board: u64) -> String {
+    format!("sprints-{board}")
+}
+
 pub fn done_toast(what: &str, result: &jira::Result<()>) -> (String, ToastKind) {
     match result {
         Ok(()) => (format!("{what} done"), ToastKind::Success),

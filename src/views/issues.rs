@@ -35,7 +35,7 @@ pub fn slot_phase(scope_resolved: bool, already_final: bool) -> SlotPhase {
 /// rest of the loaded epic list (see `theme::assign_epic_slots`), once the sprint scope has resolved
 /// (`slot_phase`).
 pub fn track_epics(app: &mut App) {
-    match slot_phase(app.sprints_answered || app.client.is_none(), app.epic_slots_final) {
+    match slot_phase(app.sprints_answered || app.sprints_cached || app.client.is_none(), app.epic_slots_final) {
         SlotPhase::Provisional => app.epic_slots.clear(),
         SlotPhase::Reset => {
             app.epic_slots.clear();
@@ -658,7 +658,7 @@ fn filters(app: &mut App, ui: &mut Ui, p: &Palette) {
         combo(
             ui,
             "sprint",
-            sprint_combo_text(app.sprints_answered, &sprint_label),
+            sprint_combo_text(app.sprints_answered || app.sprints_cached, &sprint_label),
             (sprint_w, sprint_widest),
             sprint_options.len(),
             pane,

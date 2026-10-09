@@ -154,6 +154,19 @@ pub fn default_sprint_scope(sprints: &[Sprint]) -> SprintScope {
     sprints.iter().find(|s| s.state == "active").map_or(SprintScope::All, |s| SprintScope::Named(s.name.clone()))
 }
 
+/// The sprint scope on the first frame: the active sprint of the sprint list cached by the last run, so the
+/// first frame shows the rows the loaded list will (it showed the whole open list under a pending label, D1).
+/// None without a cached list: the combo stays pending until the board answers.
+pub fn launch_sprint_scope(cached: &[Sprint]) -> Option<SprintScope> {
+    (!cached.is_empty()).then(|| default_sprint_scope(cached))
+}
+
+/// The scope once the board's sprints answer: the default (active sprint) until the user has picked one or a
+/// default has been applied, then `sprint_scope_after_refresh`.
+pub fn sprint_scope_on_answer(current: &SprintScope, applied: bool, sprints: &[Sprint]) -> SprintScope {
+    if applied { sprint_scope_after_refresh(current, sprints) } else { default_sprint_scope(sprints) }
+}
+
 /// The scope to keep after the sprint list refreshes: a named sprint that is no longer
 /// listed (it closed) falls back to the default; anything else is kept.
 pub fn sprint_scope_after_refresh(current: &SprintScope, sprints: &[Sprint]) -> SprintScope {
@@ -420,6 +433,21 @@ mod tests {
             ]
         );
         assert_eq!(sprint_options(&[]), vec![(SprintScope::All, "All sprints".to_string()), (SprintScope::Backlog, "Backlog".to_string())]);
+    }
+
+    #[test]
+    fn first_frame_uses_the_cached_active_sprint() {
+        let cached = [sprint(1, "Sprint 92", "active"), sprint(2, "Sprint 93", "future")];
+        let first = launch_sprint_scope(&cached).expect("a cached list resolves the scope");
+        assert_eq!(first, SprintScope::Named("Sprint 92".into()));
+        // The board answers with the same sprints: the scope (and so the rows) stays what the first frame showed.
+        assert_eq!(sprint_scope_on_answer(&first, false, &cached), first);
+        // The sprint rolled over since the cache: the new active one.
+        let rolled = [sprint(2, "Sprint 93", "active")];
+        assert_eq!(sprint_scope_on_answer(&first, false, &rolled), SprintScope::Named("Sprint 93".into()));
+        // A pick made before the answer is kept.
+        assert_eq!(sprint_scope_on_answer(&SprintScope::Backlog, true, &cached), SprintScope::Backlog);
+        assert_eq!(launch_sprint_scope(&[]), None, "nothing cached: pending");
     }
 
     #[test]
