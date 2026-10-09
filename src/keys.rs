@@ -199,7 +199,7 @@ pub fn hints(c: HintContext) -> &'static [Hint] {
         HintContext::SearchEmpty => &[&[K("Enter"), W("run as JQL")], &[K("Esc"), W("done")]],
         HintContext::Composer => &[&[K("⌘Enter"), W("post")], &[K("Esc"), W("done (draft kept)")]],
         HintContext::EditPicker => &[&[K("Tab/⇧Tab"), W("next or previous field")], &[K("Enter"), W("confirm")], &[K("Esc"), W("cancel")]],
-        HintContext::AssignPicker => &[&[W("Type to filter")], &[K("↑/↓"), W("move")], &[K("Enter"), W("confirm")], &[K("Esc"), W("cancel")]],
+        HintContext::AssignPicker => &[&[K("Type"), W("to filter")], &[K("↑/↓"), W("move")], &[K("Enter"), W("confirm")], &[K("Esc"), W("cancel")]],
         HintContext::Picker => &[&[K("j/k"), W("or"), K("↑/↓"), W("move")], &[K("Enter"), W("confirm")], &[K("Esc"), W("cancel")]],
         HintContext::Selected => &[
             &[K("j/k"), W("or"), K("↑/↓"), W("move")],

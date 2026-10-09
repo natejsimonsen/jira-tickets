@@ -319,7 +319,7 @@ pub fn show(app: &mut App, ui: &mut Ui) {
             // The filter block's gaps are explicit (all V_GAP), so no implicit item spacing is added on top.
             ui.spacing_mut().item_spacing.y = 0.0;
             ui.scope(|ui| filters(app, ui, p));
-            ui.add_space(SEARCH_TO_COUNT);
+            ui.add_space(count_gaps_in(ui, p).0);
             list(app, ui, p);
         });
     // The toast centres on the whole pane as laid out, not on the panel's response (which grows past the
@@ -961,8 +961,7 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
     let (label, mode) = count_parts(rows.len(), total, loading_first, count_suffix(app.typed_shown, app.text_shown.is_some(), showing_search));
     let box_text = !app.filter.text.trim().is_empty() || (app.typed_search && app.search_active);
     let show_clear = clear_visible(app.filter.quick.is_some(), app.filter.mine, app.filter.roadmap, box_text);
-    ui.allocate_ui_with_layout(vec2(ui.available_width(), COUNT_H), egui::Layout::left_to_right(egui::Align::Center), |ui| {
-        ui.set_min_height(COUNT_H);
+    count_row(ui, |ui| {
         // 7 in code reads as 8 ink to ink: the 12 px text's side bearing adds about 1.
         ui.spacing_mut().item_spacing.x = COUNT_GAP;
         // One pattern, muted 12, the spinner before the verb: "[count] ⟳ Updating…", or "⟳ Loading issues…"
@@ -995,7 +994,7 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
             });
         }
     });
-    ui.add_space(COUNT_TO_ROWS);
+    ui.add_space(count_gaps_in(ui, p).1);
     let columns = app.cfg.issues.columns.clone();
     let cfg = app.cfg.clone();
     let (status_colors, epic_colors) = (&cfg.issues.status_colors, &cfg.issues.epic_colors);
@@ -1037,7 +1036,7 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
             let r = Frame::new()
                 .stroke(Stroke::new(1.0, p.border))
                 .corner_radius(corners)
-                .inner_margin(Margin { left: 12, right: 12, top: ROW_PAD_TOP, bottom: ROW_PAD_BOTTOM })
+                .inner_margin(Margin { left: ROW_PAD_LEFT, right: 12, top: ROW_PAD_TOP, bottom: ROW_PAD_BOTTOM })
                 .show(ui, |ui| {
                     ui.set_width(ui.available_width());
                     // The row's outer top edge (the content starts inside the 1 px border and the top margin).
@@ -1302,16 +1301,37 @@ fn spinner_label(ui: &mut Ui, p: &Palette, text: &str) {
     ui.add_space(spinner_label_space(lb) - gap);
     ui.add(egui::Label::new(g));
 }
-/// The count row: its 12 px line box (the spinner and link fit), so the gaps around it are what they say:
-/// 12 from the search box to the count's ink and 8 from its ink to the first card.
+/// The count row: its 12 px line box (the spinner and link fit), the line centred in it.
 const COUNT_H: f32 = 16.0;
-/// The count's 12 px text sits ~4 inside its 16 px line box at the top and the bottom (measured 16 / 12 with
-/// 12 / 8 in code), so the code gaps are 8 and 4.
-const COUNT_INK_INSET: f32 = 4.0;
-/// Search box → count row (12 to the ink).
-const SEARCH_TO_COUNT: f32 = V_GAP - COUNT_INK_INSET;
-/// Count row → first card (8 from the ink).
-const COUNT_TO_ROWS: f32 = 8.0 - COUNT_INK_INSET;
+/// Search box → the count's ink, and the count's ink (its baseline) → the first card (round 14 B1: 11.5 / 7.5).
+const COUNT_INK_ABOVE: f32 = 12.0;
+const COUNT_INK_BELOW: f32 = 8.0;
+
+/// The space before and after the count row for COUNT_INK_ABOVE / COUNT_INK_BELOW to the ink of a count line
+/// laid out as `g` (`count_job`), centred in COUNT_H.
+pub fn count_gaps(g: &egui::Galley) -> (f32, f32) {
+    let ink = theme::ink_rect(g);
+    let top = (COUNT_H - g.size().y) / 2.0;
+    (COUNT_INK_ABOVE - top - ink.top(), COUNT_INK_BELOW - (COUNT_H - top - ink.bottom()))
+}
+
+/// `count_gaps` for this ui's fonts, from a plain count ("18 issues": digits and x-height, no descenders).
+pub fn count_gaps_in(ui: &Ui, p: &Palette) -> (f32, f32) {
+    let g = ui.ctx().fonts_mut(|f| {
+        let job = count_job(f, "18 issues", p.text, "", false, p);
+        f.layout_job(job)
+    });
+    count_gaps(&g)
+}
+
+/// The count row's box: COUNT_H tall, left to right, its contents centred.
+pub fn count_row<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
+    ui.allocate_ui_with_layout(vec2(ui.available_width(), COUNT_H), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+        ui.set_min_height(COUNT_H);
+        add(ui)
+    })
+    .inner
+}
 /// Space between a row's pills.
 pub const PILL_GAP: f32 = 8.0;
 /// The mono key's left side bearing at 12.5: the pill row moves in by it so pills and key share an ink edge.
@@ -1328,6 +1348,8 @@ const ROW_GAP: f32 = -1.0;
 /// the bottom lands on 6. ROW_LINE_GAP is the frame's item spacing, so it also follows the pill row: the bottom
 /// space is 3.5 to net 2.0 under the pills. Margins are whole points, so the half points are spaces inside the
 /// frame.
+/// The row's left margin: with the mono key's 1 of bearing, its ink sits 12 inside the border (round 14 C2: 13).
+const ROW_PAD_LEFT: i8 = 11;
 const ROW_PAD_TOP: i8 = 0;
 const ROW_PAD_TOP_EXTRA: f32 = 0.5;
 const ROW_PAD_BOTTOM: i8 = 4;
@@ -1448,8 +1470,16 @@ fn hint_bar(ui: &mut Ui, hs: &[crate::keys::Hint], p: &Palette) {
         Tok::W(s) => ui.painter().layout_no_wrap(s.to_string(), theme::body(12.0), p.muted),
     };
     let word = |s: &str| ui.painter().layout_no_wrap(s.to_string(), theme::body(12.0), p.muted);
-    let ink = |g: &std::sync::Arc<egui::Galley>| (g.mesh_bounds.left(), g.mesh_bounds.right());
-    let ink_w = |g: &std::sync::Arc<egui::Galley>| g.mesh_bounds.width();
+    // The glyphs' rasters as the tessellator places them (`ink_rect`), so with the origins on whole pixels every
+    // gap lands exactly, after a mono run too (round 14 J3: 4.5 after "Enter", 4 after "⌘1").
+    let ink = |g: &std::sync::Arc<egui::Galley>| {
+        let r = theme::ink_rect(g);
+        if r.is_positive() { (r.left(), r.right()) } else { (0.0, 0.0) }
+    };
+    let ink_w = |g: &std::sync::Arc<egui::Galley>| {
+        let (l, r) = ink(g);
+        r - l
+    };
     let hints: Vec<Vec<std::sync::Arc<egui::Galley>>> = hs.iter().map(|h| h.iter().map(galley).collect()).collect();
     let widths: Vec<f32> = hints
         .iter()
@@ -1489,10 +1519,11 @@ fn hint_bar(ui: &mut Ui, hs: &[crate::keys::Hint], p: &Palette) {
     let (rect, _) = ui.allocate_exact_size(vec2(total.ceil(), h), Sense::hover());
     // One baseline for keys and words: a 12 px word's line box centred in the bar.
     let line = (rect.center().y - dot.size().y / 2.0).round() + crate::views::galley_baseline(&dot);
+    let ppp = ui.ctx().pixels_per_point();
     for (g, x) in items.into_iter().zip(xs) {
         let top = line - crate::views::galley_baseline(&g);
         // Each galley carries its own colour (keys `text`, words `muted`).
-        ui.painter().galley(egui::pos2(rect.left() + x, top), g, p.muted);
+        ui.painter().galley(egui::pos2(snap_px(rect.left() + x, ppp), top), g, p.muted);
     }
 }
 
@@ -1890,13 +1921,39 @@ mod tests {
     }
 
     #[test]
+    fn the_count_sits_12_and_8_to_its_ink() {
+        // Round 14 B1: 12 from the search box to the count's ink, 8 from its baseline to the first card. Real
+        // fonts, 2x.
+        for p in [theme::LIGHT, theme::DARK] {
+            let shapes = crate::testutil::paint_at2(vec2(600.0, 300.0), |ui| {
+                ui.spacing_mut().item_spacing.y = 0.0;
+                let (r, _) = ui.allocate_exact_size(vec2(300.0, 28.0), Sense::hover());
+                ui.painter().rect_filled(r, 0.0, egui::Color32::RED);
+                ui.add_space(count_gaps_in(ui, &p).0);
+                count_row(ui, |ui| {
+                    let job = ui.ctx().fonts_mut(|f| count_job(f, "18 issues", p.text, "", false, &p));
+                    ui.label(job);
+                });
+                ui.add_space(count_gaps_in(ui, &p).1);
+                let (r, _) = ui.allocate_exact_size(vec2(300.0, 44.0), Sense::hover());
+                ui.painter().rect_filled(r, 0.0, egui::Color32::BLUE);
+            });
+            let fills = crate::testutil::fills(&shapes);
+            let at = |c: egui::Color32| fills.iter().find(|(_, f)| *f == c).expect("a fill").0;
+            let (search, card) = (at(egui::Color32::RED), at(egui::Color32::BLUE));
+            let ink = crate::testutil::ink_of(&shapes, "18 issues");
+            assert_eq!(ink.top() - search.bottom(), 12.0, "above");
+            assert_eq!(card.top() - ink.bottom(), 8.0, "below");
+        }
+    }
+
+    #[test]
     fn popups_stay_in_the_pane() {
         assert_eq!(popup_left(300.0, 200.0, 16.0, 588.0), 300.0, "fits under its combo");
         assert_eq!(popup_left(300.0, 400.0, 16.0, 588.0), 188.0, "shifts left to end at the pane edge");
         assert_eq!(popup_left(300.0, 572.0, 16.0, 588.0), 16.0, "as wide as the pane: from its left edge");
         assert_eq!(popup_left_end(588.0, 200.0, 16.0), 388.0, "epic: right edge on the combo's, grows leftward");
         assert_eq!(popup_left_end(588.0, 700.0, 16.0), 16.0, "bounded by the pane");
-        assert_eq!((SEARCH_TO_COUNT, COUNT_TO_ROWS), (8.0, 4.0), "12 / 8 to the count's ink");
     }
 
     #[test]
@@ -2101,7 +2158,16 @@ mod tests {
         // 900 less the header (48), the filter block (12 + 28 + 12 + 28 + 12 + 28 + 12, the count row, 8) and the hint bar.
         let list_h = 900.0
             - crate::views::HEADER_H
-            - (12.0 + 28.0 + 12.0 + 28.0 + 12.0 + crate::views::INPUT_H + SEARCH_TO_COUNT + COUNT_H + COUNT_TO_ROWS)
+            - (12.0
+                + 28.0
+                + 12.0
+                + 28.0
+                + 12.0
+                + crate::views::INPUT_H
+                + crate::testutil::with_ui(|ui| {
+                    let (above, below) = count_gaps_in(ui, &theme::LIGHT);
+                    above + COUNT_H + below
+                }))
             - HINT_BAR_H;
         assert!((list_h / ROW_PITCH).floor() >= 15.0, "{}", list_h / ROW_PITCH);
     }

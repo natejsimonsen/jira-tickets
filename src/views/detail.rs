@@ -12,11 +12,12 @@ pub fn show(app: &mut App, ui: &mut Ui) {
         if app.help_open {
             return;
         }
-        ui.set_max_width(ui.available_width() - DETAIL_RIGHT);
-        ui.vertical_centered(|ui| {
-            ui.add_space(120.0);
-            crate::views::empty_state(ui, p, "Select an issue");
-        });
+        // Centred by its ink on the pane's own rect (round 14 K2: centred on the content column it read 8 right).
+        let content = ui.max_rect();
+        let (left, right) = app.detail_x.unwrap_or((content.left(), content.right()));
+        let g = ui.painter().layout_no_wrap(EMPTY_DETAIL.to_string(), theme::body(crate::views::EMPTY_STATE_SIZE), p.muted);
+        let x = crate::views::issues::snap_px(empty_detail_x(left, right, theme::ink_rect(&g).center().x), ui.ctx().pixels_per_point());
+        ui.painter().galley(egui::pos2(x, content.top() + EMPTY_DETAIL_TOP), g, p.muted);
         return;
     };
     let Some(issue) = app.store.get(&key).cloned() else {
@@ -61,7 +62,7 @@ pub fn show(app: &mut App, ui: &mut Ui) {
                 }
             });
         });
-        ui.add_space(8.0);
+        ui.add_space(key_to_title_space(ui, &issue.key));
         ui.label(RichText::new(&issue.summary).font(theme::bold(22.0)).color(p.text));
         ui.add_space(TITLE_TO_PILLS);
         ui.horizontal_wrapped(|ui| {
@@ -147,6 +148,27 @@ pub fn show(app: &mut App, ui: &mut Ui) {
     }
 }
 
+/// The detail pane's empty state, EMPTY_DETAIL_TOP under the pane's content top.
+pub const EMPTY_DETAIL: &str = "Select an issue";
+const EMPTY_DETAIL_TOP: f32 = 120.0;
+
+/// The empty state's galley x for its ink centre (`ink_centre`, from the galley's origin) on the pane's centre.
+pub fn empty_detail_x(pane_left: f32, pane_right: f32, ink_centre: f32) -> f32 {
+    (pane_left + pane_right) / 2.0 - ink_centre
+}
+
+/// The key row's baseline → the title's cap ink (round 14 E1: 8 to the boxes read 26–29).
+const KEY_TO_TITLE: f32 = 24.0;
+
+/// The space after the key row (BUTTON_H, the mono key centred in it) for KEY_TO_TITLE from the key's baseline
+/// to the 22 pt title's ink; the layout's item spacing comes on top.
+fn key_to_title_space(ui: &Ui, key: &str) -> f32 {
+    let g = ui.painter().layout_no_wrap(key.to_string(), theme::mono(12.5), egui::Color32::WHITE);
+    let under = crate::views::BUTTON_H - ((crate::views::BUTTON_H - g.size().y) / 2.0 + crate::views::galley_baseline(&g));
+    let title = theme::Ink::of(ui.ctx(), &theme::bold(22.0), None);
+    KEY_TO_TITLE - under - title.top - ui.spacing().item_spacing.y
+}
+
 /// Title → pills.
 const TITLE_TO_PILLS: f32 = 12.0;
 /// Pills → Description and the description's last line → Comments, measured to the ink (round 13 E5: 24 to
@@ -221,8 +243,11 @@ pub fn comment_card(ui: &mut Ui, p: &Palette, author: &str, date: &str, body: &s
         ui.set_width(ui.available_width());
         let header = header_galleys(ui, p, author, date);
         ui.add_space(CARD_PAD - header.ink_top);
+        let under = header.below_baseline();
         comment_header_row(ui, header);
-        ui.add_space(4.0);
+        // HEADER_TO_BODY from the header's baseline to the body's first ink (round 14 E2: 4 to the boxes read 15).
+        let body_top = theme::Ink::of(ui.ctx(), &theme::body(14.0), Some(adf_view::line_height(14.0))).top;
+        ui.add_space(HEADER_TO_BODY - under - body_top - ui.spacing().item_spacing.y);
         adf_view::show_value(ui, body, p, p.surface_2);
         // The layout's item spacing already follows the body.
         ui.add_space(below - ui.spacing().item_spacing.y);
@@ -255,6 +280,17 @@ pub fn comment_header(ui: &mut Ui, p: &Palette, author: &str, date: &str) -> (eg
     let header = header_galleys(ui, p, author, date);
     comment_header_row(ui, header)
 }
+
+impl HeaderGalleys {
+    /// How far the header row's box runs below the author's baseline (neither label has descenders to count).
+    fn below_baseline(&self) -> f32 {
+        let row = self.author.size().y.max(self.drop + self.date.size().y);
+        row - crate::views::galley_baseline(&self.author)
+    }
+}
+
+/// A comment header's baseline → the body's first ink.
+const HEADER_TO_BODY: f32 = 12.0;
 
 fn comment_header_row(ui: &mut Ui, h: HeaderGalleys) -> (egui::Rect, egui::Rect) {
     ui.horizontal_top(|ui| {
@@ -485,6 +521,40 @@ mod tests {
         assert!(near(d.left() - a.right(), COMMENT_META_GAP), "author · date {}", d.left() - a.right());
         // Neither has descenders, so the ink bottoms are the baselines.
         assert!(near(a.bottom(), d.bottom()), "one baseline: {} vs {}", a.bottom(), d.bottom());
+    }
+
+    #[test]
+    fn the_empty_detail_centres_on_the_pane() {
+        assert_eq!(empty_detail_x(604.0, 1440.0, 50.0), 972.0, "the ink's centre on the pane's");
+    }
+
+    #[test]
+    fn comment_bodies_sit_12_under_their_header() {
+        // Round 14 E2: the header's baseline → the body's first ink, 12.
+        let p = crate::theme::LIGHT;
+        let body = serde_json::json!({"type": "doc", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "Looks good"}]}]});
+        let shapes = crate::testutil::paint_at2(egui::vec2(800.0, 400.0), |ui| {
+            ui.set_width(400.0);
+            comment_card(ui, &p, "Ada Lovelace", "2026-07-29 13:28", &body);
+        });
+        let (a, b) = (crate::testutil::ink_of(&shapes, "Ada Lovelace"), crate::testutil::ink_of(&shapes, "Looks good"));
+        assert!((b.top() - a.bottom() - HEADER_TO_BODY).abs() <= 0.5, "header → body {}", b.top() - a.bottom());
+    }
+
+    #[test]
+    fn the_title_sits_24_under_the_key() {
+        // Round 14 E1: the key row's baseline (its ink's foot: "CI-3778" has no descenders) → the title's ink, 24.
+        let p = crate::theme::LIGHT;
+        let shapes = crate::testutil::paint_at2(egui::vec2(800.0, 400.0), |ui| {
+            ui.allocate_ui_with_layout(vec2(ui.available_width(), crate::views::BUTTON_H), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                ui.set_min_height(crate::views::BUTTON_H);
+                ui.label(RichText::new("CI-3778").font(theme::mono(12.5)).color(p.muted));
+            });
+            ui.add_space(key_to_title_space(ui, "CI-3778"));
+            ui.label(RichText::new("tools/flox/github-auth: pin GitHub host keys").font(theme::bold(22.0)).color(p.text));
+        });
+        let (k, t) = (crate::testutil::ink_of(&shapes, "CI-3778"), crate::testutil::ink_of(&shapes, "tools/flox/github-auth: pin GitHub host keys"));
+        assert!((t.top() - k.bottom() - KEY_TO_TITLE).abs() <= 0.5, "key → title {}", t.top() - k.bottom());
     }
 
     #[test]

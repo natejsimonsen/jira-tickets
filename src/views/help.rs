@@ -37,20 +37,22 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
             .show(ui, |ui| {
                 ui.set_width(lw + COL_GAP + rw);
                 ui.spacing_mut().item_spacing.y = 0.0;
-                ui.label(RichText::new("Keyboard").font(theme::bold(15.0)).color(p.text));
-                ui.add_space(12.0);
+                let title = ui.painter().layout_no_wrap("Keyboard".to_string(), theme::bold(15.0), p.text);
+                let below = title.size().y - theme::ink_rect(&title).bottom();
+                ui.label(title);
+                let (row, header) = (row_h(ui, p), header_h(ui));
+                ui.add_space(TITLE_TO_HEADINGS - below - heading_ink(ui, p, row, header).0);
                 ui.horizontal_top(|ui| {
                     ui.spacing_mut().item_spacing.x = COL_GAP;
                     ui.allocate_ui_with_layout(vec2(lw, 0.0), egui::Layout::top_down(egui::Align::Min), |ui| {
                         ui.set_width(lw);
-                        group(ui, p, Group::Issues, lk, 0.0);
+                        group(ui, p, Group::Issues, lk);
                     });
                     ui.allocate_ui_with_layout(vec2(rw, 0.0), egui::Layout::top_down(egui::Align::Min), |ui| {
                         ui.set_width(rw);
-                        group(ui, p, Group::Pickers, rk, 0.0);
-                        let (row, header) = (row_h(ui, p), header_h(ui));
+                        group(ui, p, Group::Pickers, rk);
                         ui.add_space(section_gap(row, header));
-                        group(ui, p, Group::Global, rk, global_seat(ui, p, row, header));
+                        group(ui, p, Group::Global, rk);
                     });
                 });
             });
@@ -95,21 +97,31 @@ fn chip_size(ui: &egui::Ui, text: &str, p: &Palette) -> egui::Vec2 {
     vec2(chip_w(ink_w), g.size().y + 4.0)
 }
 
+/// A muted "or" / "to" and its ink's left and right bearings.
+fn word_galley(ui: &egui::Ui, word: &str, p: &Palette) -> (std::sync::Arc<egui::Galley>, f32, f32) {
+    let g = ui.painter().layout_no_wrap(word.into(), theme::body(12.0), crate::views::dialog_muted(p));
+    let ink = theme::ink_rect(&g);
+    let (lb, rb) = if ink.is_positive() { (ink.left(), g.size().x - ink.right()) } else { (0.0, 0.0) };
+    (g, lb, rb)
+}
+
+/// A word's width in a key cell: its ink and CHIP_GAP to each chip's fill.
 fn word_width(ui: &egui::Ui, word: &str, p: &Palette) -> f32 {
-    ui.painter().layout_no_wrap(word.into(), theme::body(12.0), crate::views::dialog_muted(p)).size().x
+    let (g, lb, rb) = word_galley(ui, word, p);
+    g.size().x - lb - rb + 2.0 * CHIP_GAP
 }
 
 /// The width of one binding's key cell: its chips, with a muted "or" between alternatives and "to" between
-/// a range's ends, each 4 px from its chips.
+/// a range's ends, each CHIP_GAP from its chips to the word's ink (round 14 H3: 4 to the box read 5).
 fn keys_width(ui: &egui::Ui, keys: &str, p: &Palette) -> f32 {
     let mut w = 0.0;
     for (i, alt) in keys::chips(keys).enumerate() {
         if i > 0 {
-            w += 2.0 * CHIP_GAP + word_width(ui, "or", p);
+            w += word_width(ui, "or", p);
         }
         for (j, k) in keys::range(alt).into_iter().enumerate() {
             if j > 0 {
-                w += 2.0 * CHIP_GAP + word_width(ui, "to", p);
+                w += word_width(ui, "to", p);
             }
             w += chip_size(ui, k, p).x;
         }
@@ -149,30 +161,29 @@ pub fn slot_h(h: f32) -> f32 {
     h.ceil()
 }
 
-/// The ink gap from a group's last row to the next group's header (round 13 H2: the grid gave 30).
-const SECTION_INK_GAP: f32 = 32.0;
+/// A heading's baseline (its ink's foot: no heading has descenders) → its first row's chips (round 14 H1: 11.5 /
+/// 11.5 / 9 under Issues, Pickers, Global).
+const HEADING_TO_ROW: f32 = 8.0;
+/// The title's ink → the headings' ink (round 14 H2: 17.5).
+const TITLE_TO_HEADINGS: f32 = 16.0;
 
-/// How far a later group's header text sits below its slot's centre, so SECTION_INK_GAP separates it from the
-/// last row's ink above (the lowest ink is the chips' fill, centred in the row) while the slot, and the rows
-/// under it, stay on the ROW_PITCH grid.
-pub fn header_seat(row_h: f32, chip_h: f32, header_h: f32, label_h: f32, label_ink_top: f32) -> f32 {
-    let above = (row_h - chip_h) / 2.0 + section_gap(row_h, header_h) + (header_h - label_h) / 2.0 + label_ink_top;
-    SECTION_INK_GAP - above
+/// Where a heading's ink sits in its slot, as (ink top, line-box top), so its baseline is HEADING_TO_ROW above
+/// the first row's chips (centred in the row, HEADER_TO_ROWS under the slot).
+fn heading_ink(ui: &egui::Ui, p: &Palette, row: f32, header: f32) -> (f32, f32) {
+    let ink = theme::Ink::of(ui.ctx(), &theme::bold(12.0), None);
+    let chip_top = header + HEADER_TO_ROWS + (row - chip_size(ui, "⌘", p).y) / 2.0;
+    let line_top = chip_top - HEADING_TO_ROW - ink.base;
+    (line_top + ink.top, line_top)
 }
 
-/// The Global header's seat (`header_seat`), measured with the fonts.
-fn global_seat(ui: &egui::Ui, p: &Palette, row: f32, header: f32) -> f32 {
-    let label = ui.painter().layout_no_wrap(Group::Global.name().to_string(), theme::bold(12.0), p.text);
-    header_seat(row, chip_size(ui, "⌘", p).y, header, label.size().y, theme::ink_rect(&label).top())
-}
-
-/// A group: its header (`seat` below its slot's centre), then its rows.
-fn group(ui: &mut egui::Ui, p: &Palette, g: Group, key_w: f32, seat: f32) {
+/// A group: its heading (`heading_ink`), then its rows.
+fn group(ui: &mut egui::Ui, p: &Palette, g: Group, key_w: f32) {
     let header = header_h(ui);
-    // A fixed slot with the label painted in it, so the seat never moves the rows.
+    let row = row_h(ui, p);
+    // A fixed slot with the label painted in it, so the heading's place never moves the rows.
     let (slot, _) = ui.allocate_exact_size(vec2(ui.available_width(), header), egui::Sense::hover());
     let label = ui.painter().layout_no_wrap(g.name().to_string(), theme::bold(12.0), crate::views::dialog_muted(p));
-    let y = crate::views::issues::snap_px(slot.top() + (header - label.size().y) / 2.0 + seat, ui.ctx().pixels_per_point());
+    let y = crate::views::issues::snap_px(slot.top() + heading_ink(ui, p, row, header).1, ui.ctx().pixels_per_point());
     ui.painter().galley(egui::pos2(slot.left(), y), label, crate::views::dialog_muted(p));
     ui.add_space(HEADER_TO_ROWS);
     // Every row is as tall as its tallest part (a chip or the action), and chips, words and the action are
@@ -189,8 +200,14 @@ fn group(ui: &mut egui::Ui, p: &Palette, g: Group, key_w: f32, seat: f32) {
             ui.allocate_ui_with_layout(vec2(key_w, row_h), centred, |ui| {
                 ui.set_width(key_w);
                 ui.set_min_height(row_h);
-                ui.spacing_mut().item_spacing.x = CHIP_GAP;
-                let word = |ui: &mut egui::Ui, w: &str| ui.label(RichText::new(w).font(theme::body(12.0)).color(crate::views::dialog_muted(p)));
+                ui.spacing_mut().item_spacing.x = 0.0;
+                // CHIP_GAP from each chip's fill to the word's ink.
+                let word = |ui: &mut egui::Ui, w: &str| {
+                    let (g, lb, rb) = word_galley(ui, w, p);
+                    ui.add_space(CHIP_GAP - lb);
+                    ui.label(g);
+                    ui.add_space(CHIP_GAP - rb);
+                };
                 for (i, alt) in keys::chips(k.keys).enumerate() {
                     if i > 0 {
                         word(ui, "or");
@@ -256,10 +273,10 @@ mod tests {
     }
 
     #[test]
-    fn chips_pad_8_and_global_sits_32_below_pickers() {
-        // Round 13 H1 / H2 with the real fonts at the captures' density: every chip's fill sits 8 from its key's
-        // ink on both sides ("?" centred), and Global's header ink 32 under the last Pickers row's ink, its rows
-        // still on the 34 grid.
+    fn chips_pad_8_and_headings_sit_8_over_their_rows() {
+        // Round 13 H1 with the real fonts at the captures' density: every chip's fill sits 8 from its key's ink on
+        // both sides ("?" centred). Round 14 H1: every heading's ink 8 above its first row's chips, Global's rows
+        // still on the 34 grid (so Global sits 33 under the last Pickers row; it was seated at 32).
         use crate::keys::Group;
         let p = crate::theme::LIGHT;
         let chip = crate::theme::chip_fill_on(crate::views::dialog_fill(&p), &p);
@@ -268,12 +285,11 @@ mod tests {
         let shapes = crate::testutil::paint_at2(egui::vec2(800.0, 800.0), |ui| {
             ui.spacing_mut().item_spacing.y = 0.0;
             pickers_top = ui.cursor().top();
-            super::group(ui, &p, Group::Pickers, 120.0, 0.0);
+            super::group(ui, &p, Group::Pickers, 120.0);
             let (row, header) = (super::row_h(ui, &p), super::header_h(ui));
             ui.add_space(super::section_gap(row, header));
-            let seat = super::global_seat(ui, &p, row, header);
             global_row_top = ui.cursor().top() + header + super::HEADER_TO_ROWS;
-            super::group(ui, &p, Group::Global, 120.0, seat);
+            super::group(ui, &p, Group::Global, 120.0);
         });
         let n = crate::keys::BINDINGS.iter().filter(|k| k.group == Group::Pickers).count() as f32;
         let header = crate::testutil::with_ui(super::header_h);
@@ -281,14 +297,43 @@ mod tests {
         assert_eq!(global_row_top - first_pickers_row, (n + 1.0) * super::ROW_PITCH, "Global's rows stay on the grid");
         let chips: Vec<egui::Rect> = crate::testutil::fills(&shapes).into_iter().filter(|(_, c)| *c == chip).map(|(r, _)| r).collect();
         let inks = crate::testutil::inks(&shapes);
-        let global = inks.iter().find(|(t, _)| t == Group::Global.name()).expect("Global").1;
-        let last_pickers_bottom = chips.iter().filter(|r| r.bottom() < global.top()).map(|r| r.bottom()).fold(f32::MIN, f32::max);
-        assert!((global.top() - last_pickers_bottom - super::SECTION_INK_GAP).abs() <= 0.5, "gap {}", global.top() - last_pickers_bottom);
+        for g in [Group::Pickers, Group::Global] {
+            let h = inks.iter().find(|(t, _)| t == g.name()).expect("heading").1;
+            let first = chips.iter().filter(|r| r.top() > h.bottom()).map(|r| r.top()).fold(f32::MAX, f32::min);
+            assert!((first - h.bottom() - super::HEADING_TO_ROW).abs() <= 0.5, "{}: {}", g.name(), first - h.bottom());
+        }
         for c in &chips {
             let key = inks.iter().filter(|(_, r)| c.contains_rect(r.shrink(0.1))).map(|(_, r)| *r).reduce(|a, b| a.union(b)).expect("a key in the chip");
             let (l, r) = (key.left() - c.left(), c.right() - key.right());
             assert!((l - r).abs() <= 0.5, "centred: {l} / {r} in {c:?}");
             assert!(l >= super::CHIP_INK_X - 0.5, "8 to the ink: {l} in {c:?}");
+        }
+    }
+
+    #[test]
+    fn inline_words_sit_4_from_their_chips() {
+        // Round 14 H3: "or" and "to" 4 from each chip's fill to their ink.
+        let p = crate::theme::LIGHT;
+        let chip = crate::theme::chip_fill_on(crate::views::dialog_fill(&p), &p);
+        let shapes = crate::testutil::paint_at2(egui::vec2(1200.0, 900.0), |ui| {
+            ui.spacing_mut().item_spacing.y = 0.0;
+            super::group(ui, &p, crate::keys::Group::Issues, 200.0);
+        });
+        let chips: Vec<egui::Rect> = crate::testutil::fills(&shapes).into_iter().filter(|(_, c)| *c == chip).map(|(r, _)| r).collect();
+        let words: Vec<egui::Rect> = crate::testutil::inks(&shapes).into_iter().filter(|(t, _)| t == "or" || t == "to").map(|(_, r)| r).collect();
+        assert!(!words.is_empty());
+        for w in words {
+            let left = chips
+                .iter()
+                .filter(|c| c.right() <= w.left() && (c.center().y - w.center().y).abs() < 10.0)
+                .map(|c| w.left() - c.right())
+                .fold(f32::MAX, f32::min);
+            let right = chips
+                .iter()
+                .filter(|c| c.left() >= w.right() && (c.center().y - w.center().y).abs() < 10.0)
+                .map(|c| c.left() - w.right())
+                .fold(f32::MAX, f32::min);
+            assert!((left - super::CHIP_GAP).abs() <= 0.5 && (right - super::CHIP_GAP).abs() <= 0.5, "{left} / {right}");
         }
     }
 

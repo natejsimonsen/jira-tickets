@@ -49,7 +49,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                     Picker::Assign { key, items, current, cursor, filter } => {
                         title(ui, p, &format!("Assign {key}"));
                         let r = crate::views::add_field(ui, None, filter, |t| field(t, "Type a name", p));
-                        ui.add_space(gap_space(ASSIGN_FIELD_GAP, ui.spacing().item_spacing.y));
+                        ui.add_space(assign_field_space(ui));
                         // Not under the help overlay, or typing would land in the filter behind it.
                         if !help_open {
                             r.request_focus();
@@ -81,7 +81,8 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                         rows(ui, p, names, &mut confirm, cursor, None);
                     }
                     Picker::Edit { key, labels, priority, points, .. } => {
-                        title(ui, p, &format!("Edit {key}"));
+                        let below = title_line(ui, p, &format!("Edit {key}"));
+                        ui.add_space(edit_title_space(ui, below, "Labels, comma separated"));
                         let labels_id = egui::Id::new("edit-labels");
                         let r = edit_group(ui, p, "Labels, comma separated", labels, |t| field(t, "", p).id(labels_id));
                         // Labels takes focus on open (and whenever no field holds it); Tab moves on.
@@ -153,8 +154,30 @@ fn group_space(ui: &egui::Ui, label: &str) -> f32 {
     gap_space(GROUP_INK_GAP - top, ui.spacing().item_spacing.y)
 }
 
-/// The Assign filter field → the first row (round 11 G2: 8 left the field and the cursor row reading as one).
+/// The Assign filter field → the first row's ink ("Unassigned"; round 14 G3: 12 to the row's box read 21.5 to
+/// its ink).
 const ASSIGN_FIELD_GAP: f32 = 12.0;
+/// A picker row's margin above and below its text.
+const ROW_PAD_Y: i8 = 6;
+
+/// The space after the Assign field for ASSIGN_FIELD_GAP to the first row's ink (the field's fill is its ink):
+/// negative, so it backs up over the layout's item spacing.
+fn assign_field_space(ui: &egui::Ui) -> f32 {
+    let ink = theme::Ink::of(ui.ctx(), &theme::body(14.0), None);
+    ASSIGN_FIELD_GAP - f32::from(ROW_PAD_Y) - ink.top - ui.spacing().item_spacing.y
+}
+
+/// The Edit title's ink → the first label's ink (round 14 G2: 26; the other pickers' title gaps are 24).
+const EDIT_TITLE_INK_GAP: f32 = 24.0;
+/// An Edit label's descenders → its field (round 14 G2: 4 to the line box read 10.5).
+const LABEL_TO_FIELD_INK: f32 = 8.0;
+
+/// The space after the Edit title (whose line box runs `below` past its ink) for EDIT_TITLE_INK_GAP to `label`'s
+/// ink.
+fn edit_title_space(ui: &egui::Ui, below: f32, label: &str) -> f32 {
+    let top = theme::ink_rect(&ui.painter().layout_no_wrap(label.to_string(), theme::body(12.0), egui::Color32::WHITE)).top();
+    gap_space(EDIT_TITLE_INK_GAP - below - top, ui.spacing().item_spacing.y)
+}
 
 /// The space to add for a `gap` between two widgets: the layout's item spacing already lands after the first
 /// (the Assign gap measured 18 = 12 + 6; round 12 G1).
@@ -173,11 +196,20 @@ const BUTTONS_GAP: f32 = 18.0;
 
 /// The dialog's title, TITLE_INK_TOP under the dialog's inner edge to its ink, then TITLE_GAP.
 fn title(ui: &mut egui::Ui, p: &Palette, text: &str) {
-    let g = ui.painter().layout_no_wrap(text.to_string(), theme::bold(15.0), p.text);
-    // The frame's content already starts inside its 1 px edge.
-    ui.add_space(TITLE_INK_TOP - theme::ink_rect(&g).top());
-    ui.add(egui::Label::new(g));
+    title_line(ui, p, text);
     ui.add_space(TITLE_GAP);
+}
+
+/// The dialog's title line, TITLE_INK_TOP under the dialog's inner edge to its ink; returns how far its line box
+/// runs below its ink.
+fn title_line(ui: &mut egui::Ui, p: &Palette, text: &str) -> f32 {
+    let g = ui.painter().layout_no_wrap(text.to_string(), theme::bold(15.0), p.text);
+    let ink = theme::ink_rect(&g);
+    // The frame's content already starts inside its 1 px edge.
+    ui.add_space(TITLE_INK_TOP - ink.top());
+    let below = g.size().y - ink.bottom();
+    ui.add(egui::Label::new(g));
+    below
 }
 
 /// Assign's fixed block: the note row ("N matches", "9 of N · type to see more") right after the last row, then the
@@ -194,10 +226,12 @@ pub(crate) fn field<'a>(text: &'a mut String, hint: &str, p: &Palette) -> egui::
     crate::views::input_field_in(text, hint, theme::body(14.0), p, crate::views::input_margin(ROW_INSET))
 }
 
-/// A small muted label, 4 px, then the field (full width).
+/// A small muted label, LABEL_TO_FIELD_INK from its descenders, then the field (full width).
 fn edit_group(ui: &mut egui::Ui, p: &Palette, label: &str, text: &mut String, field: impl FnOnce(&mut String) -> egui::TextEdit<'_>) -> egui::Response {
     ui.label(RichText::new(label).color(crate::views::dialog_muted(p)).size(12.0));
-    ui.add_space(4.0);
+    let ink = theme::Ink::of(ui.ctx(), &theme::body(12.0), None);
+    // The layout's item spacing comes on top of the space (it may be negative: a space backs the cursor up).
+    ui.add_space(ink.pad_deep(LABEL_TO_FIELD_INK) - ui.spacing().item_spacing.y);
     crate::views::add_field(ui, None, text, field)
 }
 
@@ -261,7 +295,7 @@ fn row_list(ui: &mut egui::Ui, p: &Palette, names: &[Row], confirm: &mut bool, c
             let r = Frame::new()
                 .fill(fill)
                 .corner_radius(4)
-                .inner_margin(Margin::symmetric(ROW_INSET as i8, 6))
+                .inner_margin(Margin::symmetric(ROW_INSET as i8, ROW_PAD_Y))
                 .show(ui, |ui| {
                     ui.set_width(ui.available_width());
                     ui.set_min_height(ROW_H - 12.0);
@@ -335,10 +369,42 @@ mod tests {
 
     #[test]
     fn the_assign_field_sits_12_over_its_list() {
-        // G1: the space plus the theme's item spacing is the 12 gap (it was 12 + 6).
-        let spacing = 6.0;
-        assert_eq!(super::gap_space(super::ASSIGN_FIELD_GAP, spacing) + spacing, 12.0);
+        // Round 14 G3: 12 from the field's fill to "Unassigned"'s ink. Real fonts, 2x.
         assert_eq!(super::gap_space(4.0, 6.0), 0.0, "never negative");
-        crate::testutil::with_ui(|ui| assert_eq!(ui.spacing().item_spacing.y, spacing, "the theme's spacing"));
+        for p in [crate::theme::LIGHT, crate::theme::DARK] {
+            let mut filter = String::new();
+            let shapes = crate::testutil::paint_at2(egui::vec2(800.0, 900.0), |ui| {
+                ui.set_width(440.0);
+                crate::views::dialog_fields(ui, &p);
+                crate::views::add_field(ui, None, &mut filter, |t| super::field(t, "Type a name", &p));
+                ui.add_space(super::assign_field_space(ui));
+                let names = vec![super::Row::muted("Unassigned"), super::Row::plain("Ada Lovelace".into())];
+                super::rows(ui, &p, names, &mut false, &mut 1, Some(None));
+            });
+            let field = crate::testutil::fills(&shapes).iter().find(|(_, c)| *c == crate::theme::dialog_input_fill(&p)).expect("field").0;
+            let gap = crate::testutil::ink_of(&shapes, "Unassigned").top() - field.bottom();
+            assert!((gap - 12.0).abs() <= 0.25, "field → Unassigned {gap}");
+        }
+    }
+
+    #[test]
+    fn the_edit_picker_sits_24_and_8_to_the_ink() {
+        // Round 14 G2: title ink → first label ink 24; a label's descenders → its field 8.
+        let p = crate::theme::LIGHT;
+        let mut labels = String::from("a");
+        let shapes = crate::testutil::paint_at2(egui::vec2(800.0, 600.0), |ui| {
+            egui::Frame::new().fill(crate::views::dialog_fill(&p)).inner_margin(super::DIALOG_MARGIN).show(ui, |ui| {
+                ui.set_width(440.0);
+                crate::views::dialog_fields(ui, &p);
+                let below = super::title_line(ui, &p, "Edit CI-3779");
+                ui.add_space(super::edit_title_space(ui, below, "Labels, comma separated"));
+                super::edit_group(ui, &p, "Labels, comma separated", &mut labels, |t| super::field(t, "", &p));
+            });
+        });
+        let title = crate::testutil::ink_of(&shapes, "Edit CI-3779");
+        let label = crate::testutil::ink_of(&shapes, "Labels, comma separated");
+        assert!((label.top() - title.bottom() - 24.0).abs() <= 0.25, "title → label {}", label.top() - title.bottom());
+        let field = crate::testutil::fills(&shapes).iter().find(|(_, c)| *c == crate::theme::dialog_input_fill(&p)).expect("field").0;
+        assert!((field.top() - label.bottom() - 8.0).abs() <= 0.5, "label → field {}", field.top() - label.bottom());
     }
 }

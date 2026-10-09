@@ -387,14 +387,16 @@ fn check_again(ui: &mut Ui, p: &Palette, w: f32) -> egui::Response {
 /// Sign in → "Check again" in code: its row-height box carries ~5 above the ink of "Check", so this reads as the
 /// 12 the field → button gap shows (round 12 J1 measured 17 ink to ink at 12). 7.75: the box is now its text's
 /// height, not egui's 18 with the text 0.75 down (round 13 J2), so the ink stays where it was.
-const SIGN_IN_TO_AGAIN: f32 = 7.75;
+/// Round 14 J2: +0.5 (it read 11.5).
+const SIGN_IN_TO_AGAIN: f32 = 8.25;
 
 /// Body → aside in code: the 14 px line's leading under its ink and the aside's over its ink add ~6, so 2 reads
 /// as the 8 that makes the aside a footnote of the line above (round 12 J1 measured 14 at 8).
-const BODY_TO_ASIDE: f32 = 2.0;
+/// Round 14 J1: the aside 0.5 lower (it read 7.5 above, 15.5 below).
+const BODY_TO_ASIDE: f32 = 2.5;
 
 /// The sign-in aside → token field, in code (see the comment at its use).
-const ASIDE_TO_FIELD: f32 = 15.0;
+const ASIDE_TO_FIELD: f32 = 14.5;
 
 /// The sign-in panel's content width: 480, or the aside's one-line width plus 24 of margin when wider, so
 /// the aside never fits with only a pixel to spare.
@@ -633,12 +635,26 @@ pub fn toast_centre_x(window_w: f32, detail: Option<(f32, f32)>) -> f32 {
     detail.map_or(window_w / 2.0, |(l, r)| (l + r) / 2.0)
 }
 
-/// The toast's padding: 6 above and 10 below, because the 14 px line box carries its leading under the glyphs
-/// (8/8 set the text ~2 pt low, 7/9 still 1; round 12 D2); the sides are TOAST_INK_X to the ink (`toast_row`).
-const TOAST_MARGIN: Margin = Margin { left: 0, right: 0, top: 6, bottom: 10 };
+/// The toast's frame margin: none; the line's spaces above and below are TOAST_INK_Y to the ink (`toast_body`) and
+/// the sides TOAST_INK_X to the ink (`toast_row`).
+const TOAST_MARGIN: Margin = Margin::ZERO;
+/// The toast's vertical padding, from the fill to the text's ink: the tallest glyphs ("Hdlk") above, the
+/// descenders ("gpqy") below, so every toast is one height (round 14 D1: 6 / 10 to the line box read 10.5 / 11).
+pub const TOAST_INK_Y: f32 = 12.0;
 /// The toast's side padding, from the fill to the dot or the text's ink (round 13 D2: 16 to the text's box read
 /// 17–18.3 to its ink).
 pub const TOAST_INK_X: f32 = 16.0;
+
+/// The toast's contents: TOAST_INK_Y to the 14 pt line's ink above and below, the row between.
+fn toast_body(ui: &mut Ui, p: &Palette, dot: Option<Color32>, text: &str) {
+    let ink = theme::Ink::of(ui.ctx(), &theme::body(14.0), None);
+    ui.spacing_mut().item_spacing.y = 0.0;
+    // The row is the line's own height, not centred in the interact height.
+    ui.spacing_mut().interact_size.y = 0.0;
+    ui.add_space(ink.pad_top(TOAST_INK_Y));
+    toast_row(ui, p, dot, text);
+    ui.add_space(ink.pad_deep(TOAST_INK_Y));
+}
 
 /// The toast's one line: the type dot (if any), 8, the text, with TOAST_INK_X from the fill to the ink either side.
 fn toast_row(ui: &mut Ui, p: &Palette, dot: Option<Color32>, text: &str) {
@@ -681,7 +697,7 @@ pub fn toast(app: &mut App, ctx: &egui::Context) {
     let at = egui::pos2(x, window.bottom() - toast_offset(hint_bar_height(app)));
     egui::Area::new(egui::Id::new("toast")).pivot(egui::Align2::CENTER_BOTTOM).fixed_pos(at).show(ctx, |ui| {
         Frame::new().fill(p.tooltip).stroke(toast_stroke(p)).shadow(shadow).corner_radius(theme::RADIUS).inner_margin(TOAST_MARGIN).show(ui, |ui| {
-            toast_row(ui, p, toast_dot(t.kind), &t.text);
+            toast_body(ui, p, toast_dot(t.kind), &t.text);
         });
     });
 }
@@ -1845,7 +1861,6 @@ mod widget_tests {
         assert_eq!(toast_centre_x(1440.0, Some((604.0, 1440.0))), 1022.0);
         assert!(toast_shadow(&theme::DARK).color.a() > toast_shadow(&theme::LIGHT).color.a());
         assert_eq!(TOAST_MARGIN.left, TOAST_MARGIN.right);
-        assert_eq!((TOAST_MARGIN.top, TOAST_MARGIN.bottom), (6, 10), "D2: the text 1 up, the box height kept");
     }
 
     #[test]
@@ -1855,10 +1870,13 @@ mod widget_tests {
         for dot in [None, Some(theme::DARK.on_track)] {
             let text = "Read-only mode: transition not sent to Jira";
             let shapes = crate::testutil::paint_at2(vec2(1440.0, 400.0), |ui| {
-                Frame::new().fill(p.tooltip).inner_margin(TOAST_MARGIN).show(ui, |ui| toast_row(ui, &p, dot, text));
+                Frame::new().fill(p.tooltip).inner_margin(TOAST_MARGIN).show(ui, |ui| toast_body(ui, &p, dot, text));
             });
             let fill = crate::testutil::fills(&shapes).iter().find(|(_, c)| *c == p.tooltip).expect("toast").0;
             let ink = crate::testutil::ink_of(&shapes, text);
+            // Round 14 D1: 12 to the ink above (the "R") and below (the "y" of "only").
+            assert!((ink.top() - fill.top() - TOAST_INK_Y).abs() <= 0.5, "top {}", ink.top() - fill.top());
+            assert!((fill.bottom() - ink.bottom() - TOAST_INK_Y).abs() <= 0.5, "bottom {}", fill.bottom() - ink.bottom());
             assert!((fill.right() - ink.right() - TOAST_INK_X).abs() <= 0.5, "right {}", fill.right() - ink.right());
             if dot.is_none() {
                 assert!((ink.left() - fill.left() - TOAST_INK_X).abs() <= 0.5, "left {}", ink.left() - fill.left());

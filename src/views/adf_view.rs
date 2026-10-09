@@ -567,8 +567,21 @@ pub fn layout_paragraph(
     (g, chips)
 }
 
+/// Inline code shorter than this many characters never splits across a wrap; it moves whole to the next line
+/// (round 14 E3: "(rendererAvailable: false)" split at its space).
+pub const CODE_KEEP_WHOLE: usize = 30;
+
+/// `spans` with the spaces inside every short inline-code span made no-break (U+00A0), so the wrap moves the
+/// chip whole; longer code still wraps at its spaces.
+pub fn keep_short_code_whole(spans: Vec<Span>) -> Vec<Span> {
+    spans
+        .into_iter()
+        .map(|sp| if sp.code && sp.text.chars().count() < CODE_KEEP_WHOLE { Span { text: sp.text.replace(' ', "\u{a0}"), ..sp } } else { sp })
+        .collect()
+}
+
 fn spans(ui: &mut Ui, s: &[Span], p: &Palette, size: f32, heading: bool, chip: egui::Color32) {
-    let s = adf::tidy_code_spans(&adf::linkify(s));
+    let s = keep_short_code_whole(adf::tidy_code_spans(&adf::linkify(s)));
     let has_link = s.iter().any(|sp| sp.link.is_some());
     let fit = ui.fonts_mut(|f| MonoFit::measure(f, size, heading));
     let (job, chars) = paragraph_job(&s, p, size, heading, &fit);
@@ -668,6 +681,28 @@ mod tests {
             }
             assert!(fill.right() - ink.right() >= CODE_PAD - 0.5, "{text:?} right: {}", fill.right() - ink.right());
         }
+    }
+
+    #[test]
+    fn short_code_moves_whole_to_the_next_line() {
+        // Round 14 E3: a chip under CODE_KEEP_WHOLE characters never splits at a wrap, at any width it fits in; longer
+        // code still wraps at its spaces.
+        let p = crate::theme::LIGHT;
+        let code = Span { code: true, ..span("(rendererAvailable: false)") };
+        let spans = keep_short_code_whole(vec![span("Set the renderer flag so the panel reads "), code, span(" and loads.")]);
+        assert!(spans[1].text.contains('\u{a0}') && !spans[1].text.contains(' '));
+        let long = Span { code: true, ..span("a much longer code span that wraps at its spaces") };
+        assert_eq!(keep_short_code_whole(vec![long.clone()])[0].text, long.text);
+        crate::testutil::with_ui(|ui| {
+            for w in (240..=520).step_by(4) {
+                let chips = ui.fonts_mut(|f| {
+                    let fit = MonoFit::measure(f, 14.0, false);
+                    let (job, chars) = paragraph_job(&spans, &p, 14.0, false, &fit);
+                    layout_paragraph(f, job, &chars, w as f32, line_height(14.0)).1
+                });
+                assert_eq!(chips.len(), 1, "width {w}: one chip");
+            }
+        });
     }
 
     #[test]
