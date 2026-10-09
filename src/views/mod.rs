@@ -13,7 +13,7 @@ use egui::{Color32, Frame, Margin, RichText, Sense, Stroke, Ui, vec2};
 
 pub fn main(app: &mut App, ui: &mut Ui) {
     let p = theme::palette(ui.ctx());
-    header(app, ui, p);
+    let bar = header(app, ui, p);
     // Every signed-in screen keeps the hint bar.
     issues::hints_panel(app, ui, p);
     if app.offline {
@@ -25,6 +25,9 @@ pub fn main(app: &mut App, ui: &mut Ui) {
         Screen::Team => placeholder(ui, p, "Team"),
         Screen::Roadmap => placeholder(ui, p, "Roadmap"),
     }
+    // One 1 px rule just under the 48 px bar (so the buttons sit 8/8 and the 2 px underline sits on the rule,
+    // not under it), painted after the panels below so their fills do not cover it; modals are other layers.
+    ui.painter().hline(bar.x_range(), header_rule_y(bar.bottom()), Stroke::new(1.0, p.border));
 }
 
 /// "<Tab> is coming soon", named as the tab is.
@@ -75,6 +78,11 @@ pub fn tab_width(label_w: f32) -> f32 {
     label_w.ceil()
 }
 
+/// The header rule's centre line: the first point under the bar, so the bar keeps its full 48.
+pub fn header_rule_y(bar_bottom: f32) -> f32 {
+    bar_bottom + 0.5
+}
+
 /// The active tab's 2.0 underline, 7 below the tab slot, on whole points.
 pub fn underline_rect(tab: egui::Rect) -> egui::Rect {
     egui::Rect::from_min_size(egui::pos2(tab.left(), (tab.bottom() + 6.0).round()), vec2(tab.width(), 2.0))
@@ -82,10 +90,10 @@ pub fn underline_rect(tab: egui::Rect) -> egui::Rect {
 
 /// Gap between tabs.
 const TAB_GAP: f32 = 24.0;
-/// Gap from the title to the first tab: wider than TAB_GAP, so the title reads apart from the nav.
-const TITLE_GAP: f32 = 32.0;
-/// Gap between the signed-in name and "Read-only" (the glyphs' side bearings add ~2, for ~16 ink to ink).
-const NAME_GAP: f32 = 14.0;
+/// Gap from the title to the first tab: TAB_GAP (round-6 ruling); the title's weight sets it apart.
+const TITLE_GAP: f32 = 24.0;
+/// Gap between the signed-in name and "Read-only": a muted "·" centred in it, 8 either side.
+const NAME_GAP: f32 = 20.0;
 /// The signed-in name's slot, in "m" glyphs of the 12 px name font: reserved before the user record loads.
 const NAME_SLOT_M: f32 = 20.0;
 
@@ -133,11 +141,16 @@ pub fn spinner_slots(lists_syncing: bool, search_pending: bool, search_from_refr
     (lists_syncing || (search_pending && search_from_refresh), search_pending && !search_from_refresh)
 }
 
-fn header(app: &mut App, ui: &mut Ui, p: &Palette) {
+fn header(app: &mut App, ui: &mut Ui, p: &Palette) -> egui::Rect {
     let panel = egui::Panel::top("header").exact_size(48.0).frame(Frame::new().fill(p.surface).inner_margin(Margin::symmetric(16, 0))).show(ui, |ui| {
         ui.horizontal_centered(|ui| {
             ui.spacing_mut().item_spacing.x = TAB_GAP;
-            ui.label(RichText::new("Jira Tickets").font(theme::bold(15.0)).color(p.text));
+            // The title and the tabs share the tabs' baseline (the 15 bold title sat 1 px below it).
+            let tab_probe = ui.painter().layout_no_wrap("Issues".into(), theme::body(14.0), p.text);
+            let title = ui.painter().layout_no_wrap("Jira Tickets".into(), theme::bold(15.0), p.text);
+            let (title_rect, _) = ui.allocate_exact_size(vec2(title.size().x.ceil(), 32.0), Sense::hover());
+            let line = (title_rect.center().y - tab_probe.size().y / 2.0).round() + baseline(&tab_probe);
+            ui.painter().galley(egui::pos2(title_rect.left(), top_for_baseline(line, baseline(&title))), title, p.text);
             ui.add_space(TITLE_GAP - TAB_GAP);
             for (i, (s, name)) in TABS.into_iter().enumerate() {
                 let active = app.screen == s;
@@ -145,7 +158,7 @@ fn header(app: &mut App, ui: &mut Ui, p: &Palette) {
                 let w = tab_width(galley.size().x);
                 let (rect, r) = ui.allocate_exact_size(vec2(w, 32.0), Sense::click());
                 // Left-aligned in its slot, so every gap is exactly TAB_GAP.
-                let pos = egui::pos2(rect.left(), (rect.center().y - galley.size().y / 2.0).round());
+                let pos = egui::pos2(rect.left(), top_for_baseline(line, baseline(&galley)));
                 ui.painter().galley(pos, galley, p.text);
                 if active {
                     // A filled 2.0 bar on whole points, not a stroke centred on a line, so it is exactly 2 tall.
@@ -187,6 +200,12 @@ fn header(app: &mut App, ui: &mut Ui, p: &Palette) {
                         }
                     });
                 }
+                if let (Some(g), true) = (&ro, name_left.is_some()) {
+                    // A muted "·" between the name and "Read-only", so they read as two labels.
+                    let dot = painter.layout_no_wrap("·".into(), theme::body(12.0), p.muted);
+                    let x = rect.right() - g.size().x - NAME_GAP / 2.0 - dot.size().x / 2.0;
+                    ui.painter().galley(egui::pos2(x, top_for_baseline(line, baseline(&dot))), dot, p.muted);
+                }
                 if let Some(g) = ro {
                     let top = top_for_baseline(line, baseline(&g));
                     let r = egui::Rect::from_min_size(egui::pos2(rect.right() - g.size().x, top), g.size());
@@ -206,9 +225,7 @@ fn header(app: &mut App, ui: &mut Ui, p: &Palette) {
             });
         });
     });
-    // One 1 px rule under the header; no box around it.
-    let r = panel.response.rect;
-    ui.painter().hline(r.x_range(), r.bottom() - 0.5, Stroke::new(1.0, p.border));
+    panel.response.rect
 }
 
 fn offline_banner(app: &mut App, ui: &mut Ui, p: &Palette) {
@@ -746,6 +763,12 @@ mod widget_tests {
         assert_eq!(r.height(), 2.0);
         assert_eq!(r.top(), r.top().round());
         assert_eq!(r.width(), 50.0);
+        // In the 48 bar the 32 tab slot ends at 40: the underline fills 46..48 and the rule draws 48..49, so
+        // none of the underline is covered (round 6 measured 1 lp when the rule sat at 47..48).
+        let u = underline_rect(egui::Rect::from_min_max(egui::pos2(0.0, 8.0), egui::pos2(50.0, 40.0)));
+        assert_eq!((u.top(), u.bottom()), (46.0, 48.0));
+        assert!(header_rule_y(48.0) - 0.5 >= u.bottom());
+        assert_eq!(TITLE_GAP, TAB_GAP);
     }
 
     #[test]
