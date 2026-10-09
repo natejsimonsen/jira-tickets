@@ -2,7 +2,7 @@
 //!   JIRA_TICKETS_SCREENSHOT=out.png JIRA_TICKETS_VIEW=issues ./target/release/jira-tickets
 //!   JIRA_TICKETS_SCRIPT='key:j;wait:1500;shot:detail.png' ./target/release/jira-tickets
 //! Script steps (`;`-separated): `key:<combo>`, `type:<text>`, `click:<label>`, `point:<label>` (hover a
-//! widget, exact label first; `point:<label>@left` hovers its left third, so the pointer hides no label), `at:x,y`, `hover:x,y`, `wait:<ms>`, `shot:<path>`, `theme:light|dark`, `width:<px>`.
+//! widget, exact label first; `point:<label>@left` hovers a quarter in, inside its left third, so the pointer hides little of the label), `at:x,y`, `hover:x,y`, `wait:<ms>`, `shot:<path>`, `theme:light|dark`, `width:<px>`.
 //! Writes are always blocked in this mode.
 
 use crate::app::{Action, App, Screen};
@@ -163,9 +163,10 @@ pub fn point_target(arg: &str) -> (&str, bool) {
     }
 }
 
-/// Where a `point:` lands in a widget's rect: its centre, or the middle of its left third.
+/// Where a `point:` lands in a widget's rect: its centre, or a quarter in, inside its left third (round 14 F:
+/// the third's middle put the pointer over the label's first letter).
 pub fn point_pos(r: egui::Rect, left: bool) -> Pos2 {
-    if left { Pos2::new(r.left() + r.width() / 6.0, r.center().y) } else { r.center() }
+    if left { Pos2::new(r.left() + r.width() / 4.0, r.center().y) } else { r.center() }
 }
 
 /// Hovers the widget whose label is exactly `label` (ignoring case), else the first `click:` would pick.
@@ -269,7 +270,8 @@ mod tests {
         assert_eq!(point_target("Comment@left"), ("Comment", true));
         assert_eq!(point_target("Comment"), ("Comment", false));
         let r = egui::Rect::from_min_size(Pos2::new(100.0, 10.0), egui::vec2(90.0, 28.0));
-        assert_eq!(point_pos(r, true), Pos2::new(115.0, 24.0));
+        assert_eq!(point_pos(r, true), Pos2::new(122.5, 24.0));
+        assert!(point_pos(r, true).x < r.left() + r.width() / 3.0, "still in the left third");
         assert_eq!(point_pos(r, false), Pos2::new(145.0, 24.0));
     }
 

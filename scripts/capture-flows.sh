@@ -118,7 +118,7 @@ flow issues-detail 'key:j;key:j;wait:1500;shot:01-detail.png;key:j;wait:1500;sho
 flow_env=(JIRA_TICKETS_SNAPSHOT_COMPOSER=1)
 flow issues-composer "key:j;key:j;wait:1500;shot:00-rest.png;click:Add a comment;type:This is a draft comment that will not be posted;point:Comment@left;wait:900;shot:01-draft.png" \
     '00-rest.png|Writable composer at rest (JIRA_TICKETS_SNAPSHOT_COMPOSER=1; writes still blocked): placeholder, quiet Comment' \
-    '01-draft.png|Writable composer focused with an unposted draft, Comment primary, pointer on the left third of Comment showing its tooltip (JIRA_TICKETS_SNAPSHOT_COMPOSER=1)'
+    '01-draft.png|Writable composer focused with an unposted draft, Comment primary, pointer a quarter into Comment (inside its left third) showing its tooltip (JIRA_TICKETS_SNAPSHOT_COMPOSER=1)'
 flow_env=()
 flow pickers-transition 'key:j;wait:800;key:t;wait:1500;shot:01-open.png;key:down;shot:02-moved.png;key:enter;wait:800;shot:03-readonly-toast.png' \
     '01-open.png|Transition picker open' \
@@ -176,8 +176,9 @@ signin_cfg="$out/signin-config.toml"
 rg -v '^\s*(api_token|op_account)\s*=' "$HOME/.config/jira-tickets/config.toml" >"$signin_cfg"
 token=""
 flow_env=(JIRA_TICKETS_CONFIG="$signin_cfg" JIRA_TICKETS_TOKEN_FILE="$out/no-such-token")
-flow sign-in 'shot:01-signin.png' \
-    '01-signin.png|Sign-in screen with no token available'
+flow sign-in 'shot:01-signin.png;point:Check again;wait:300;shot:02-hover-check-again.png' \
+    '01-signin.png|Sign-in screen with no token available' \
+    '02-hover-check-again.png|Pointer on "Check again": its hover fill and tooltip'
 flow_env=()
 
 count="$(fd -e png . "$out" | wc -l | tr -d ' ')"
