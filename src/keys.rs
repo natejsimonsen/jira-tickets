@@ -50,7 +50,7 @@ pub const BINDINGS: &[KeyBinding] = &[
     b(Group::Issues, "c", "Copy the issue link"),
     b(Group::Issues, "⌘Enter", "Post the comment"),
     b(Group::Pickers, "j/k, ↑/↓", "Move"),
-    b(Group::Pickers, "Tab/⇧Tab", "Next or previous field in Edit"),
+    b(Group::Pickers, "Tab/⇧Tab", "Next or previous field"),
     b(Group::Pickers, "Enter", "Confirm"),
     b(Group::Pickers, "Esc", "Cancel or close"),
 ];
@@ -197,7 +197,7 @@ pub fn hints(c: HintContext) -> &'static [Hint] {
         HintContext::SearchText => &[&[K("Enter"), W("run as JQL")], &[K("Esc"), W("clear")]],
         HintContext::SearchEmpty => &[&[K("Enter"), W("run as JQL")], &[K("Esc"), W("done")]],
         HintContext::Composer => &[&[K("⌘Enter"), W("post")], &[K("Esc"), W("done (draft kept)")]],
-        HintContext::EditPicker => &[&[K("Tab/⇧Tab"), W("next field")], &[K("Enter"), W("confirm")], &[K("Esc"), W("cancel")]],
+        HintContext::EditPicker => &[&[K("Tab/⇧Tab"), W("next or previous field")], &[K("Enter"), W("confirm")], &[K("Esc"), W("cancel")]],
         HintContext::AssignPicker => &[&[W("Type to filter")], &[K("↑/↓"), W("move")], &[K("Enter"), W("confirm")], &[K("Esc"), W("cancel")]],
         HintContext::Picker => &[&[K("j/k"), W("or"), K("↑/↓"), W("move")], &[K("Enter"), W("confirm")], &[K("Esc"), W("cancel")]],
         HintContext::Selected => &[
@@ -342,7 +342,7 @@ mod tests {
         assert_eq!(hint_text(hints(SignIn)), "Enter sign in");
         assert_eq!(hint_text(hints(GoTo)), "Enter open · Esc close");
         assert_eq!(hint_text(hints(Search)), "Enter run as JQL · Esc clear", "one Enter wording for every search text");
-        assert_eq!(hint_text(hints(EditPicker)), "Tab/⇧Tab next field · Enter confirm · Esc cancel");
+        assert_eq!(hint_text(hints(EditPicker)), "Tab/⇧Tab next or previous field · Enter confirm · Esc cancel");
         assert_eq!(hint_text(hints(Picker)), "j/k or ↑/↓ move · Enter confirm · Esc cancel");
         assert_eq!(hint_text(hints(Browse)), "j/k or ↑/↓ move · ⌘K go to · ⌘F search · ? help");
         assert_eq!(

@@ -62,7 +62,7 @@ Only a token you paste is saved. Signing out deletes that file.
 | `⌘Enter` | Post the comment |
 | **Pickers and Edit** | |
 | `j/k` or `↑/↓` | Move |
-| `Tab/⇧Tab` | Next or previous field in Edit |
+| `Tab/⇧Tab` | Next or previous field |
 | `Enter` | Confirm |
 | `Esc` | Cancel or close |
 <!-- keys:end -->
