@@ -581,7 +581,9 @@ fn combo(
             let visibility =
                 if bar { egui::scroll_area::ScrollBarVisibility::AlwaysVisible } else { egui::scroll_area::ScrollBarVisibility::VisibleWhenNeeded };
             let row_w = inner - 2.0 * POPUP_ROW_PAD - if bar { ui.spacing().scroll.allocated_width() } else { 0.0 };
-            let track = crate::views::thumb_track(Rect::from_min_size(ui.cursor().min, vec2(ui.available_width(), scroll_h)));
+            // The track runs the rows' full height: its ends sit 4 inside the frame, like the rows' (round 14 B2:
+            // THUMB_TRACK_INSET on top of the margin put it 6 down).
+            let track = popup_track(ui.cursor().min, ui.available_width(), scroll_h);
             egui::ScrollArea::vertical().max_height(scroll_h).scroll_bar_visibility(visibility).scroll_bar_rect(track).show(ui, |ui| {
                 // The rows keep their own corners (the thumb's THUMB_RADIUS is for the bar only).
                 if let Some(saved) = saved {
@@ -591,6 +593,12 @@ fn combo(
             });
         });
     resp
+}
+
+/// A popup's scroll bar rect: from the rows' top (`min`) down their scroll height, the frame's margin its only
+/// inset.
+pub fn popup_track(min: egui::Pos2, width: f32, scroll_h: f32) -> Rect {
+    Rect::from_min_size(min, vec2(width, scroll_h))
 }
 
 /// A popup's solid bar: the floating bars' THUMB_W width, POPUP_THUMB_OUTER from the frame's margin.
@@ -1186,15 +1194,18 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
     }
     // No rule at the viewport's bottom edge: it landed on the hint bar's border as a second 1 px band (C2); the
     // card fill runs to the bar and the fade says "more".
-    let fade = p.bg.gamma_multiply(FADE_STRENGTH);
+    // Each fade goes toward the cut row's own fill, so the card's fill never tints and then jumps back on the
+    // unfaded last pixel row (round 14 K3: it faded toward `bg`).
+    let sel_idx = selected_rect.map(|(_, i)| i);
+    let fade_at = |edge: f32| fade_color(cut_row(&row_spans, edge).is_some_and(|i| Some(i) == sel_idx), p);
     let ppp = ui.ctx().pixels_per_point();
     for (strip, dir, colors) in [
         (
             fade_strip(&row_spans, view.bottom(), true).map(|(t, b)| (t, fade_end(b, ppp))),
             egui::epaint::Direction::BottomUp,
-            [fade, egui::Color32::TRANSPARENT],
+            [fade_at(view.bottom()), egui::Color32::TRANSPARENT],
         ),
-        (fade_strip(&row_spans, view.top(), false), egui::epaint::Direction::TopDown, [fade, egui::Color32::TRANSPARENT]),
+        (fade_strip(&row_spans, view.top(), false), egui::epaint::Direction::TopDown, [fade_at(view.top()), egui::Color32::TRANSPARENT]),
     ] {
         if let Some((top, bottom)) = strip {
             let r = Rect::from_x_y_ranges(view.x_range(), top..=bottom);
@@ -1214,6 +1225,17 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
             }
         }
     }
+}
+
+/// The row a viewport edge cuts through, if any.
+pub fn cut_row(rows: &[(f32, f32)], edge: f32) -> Option<usize> {
+    rows.iter().position(|(t, b)| *t < edge && edge < *b)
+}
+
+/// A list fade's strongest colour: the cut row's fill (selected or plain) at FADE_STRENGTH, so it dims the row's
+/// content toward its own card and leaves the fill as it is.
+pub fn fade_color(selected: bool, p: &Palette) -> egui::Color32 {
+    row_fill(selected, false, p).gamma_multiply(FADE_STRENGTH)
 }
 
 /// A row cut by more than this at a viewport edge fades; less, and it reads as whole.
@@ -1844,6 +1866,8 @@ mod tests {
         assert!(bar, "35 epics: the bar shows while open");
         assert_eq!(h % POPUP_ROW_H, 0.0, "never a row cut mid-text");
         assert_eq!(POPUP_FRAME / 2.0 - 1.0, 4.0, "selected-row fill 4 inside the stroke");
+        let t = popup_track(egui::pos2(10.0, 50.0), 200.0, 8.0 * POPUP_ROW_H);
+        assert_eq!((t.top(), t.height()), (50.0, 8.0 * POPUP_ROW_H), "B2: the thumb's track starts at the rows' top");
     }
 
     #[test]
@@ -2045,6 +2069,19 @@ mod tests {
         // The frame around whole rows stays whole: rows × 28 + 2 × (4 + 1).
         let (h, _) = popup_scroll(12);
         assert_eq!((h + POPUP_FRAME).fract(), 0.0);
+    }
+
+    #[test]
+    fn list_fades_go_toward_the_cut_rows_fill() {
+        // Round 14 K3: toward the card's fill, not `bg`, so the fill reads unchanged to the last pixel row.
+        let rows = [(0.0, 44.0), (43.0, 87.0)];
+        assert_eq!(cut_row(&rows, 60.0), Some(1));
+        assert_eq!(cut_row(&rows, 100.0), None);
+        let same = |a: egui::Color32, b: egui::Color32| a.to_array().iter().zip(b.to_array()).all(|(x, y)| x.abs_diff(y) <= 1);
+        for p in [theme::LIGHT, theme::DARK] {
+            assert!(same(theme::over(fade_color(false, &p), p.surface), p.surface), "a plain card's fill stays");
+            assert!(same(theme::over(fade_color(true, &p), p.selected_row), p.selected_row), "a selected one's too");
+        }
     }
 
     #[test]

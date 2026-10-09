@@ -1043,12 +1043,13 @@ pub fn selected_pill_edge(p: &Palette) -> Color32 {
     if p.dark { Color32::from_rgb(0x7a, 0x79, 0x74) } else { Color32::from_rgb(0x77, 0x76, 0x6f) }
 }
 
-/// A scrollbar thumb at rest and hovered: at rest the tone `muted` at about half alpha, at THUMB_REST, made on the
-/// surface (60 % in light, 50 % in dark, as before), but opaque, so row separators never show through it (round 13
-/// K2); hovered `muted` itself. `border` read 1.5:1 (round 8).
+/// A scrollbar thumb at rest and hovered: at rest an opaque quiet neutral, so row separators never show through it
+/// (round 13 K2) and it still shows over the selected row (round 14 S1: the old faded `muted` read 1.03:1 on the
+/// dark selection, 1.17 on the light): light #b5b4ae, dark #5c5b56, ≥ 1.5:1 on the selection; hovered `muted`
+/// itself.
 pub fn scroll_thumb(p: &Palette) -> (Color32, Color32) {
-    let rest = p.muted.gamma_multiply((if p.dark { 0.5 } else { 0.6 }) * THUMB_REST);
-    (theme::over(rest, p.surface), p.muted)
+    let rest = if p.dark { Color32::from_rgb(0x5c, 0x5b, 0x56) } else { Color32::from_rgb(0xb5, 0xb4, 0xae) };
+    (rest, p.muted)
 }
 
 /// The scrollbar thumb's width at rest (round 12 C1: the 2 px flush bar read as a partial right border).
@@ -1057,9 +1058,6 @@ pub const THUMB_W: f32 = 4.0;
 pub const THUMB_INSET: f32 = 2.0;
 /// The thumb's corner radius: round ends at THUMB_W.
 pub const THUMB_RADIUS: u8 = 2;
-/// How faint the thumb's rest tone is (floating bars default to hidden until hovered), so an overflowing list or
-/// detail pane always shows "more" (C4, round 12 K1). Folded into the opaque `scroll_thumb` rest colour.
-pub const THUMB_REST: f32 = 0.5;
 /// The thumb's track stops this far short of its viewport's top and bottom, so its round ends never sit on a
 /// card's border (round 13 K1, C3).
 pub const THUMB_TRACK_INSET: f32 = 2.0;
@@ -1743,13 +1741,14 @@ mod widget_tests {
     #[test]
     fn scroll_thumbs_show_but_stay_quiet() {
         for p in [&theme::LIGHT, &theme::DARK] {
-            // The rest tone is the old translucent thumb at its THUMB_REST opacity, made opaque on the surface the
-            // thumbs float over (the list's cards, the detail pane, popups).
+            // Quiet on the surface the thumbs float over (the list's cards, the detail pane, popups), and still
+            // there over the selected row (round 14 S1).
             let (rest, hover) = scroll_thumb(p);
-            let old = theme::over(p.muted.gamma_multiply((if p.dark { 0.5 } else { 0.6 }) * THUMB_REST), p.surface);
-            assert_eq!(rest, old, "dark={}", p.dark);
+            assert_eq!(rest.a(), 255);
             let c = theme::contrast(rest, p.surface);
-            assert!((1.3..=2.0).contains(&c), "dark={}: {c:.2}", p.dark);
+            assert!((1.3..=2.5).contains(&c), "dark={}: {c:.2}", p.dark);
+            let sel = theme::contrast(rest, p.selected_row);
+            assert!(sel >= 1.5, "dark={}: {sel:.2} on the selection", p.dark);
             assert!(theme::contrast(hover, p.surface) > c);
         }
     }
