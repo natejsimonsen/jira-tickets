@@ -317,6 +317,8 @@ pub fn sign_in(app: &mut App, ui: &mut Ui) {
         });
         return;
     }
+    // The form's one key, in the same bar every signed-in screen has.
+    issues::sign_in_hints(ui, p);
     let aside = sign_in_aside(p);
     let aside_w = ui.fonts_mut(|f| f.layout_job(aside.clone())).size().x;
     centred(ui, "sign-in", |ui| {
@@ -379,9 +381,14 @@ pub fn sign_in(app: &mut App, ui: &mut Ui) {
     });
 }
 
-/// The hint bar's height when it shows (signed in, on any screen), else None.
+/// The hint bar's height when it shows (signed in, on any screen, and on the sign-in form), else None.
 pub fn hint_bar_height(app: &App) -> Option<f32> {
-    app.client.is_some().then_some(issues::HINT_BAR_H)
+    hint_bar_shown(app.client.is_some(), app.finding_token).then_some(issues::HINT_BAR_H)
+}
+
+/// The hint bar shows signed in and on the sign-in form; not while the token is still being looked for.
+pub fn hint_bar_shown(signed_in: bool, finding_token: bool) -> bool {
+    signed_in || !finding_token
 }
 
 /// The toast's edge: none in either theme; its shadow separates it from the page.
@@ -507,9 +514,13 @@ pub fn dialog_button_fill(p: &Palette) -> Color32 {
 /// nothing).
 pub fn field_hint(text: &str, font: egui::FontId, p: &Palette) -> egui::text::LayoutJob {
     let mut job = egui::text::LayoutJob::default();
-    job.append(text, 0.0, egui::TextFormat { font_id: font, color: theme::placeholder(p), ..Default::default() });
+    // 2 pt in, so the caret at the field's start never touches the placeholder's first glyph.
+    job.append(text, HINT_INDENT, egui::TextFormat { font_id: font, color: theme::placeholder(p), ..Default::default() });
     job
 }
+
+/// The placeholder's indent from the caret.
+pub const HINT_INDENT: f32 = 2.0;
 
 /// An input's text (and placeholder) inset: 12, the filter row's one text inset.
 pub const INPUT_PAD_X: f32 = 12.0;
@@ -741,6 +752,16 @@ pub fn error_banner(ui: &mut Ui, p: &Palette, title: &str, raw: &str) -> bool {
 
 #[cfg(test)]
 mod widget_tests {
+    #[test]
+    fn sign_in_shows_the_hint_bar() {
+        assert!(super::hint_bar_shown(false, false), "the sign-in form");
+        assert!(!super::hint_bar_shown(false, true), "still looking for a token");
+        assert!(super::hint_bar_shown(true, false));
+        assert_eq!(super::HINT_INDENT, 2.0);
+        let job = super::field_hint("API token", crate::theme::body(14.0), &crate::theme::LIGHT);
+        assert_eq!(job.sections[0].leading_space, 2.0, "the caret never touches the placeholder");
+    }
+
     use super::*;
 
     #[test]

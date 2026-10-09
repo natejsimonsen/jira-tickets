@@ -259,29 +259,37 @@ pub fn hint_bar_fill(p: &Palette) -> egui::Color32 {
 /// width under them.
 pub fn hints_panel(app: &App, ui: &mut Ui, p: &Palette) {
     let placeholder = app.screen != crate::app::Screen::Issues;
+    let edit = app.picker.as_ref().map(|pk| match pk {
+        crate::app::Picker::Edit { .. } => crate::keys::PickerHint::Edit,
+        crate::app::Picker::Assign { .. } => crate::keys::PickerHint::Assign,
+        _ => crate::keys::PickerHint::Other,
+    });
+    let focus = text_focus(ui, app);
+    let c = crate::keys::hint_context(crate::keys::HintState {
+        help_open: app.help_open,
+        goto_open: app.goto.is_some(),
+        picker: edit,
+        has_selection: app.selected.is_some(),
+        focus,
+        search_shown: esc_clears_search(app.search_active, app.typed_search, app.text_search.is_some()),
+        read_only: super::detail::composer_read_only(),
+        placeholder,
+    });
+    hint_strip(ui, crate::keys::hints(c), p);
+}
+
+/// The hint bar on the sign-in form: "⏎ sign in".
+pub fn sign_in_hints(ui: &mut Ui, p: &Palette) {
+    hint_strip(ui, crate::keys::hints(crate::keys::HintContext::SignIn), p);
+}
+
+/// The bottom strip itself: `surface_2`, a 1 px top rule, the hints placed by their ink.
+fn hint_strip(ui: &mut Ui, hints: &[crate::keys::Hint], p: &Palette) {
     let bar = egui::Panel::bottom("hints")
         .exact_size(HINT_BAR_H)
         .frame(Frame::new().fill(hint_bar_fill(p)).inner_margin(Margin::symmetric(HINT_INSET as i8, 0)))
         .show(ui, |ui| {
-            ui.horizontal_centered(|ui| {
-                let edit = app.picker.as_ref().map(|pk| match pk {
-                    crate::app::Picker::Edit { .. } => crate::keys::PickerHint::Edit,
-                    crate::app::Picker::Assign { .. } => crate::keys::PickerHint::Assign,
-                    _ => crate::keys::PickerHint::Other,
-                });
-                let focus = text_focus(ui, app);
-                let c = crate::keys::hint_context(crate::keys::HintState {
-                    help_open: app.help_open,
-                    goto_open: app.goto.is_some(),
-                    picker: edit,
-                    has_selection: app.selected.is_some(),
-                    focus,
-                    search_shown: esc_clears_search(app.search_active, app.typed_search, app.text_search.is_some()),
-                    read_only: super::detail::composer_read_only(),
-                    placeholder,
-                });
-                hint_bar(ui, crate::keys::hints(c), p);
-            });
+            ui.horizontal_centered(|ui| hint_bar(ui, hints, p));
         });
     // A top rule only, like the header's bottom rule.
     let r = bar.response.rect;

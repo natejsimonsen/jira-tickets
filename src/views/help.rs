@@ -16,7 +16,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
     if crate::views::backdrop(ctx, "help-backdrop", egui::Order::Foreground, crate::views::hint_bar_height(app), p).clicked() {
         app.actions.push(Action::ToggleHelp);
     }
-    egui::Area::new(egui::Id::new("help")).order(egui::Order::Tooltip).anchor(egui::Align2::CENTER_CENTER, vec2(0.0, -20.0)).show(ctx, |ui| {
+    egui::Area::new(egui::Id::new("help")).order(egui::Order::Tooltip).anchor(egui::Align2::CENTER_CENTER, vec2(0.0, 0.0)).show(ctx, |ui| {
         // Issues on the left; Pickers then Global on the right (the columns end closer). Each column is as wide as its widest key cell
         // plus 16 plus its widest action, so the panel has 24 px on every side and no dead space.
         let left = [Group::Issues];
@@ -48,7 +48,8 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                     ui.allocate_ui_with_layout(vec2(rw, 0.0), egui::Layout::top_down(egui::Align::Min), |ui| {
                         ui.set_width(rw);
                         group(ui, p, Group::Pickers, rk);
-                        ui.add_space(16.0);
+                        let gap = section_gap(row_h(ui, p));
+                        ui.add_space(gap);
                         group(ui, p, Group::Global, rk);
                     });
                 });
@@ -107,12 +108,25 @@ pub fn row_gap(row_h: f32) -> f32 {
     (ROW_PITCH - row_h).max(0.0)
 }
 
+/// Extra space above every section header after the first, on top of the row gap, so groups read apart.
+const SECTION_EXTRA: f32 = 12.0;
+
+/// The space between a group's last row and the next group's header.
+pub fn section_gap(row_h: f32) -> f32 {
+    row_gap(row_h) + SECTION_EXTRA
+}
+
+/// A help row's height: its tallest part, a chip or the 14 px action.
+fn row_h(ui: &mut egui::Ui, p: &Palette) -> f32 {
+    chip_size(ui, "⌘", p).y.max(ui.fonts_mut(|f| f.row_height(&theme::body(14.0))))
+}
+
 fn group(ui: &mut egui::Ui, p: &Palette, g: Group, key_w: f32) {
     ui.label(RichText::new(g.name()).font(theme::bold(12.0)).color(p.muted));
     ui.add_space(8.0);
     // Every row is as tall as its tallest part (a chip or the action), and chips, words and the action are
     // all centred on that row.
-    let row_h = chip_size(ui, "⌘", p).y.max(ui.fonts_mut(|f| f.row_height(&theme::body(14.0))));
+    let row_h = row_h(ui, p);
     for (i, k) in BINDINGS.iter().filter(|k| k.group == g).enumerate() {
         if i > 0 {
             ui.add_space(row_gap(row_h));
@@ -175,6 +189,20 @@ mod tests {
     fn rows_sit_34_apart() {
         assert_eq!(super::row_gap(18.0), 16.0);
         assert_eq!(super::row_gap(20.0), 14.0);
+    }
+
+    #[test]
+    fn later_sections_get_12_more() {
+        assert_eq!(super::section_gap(18.0), super::row_gap(18.0) + 12.0);
+    }
+
+    #[test]
+    fn help_columns_balance() {
+        use crate::keys::{BINDINGS, Group};
+        let n = |g: Group| BINDINGS.iter().filter(|k| k.group == g).count();
+        // Left: Issues; right: Pickers then Global (one more header). Within a row of each other.
+        let (left, right) = (n(Group::Issues), n(Group::Pickers) + n(Group::Global) + 1);
+        assert!(left.abs_diff(right) <= 1, "left {left} rows, right {right}");
     }
 
     #[test]
