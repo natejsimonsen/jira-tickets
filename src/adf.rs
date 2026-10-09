@@ -78,8 +78,8 @@ fn block(n: &Value) -> Option<Block> {
             items: n["content"].as_array().map(|a| a.iter().map(|li| list_item(blocks(li.get("content")))).collect()).unwrap_or_default(),
         },
         "codeBlock" => Block::Code { lang: n["attrs"]["language"].as_str().map(String::from), text: collect_text(n) },
-        "blockquote" => Block::Quote(blocks(n.get("content"))),
-        "panel" => Block::Panel { kind: n["attrs"]["panelType"].as_str().unwrap_or("info").to_string(), blocks: blocks(n.get("content")) },
+        "blockquote" => Block::Quote(nested(blocks(n.get("content")))),
+        "panel" => Block::Panel { kind: n["attrs"]["panelType"].as_str().unwrap_or("info").to_string(), blocks: nested(blocks(n.get("content"))) },
         "rule" => Block::Rule,
         "blockCard" | "embedCard" => {
             let url = n["attrs"]["url"].as_str().unwrap_or("").to_string();
@@ -117,7 +117,39 @@ fn block(n: &Value) -> Option<Block> {
 /// A list item's blocks without its empty paragraphs (Jira often ends an item with one), which would
 /// otherwise paint a blank line and an extra gap before whatever follows the list.
 pub fn list_item(blocks: Vec<Block>) -> Vec<Block> {
-    blocks.into_iter().filter(|b| !is_empty_paragraph(b)).collect()
+    nested(blocks.into_iter().filter(|b| !is_empty_paragraph(b)).collect())
+}
+
+/// Blocks inside a list item, panel or blockquote: the skip rule applied again inside each paragraph, so a run
+/// of hardBreaks (a blank line, CI-2119's "…)" ⏎ ⏎ "(more ideas to come)") is one line break, and a paragraph
+/// left empty is dropped.
+fn nested(blocks: Vec<Block>) -> Vec<Block> {
+    blocks
+        .into_iter()
+        .map(|b| match b {
+            Block::Paragraph(s) => trim_breaks(Block::Paragraph(collapse_breaks(s))),
+            other => other,
+        })
+        .filter(|b| !is_empty_paragraph(b))
+        .collect()
+}
+
+/// Spans with each run of hardBreaks (and whitespace-only spans between them) cut to one hardBreak.
+fn collapse_breaks(spans: Vec<Span>) -> Vec<Span> {
+    let brk = |sp: &Span| sp.text == "\n" && sp.link.is_none();
+    let mut out: Vec<Span> = Vec::with_capacity(spans.len());
+    for sp in spans {
+        if brk(&sp) {
+            while out.last().is_some_and(|l| l.link.is_none() && !l.code && l.text.trim().is_empty() && !brk(l)) {
+                out.pop();
+            }
+            if out.last().is_some_and(brk) {
+                continue;
+            }
+        }
+        out.push(sp);
+    }
+    out
 }
 
 fn is_empty_paragraph(b: &Block) -> bool {
@@ -442,6 +474,33 @@ mod tests {
         assert_eq!(v["content"].as_array().unwrap().len(), 2);
         assert_eq!(v["content"][1]["content"][0]["text"], "two");
         assert_eq!(to_plain_text(&v), "one\ntwo");
+    }
+
+    #[test]
+    fn breaks_inside_a_list_item_make_no_blank_line() {
+        // CI-2119's shape: a list item paragraph with text, two hardBreaks, then more text.
+        let doc = json!({ "type": "doc", "content": [ { "type": "orderedList", "content": [ { "type": "listItem", "content": [
+            { "type": "paragraph", "content": [
+                { "type": "text", "text": "find a way )" }, { "type": "hardBreak" }, { "type": "hardBreak" },
+                { "type": "text", "text": "(more ideas to come)" }, { "type": "hardBreak" } ] },
+            { "type": "paragraph", "content": [ { "type": "hardBreak" } ] } ] } ] } ] });
+        let Block::List { items, .. } = &parse(&doc).blocks[0] else { panic!("a list") };
+        assert_eq!(items[0].len(), 1, "the break-only paragraph is dropped");
+        let Block::Paragraph(s) = &items[0][0] else { panic!("a paragraph") };
+        let texts: Vec<&str> = s.iter().map(|sp| sp.text.as_str()).collect();
+        assert_eq!(texts, ["find a way )", "\n", "(more ideas to come)"], "one break, none trailing");
+        // Panels and quotes too.
+        let quote = json!({ "type": "doc", "content": [ { "type": "blockquote", "content": [ { "type": "paragraph", "content": [
+            { "type": "text", "text": "a" }, { "type": "hardBreak" }, { "type": "hardBreak" }, { "type": "text", "text": "b" } ] } ] } ] });
+        let Block::Quote(b) = &parse(&quote).blocks[0] else { panic!("a quote") };
+        assert_eq!(
+            b,
+            &vec![Block::Paragraph(vec![
+                Span { text: "a".into(), ..Default::default() },
+                Span { text: "\n".into(), ..Default::default() },
+                Span { text: "b".into(), ..Default::default() }
+            ])]
+        );
     }
 
     #[test]
