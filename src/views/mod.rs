@@ -524,26 +524,21 @@ pub fn dialog_button_fill(p: &Palette) -> Color32 {
 /// The dark dialog's raised button fill (Cancel): a step past `selected_row` (#3d3d3a read 1.08:1 off the dialog).
 const DARK_CANCEL: Color32 = Color32::from_rgb(0x42, 0x42, 0x40);
 
-/// Placeholder text for a field, muted, starting exactly where typed text does (the first keystroke moves
-/// nothing).
+/// Placeholder text for a field, in the `placeholder` token, starting exactly where typed text does (the first
+/// keystroke moves nothing; round 8 measured it 2 pt right).
 pub fn field_hint(text: &str, font: egui::FontId, p: &Palette) -> egui::text::LayoutJob {
     let mut job = egui::text::LayoutJob::default();
-    // 2 pt in, so the caret at the field's start never touches the placeholder's first glyph.
-    job.append(text, HINT_INDENT, egui::TextFormat { font_id: font, color: theme::placeholder(p), ..Default::default() });
+    job.append(text, 0.0, egui::TextFormat { font_id: font, color: theme::placeholder(p), ..Default::default() });
     job
 }
 
-/// The placeholder's indent from the caret.
-pub const HINT_INDENT: f32 = 2.0;
-
-/// An input's text (and placeholder) inset: 12, the filter row's one text inset.
-pub const INPUT_PAD_X: f32 = 12.0;
+/// Every input's text (and placeholder) inset: 8, one input padding (round 8: sign-in read 10, pickers 8).
+pub const INPUT_PAD_X: f32 = 8.0;
 
 /// Height of every single-line input (search, go-to, token, picker fields): BUTTON_H, like every control.
 pub const INPUT_H: f32 = BUTTON_H;
 
-/// The one single-line input: 12/4 inner margin (typed text and placeholder both start 12 in, like combo
-/// and chip text), INPUT_H tall, full width, `font` for text and placeholder. Focus draws the theme's one
+/// The one single-line input: 8 px side margin (typed text and placeholder both start 8 in), INPUT_H tall, full width, `font` for text and placeholder. Focus draws the theme's one
 /// 1 px accent stroke.
 pub fn input_field<'a>(text: &'a mut String, hint: &str, font: egui::FontId, p: &Palette) -> egui::TextEdit<'a> {
     egui::TextEdit::singleline(text)
@@ -556,7 +551,7 @@ pub fn input_field<'a>(text: &'a mut String, hint: &str, font: egui::FontId, p: 
         .vertical_align(egui::Align::Center)
 }
 
-/// An input's margin: 12 either side; 2 above and 5 below, so the centred line box (whose leading sits under
+/// An input's margin: INPUT_PAD_X either side; 2 above and 5 below, so the centred line box (whose leading sits under
 /// the glyphs) puts the text's ink, not its box, on the field's centre (it read 1.5 px low at 4/4).
 const INPUT_MARGIN: Margin = input_margin(INPUT_PAD_X);
 
@@ -701,6 +696,27 @@ pub fn outline_pill_selected(ui: &mut Ui, text: &str, p: &Palette, margin: egui:
     pill_sized(ui, text, Color32::TRANSPARENT, selected_pill_text(p), Stroke::new(1.0, selected_edge(p)), margin)
 }
 
+/// A scrollbar thumb at rest and hovered: `muted` at about half alpha (2.5–3:1 off the surface: 60 % in light,
+/// 50 % in dark), then `muted` itself. `border` read 1.5:1 (round 8).
+pub fn scroll_thumb(p: &Palette) -> (Color32, Color32) {
+    (p.muted.gamma_multiply(if p.dark { 0.5 } else { 0.6 }), p.muted)
+}
+
+/// Gives the scroll areas shown in `ui` the `scroll_thumb` colours (a bar paints in its outer ui's widget
+/// `bg_fill`), returning the fills it replaced so content can put them back (`restore_fills`).
+pub fn set_thumb_fills(ui: &mut Ui, p: &Palette) -> [Color32; 3] {
+    let (rest, hover) = scroll_thumb(p);
+    let w = &mut ui.visuals_mut().widgets;
+    let saved = [w.inactive.bg_fill, w.hovered.bg_fill, w.active.bg_fill];
+    (w.inactive.bg_fill, w.hovered.bg_fill, w.active.bg_fill) = (rest, hover, hover);
+    saved
+}
+
+pub fn restore_fills(ui: &mut Ui, [inactive, hovered, active]: [Color32; 3]) {
+    let w = &mut ui.visuals_mut().widgets;
+    (w.inactive.bg_fill, w.hovered.bg_fill, w.active.bg_fill) = (inactive, hovered, active);
+}
+
 /// Secondary text inside a modal dialog (labels, "Unassigned", "N matches", help section heads, "or"): `muted`
 /// on the dialog fill, lifted where it would fall under 5.0:1 (dark).
 pub fn dialog_muted(p: &Palette) -> Color32 {
@@ -777,9 +793,8 @@ mod widget_tests {
         assert!(super::hint_bar_shown(false, false), "the sign-in form");
         assert!(!super::hint_bar_shown(false, true), "still looking for a token");
         assert!(super::hint_bar_shown(true, false));
-        assert_eq!(super::HINT_INDENT, 2.0);
         let job = super::field_hint("API token", crate::theme::body(14.0), &crate::theme::LIGHT);
-        assert_eq!(job.sections[0].leading_space, 2.0, "the caret never touches the placeholder");
+        assert_eq!(job.sections[0].leading_space, 0.0, "the placeholder starts at the typed text's origin");
     }
 
     use super::*;
@@ -788,7 +803,7 @@ mod widget_tests {
     fn chips_pad_12_either_side() {
         assert_eq!(chip_width(40.0), 64.0);
         assert_eq!(chip_width(40.2), 65.0);
-        assert_eq!(INPUT_PAD_X, CHIP_PAD, "typed text and placeholder start where chip text does");
+        assert_eq!(INPUT_PAD_X, 8.0, "one input padding");
         assert_eq!(INPUT_H, BUTTON_H, "one control height");
     }
 
@@ -913,6 +928,18 @@ mod widget_tests {
             // (the lighter 64 backdrop leaves the edge close to the page, 1.06:1, but the fill stands ~2:1).
             let lift = if p.dark { theme::contrast(edge, dimmed) } else { theme::contrast(dialog_fill(p), dimmed) };
             assert!(lift >= 1.3, "dark={}: {lift:.2}", p.dark);
+        }
+    }
+
+    #[test]
+    fn scroll_thumbs_show_but_stay_quiet() {
+        for p in [&theme::LIGHT, &theme::DARK] {
+            let (rest, hover) = scroll_thumb(p);
+            for fill in [p.surface, p.bg] {
+                let c = theme::contrast(theme::over(rest, fill), fill);
+                assert!((2.5..=3.0).contains(&c), "dark={} on {fill:?}: {c:.2}", p.dark);
+                assert!(theme::contrast(hover, fill) > c);
+            }
         }
     }
 

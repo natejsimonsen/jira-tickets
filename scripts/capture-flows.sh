@@ -24,13 +24,24 @@ manifest="$out/manifest.md"
     echo "|---|---|---|---|---|"
 } >"$manifest"
 
-# Rewrites each `shot:NN-name.png` to `shot:<out>/<flow>-NN-name-<theme>.png`.
+# Where the pointer waits before a shot: an empty stretch of the header (no widget, no tooltip) at any width.
+park="hover:600,24"
+
+# Rewrites each `shot:NN-name.png` to `shot:<out>/<flow>-NN-name-<theme>.png`, parking the pointer off the
+# panels first, except for a shot that a `point:` or `hover:` step since the last shot set up (a hover shot).
 rewrite() {
-    local flow="$1" theme="$2" script="$3" step result=""
+    local flow="$1" theme="$2" script="$3" step result="" hovering=0
     local IFS=';'
     for step in $script; do
+        case "$step" in
+            point:* | hover:*) hovering=1 ;;
+        esac
         if [[ "$step" == shot:* ]]; then
             local name="${step#shot:}"
+            if [[ $hovering == 0 ]]; then
+                result+="${result:+;}$park"
+            fi
+            hovering=0
             step="shot:$out/$flow-${name%.png}-$theme.png"
         fi
         result+="${result:+;}$step"
@@ -85,10 +96,11 @@ flow issues-quick-filter 'click:Only opened;shot:01-updating.png;wait:2500;shot:
 flow issues-mine-roadmap 'key:m;wait:200;shot:01-roadmap.png;click:Mine;wait:200;shot:02-mine-roadmap.png' \
     '01-roadmap.png|Roadmap toggle (m) on' \
     '02-mine-roadmap.png|Roadmap plus Mine filter'
-flow issues-search 'key:cmd+f;type:alpha;wait:200;shot:01-local-filter.png;key:escape;key:cmd+f;key:cmd+a;type:status = Blocked;key:enter;shot:02-updating.png;wait:2500;shot:03-results.png' \
+flow issues-search 'key:cmd+f;type:alpha;wait:200;shot:01-local-filter.png;key:escape;key:cmd+f;key:cmd+a;type:status = Blocked;wait:200;shot:02-before-enter.png;key:enter;shot:03-updating.png;wait:2500;shot:04-results.png' \
     '01-local-filter.png|Search box focused, "alpha" filtering rows locally' \
-    '02-updating.png|JQL search submitted, in flight' \
-    '03-results.png|JQL search results'
+    '02-before-enter.png|JQL typed, just before Enter: JQL-looking text turns the local filter off, so these rows stay on Enter' \
+    '03-updating.png|JQL search submitted, in flight' \
+    '04-results.png|JQL search results'
 flow issues-backlog-text 'click:(active);wait:200;click:Backlog;wait:200;key:cmd+f;type:f1;wait:3000;shot:01-results.png' \
     '01-results.png|Backlog scope, "f1" in the search box: server text search results ("N issues · text")'
 flow issues-goto 'key:cmd+k;shot:01-box.png;type:CI-1860;shot:02-typed.png;key:escape' \
@@ -100,7 +112,7 @@ flow issues-detail 'key:j;key:j;wait:1500;shot:01-detail.png;key:j;wait:1500;sho
 # The issues-detail-01 issue (second row): its description is short, so the composer is on screen.
 # Snapshot mode is read-only, where the app shows only a muted note instead of the composer (see issues-detail).
 # JIRA_TICKETS_SNAPSHOT_COMPOSER=1 (snapshot builds only) draws the writable composer for this flow while every
-# write stays blocked by read-only mode. The pointer moves to an empty stretch of the header before the draft shot.
+# write stays blocked by read-only mode. The pointer rests on Comment for the draft shot (its tooltip); other shots park it.
 flow_env=(JIRA_TICKETS_SNAPSHOT_COMPOSER=1)
 flow issues-composer "key:j;key:j;wait:1500;shot:00-rest.png;click:Add a comment;type:This is a draft comment that will not be posted;point:Comment;wait:900;shot:01-draft.png" \
     '00-rest.png|Writable composer at rest (JIRA_TICKETS_SNAPSHOT_COMPOSER=1; writes still blocked): placeholder, quiet Comment' \
@@ -145,7 +157,7 @@ flow detail-rich 'key:cmd+k;type:CI-4091;wait:300;key:enter;wait:2000;shot:01-co
 # The header on its first frame, before the user record loads (warm cache, no wait for data).
 flow_env=(JIRA_TICKETS_NO_WAIT=1)
 flow header-first-frame 'shot:01-first-frame.png' \
-    '01-first-frame.png|First frame, no wait: header before the signed-in name arrives (name slot reserved from the cache)'
+    '01-first-frame.png|First frame, no wait: header before the signed-in name arrives (buttons already at the right edge)'
 flow_env=()
 
 # First load with nothing cached: an empty cache dir and no wait for data, then a quick filter at once.

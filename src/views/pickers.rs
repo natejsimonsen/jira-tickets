@@ -263,7 +263,7 @@ mod tests {
     #[test]
     fn picker_fields_share_the_row_inset() {
         assert_eq!(crate::views::input_margin(super::ROW_INSET).left, 8);
-        assert_eq!(crate::views::input_margin(crate::views::INPUT_PAD_X).left, 12, "page inputs keep 12");
+        assert_eq!(super::ROW_INSET, crate::views::INPUT_PAD_X, "one input padding everywhere");
     }
 
     #[test]

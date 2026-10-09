@@ -19,6 +19,11 @@ pub fn body(size: f32) -> FontId {
 pub fn mono(size: f32) -> FontId {
     FontId::monospace(size)
 }
+/// The one key style (hint-bar keys, help chips): mono 12.5; "⌘", "⇧" and arrows come from the system face
+/// through the mono family's fallback.
+pub fn key_font() -> FontId {
+    mono(12.5)
+}
 
 #[derive(Clone, Copy)]
 pub struct Palette {

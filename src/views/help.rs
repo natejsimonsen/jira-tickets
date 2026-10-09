@@ -77,7 +77,7 @@ pub fn column_width(keys: &[f32], actions: &[f32]) -> f32 {
 }
 
 fn chip_size(ui: &egui::Ui, text: &str, p: &Palette) -> egui::Vec2 {
-    let g = ui.painter().layout_no_wrap(text.to_string(), theme::mono(12.5), p.text);
+    let g = ui.painter().layout_no_wrap(text.to_string(), theme::key_font(), p.text);
     vec2((g.size().x + 12.0).max(20.0), g.size().y + 4.0)
 }
 
@@ -161,7 +161,7 @@ fn group(ui: &mut egui::Ui, p: &Palette, g: Group, key_w: f32) {
 /// A key chip: mono 12.5 in a 6/2 frame, at least 20 wide, text centred. Its fill steps off the dialog's
 /// (`chip_fill_on`).
 fn chip(ui: &mut egui::Ui, text: &str, p: &Palette) {
-    let galley = ui.painter().layout_no_wrap(text.to_string(), theme::mono(12.5), p.text);
+    let galley = ui.painter().layout_no_wrap(text.to_string(), theme::key_font(), p.text);
     let size = chip_size(ui, text, p);
     let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
     let fill = theme::chip_fill_on(crate::views::dialog_fill(p), p);

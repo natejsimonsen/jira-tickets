@@ -321,7 +321,9 @@ pub fn show(app: &mut App, ui: &mut Ui) {
     app.detail_x = Some((pane.left(), pane.right()));
     egui::CentralPanel::default()
         // The same 12 top inset as the list pane, so the detail buttons' row is level with the combo row.
-        .frame(Frame::new().fill(p.surface).inner_margin(Margin { left: 16, right: 16, top: PANE_TOP as i8, bottom: 0 }))
+        // No right margin: the detail pane's scrollbar sits in it, and `detail::show` insets the content by
+        // DETAIL_RIGHT (≥ the bar's width + 4), so the bar never covers content.
+        .frame(Frame::new().fill(p.surface).inner_margin(Margin { left: 16, right: 0, top: PANE_TOP as i8, bottom: 0 }))
         .show(ui, |ui| super::detail::show(app, ui));
     goto_box(app, ui.ctx(), p);
 }
@@ -463,13 +465,10 @@ pub enum PopupEdge {
     End,
 }
 
-/// A popup scrollbar thumb at rest and hovered: `border`, then `muted` (surface_2 measured 1.14:1 off the popup).
-pub fn popup_thumb(p: &Palette) -> (egui::Color32, egui::Color32) {
-    (p.border, p.muted)
-}
-
-/// A popup frame's margin, so a selected row's fill sits 4 in from the popup edge (margin 3 + stroke 1).
+/// A popup frame's side margin, so a selected row's fill sits 4 in from the popup edge (margin 3 + stroke 1).
 const POPUP_MARGIN: i8 = 3;
+/// A popup frame's top and bottom margin: 4 inside the stroke (round 8 measured 3).
+const POPUP_MARGIN_Y: i8 = 4;
 /// A popup frame's margin and stroke, both sides.
 const POPUP_FRAME: f32 = 2.0 * (POPUP_MARGIN as f32 + 1.0);
 /// The popup opens this far below its combo, so its top edge never sits on the combo's bottom edge.
@@ -535,7 +534,7 @@ fn combo(
     let (scroll_h, bar) = popup_scroll(n_rows);
     egui::Popup::menu(&resp)
         .id(popup_id)
-        .frame(Frame::menu(ui.style()).inner_margin(POPUP_MARGIN))
+        .frame(Frame::menu(ui.style()).inner_margin(Margin::symmetric(POPUP_MARGIN, POPUP_MARGIN_Y)))
         .gap(POPUP_GAP)
         .anchor(anchor)
         .align(egui::RectAlign::BOTTOM_START)
@@ -551,11 +550,7 @@ fn combo(
             let visibility = if bar {
                 ui.spacing_mut().scroll = egui::style::ScrollStyle::solid();
                 // The solid thumb paints in the widgets' `bg_fill` (rows use `weak_bg_fill`, so they keep theirs).
-                let (rest, hover) = popup_thumb(p);
-                let w = &mut ui.visuals_mut().widgets;
-                w.inactive.bg_fill = rest;
-                w.hovered.bg_fill = hover;
-                w.active.bg_fill = hover;
+                crate::views::set_thumb_fills(ui, p);
                 egui::scroll_area::ScrollBarVisibility::AlwaysVisible
             } else {
                 egui::scroll_area::ScrollBarVisibility::VisibleWhenNeeded
@@ -1140,7 +1135,7 @@ fn hint_bar(ui: &mut Ui, hs: &[crate::keys::Hint], p: &Palette) {
     // Each token is its own galley, placed by its ink so the gaps are what they say: KEY_TO_WORD between a
     // key and its word, SEP_SPACE either side of "·", whatever the mono key's side bearings.
     let galley = |t: &Tok| match t {
-        Tok::K(s) => ui.painter().layout_no_wrap(s.to_string(), theme::mono(12.5), p.text),
+        Tok::K(s) => ui.painter().layout_no_wrap(s.to_string(), theme::key_font(), p.text),
         Tok::W(s) => ui.painter().layout_no_wrap(s.to_string(), theme::body(12.0), p.muted),
     };
     let word = |s: &str| ui.painter().layout_no_wrap(s.to_string(), theme::body(12.0), p.muted);
@@ -1444,11 +1439,6 @@ mod tests {
         assert_eq!(popup_left(300.0, 572.0, 16.0, 588.0), 16.0, "as wide as the pane: from its left edge");
         assert_eq!(popup_left_end(588.0, 200.0, 16.0), 388.0, "epic: right edge on the combo's, grows leftward");
         assert_eq!(popup_left_end(588.0, 700.0, 16.0), 16.0, "bounded by the pane");
-        for p in [&theme::LIGHT, &theme::DARK] {
-            let (rest, hover) = popup_thumb(p);
-            assert!(theme::contrast(rest, p.surface) >= 1.3, "thumb at rest dark={}: {:.2}", p.dark, theme::contrast(rest, p.surface));
-            assert!(theme::contrast(hover, p.surface) > theme::contrast(rest, p.surface));
-        }
         assert_eq!((SEARCH_TO_COUNT, COUNT_TO_ROWS), (8.0, 4.0), "12 / 8 to the count's ink");
     }
 
@@ -1616,6 +1606,47 @@ mod tests {
         let s = stripe_rect(row, 2.0);
         assert_eq!((s.left(), s.right(), s.top(), s.bottom()), (16.5, 19.5, 100.0, 144.0));
         assert_eq!(stripe_rect(row, 1.0).left(), 16.0);
+    }
+
+    #[test]
+    fn every_hint_key_is_drawn_mono() {
+        use crate::keys::{HintContext::*, Tok, hints};
+        let all = [
+            Help,
+            GoTo,
+            Search,
+            SearchText,
+            SearchEmpty,
+            Composer,
+            EditPicker,
+            AssignPicker,
+            Picker,
+            Selected,
+            Browse,
+            Placeholder,
+            SignIn,
+            SelectedSearch,
+            BrowseSearch,
+        ];
+        crate::testutil::with_ui(|ui| {
+            ui.fonts_mut(|f| {
+                let mut adv = |c: char| f.glyph_width(&theme::key_font(), c);
+                let m = adv('m');
+                for c in all {
+                    for h in hints(c) {
+                        for t in h.iter() {
+                            if let Tok::K(k) = t {
+                                // ASCII in a key is the mono face's: one advance for every character.
+                                for ch in k.chars().filter(char::is_ascii) {
+                                    let w = adv(ch);
+                                    assert!((w - m).abs() < 0.01, "{c:?} key {k:?}: {ch:?} is {w:.2}, m {m:.2}");
+                                }
+                            }
+                        }
+                    }
+                }
+            })
+        });
     }
 
     #[test]

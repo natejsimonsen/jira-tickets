@@ -12,6 +12,7 @@ pub fn show(app: &mut App, ui: &mut Ui) {
         if app.help_open {
             return;
         }
+        ui.set_max_width(ui.available_width() - DETAIL_RIGHT);
         ui.vertical_centered(|ui| {
             ui.add_space(120.0);
             crate::views::empty_state(ui, p, "Select an issue");
@@ -23,7 +24,11 @@ pub fn show(app: &mut App, ui: &mut Ui) {
         return;
     };
     let loading = app.detail_loading.contains(&key);
+    let saved = crate::views::set_thumb_fills(ui, p);
     egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+        crate::views::restore_fills(ui, saved);
+        // The pane has no right margin: the bar sits in this inset, clear of the content.
+        ui.set_max_width(ui.available_width() - DETAIL_RIGHT);
         // One row the buttons' height, everything centred on it, so the key line sits level with the buttons.
         ui.allocate_ui_with_layout(vec2(ui.available_width(), crate::views::BUTTON_H), egui::Layout::left_to_right(egui::Align::Center), |ui| {
             ui.set_min_height(crate::views::BUTTON_H);
@@ -145,6 +150,10 @@ const COMPOSER_STROKE: f32 = 1.0;
 /// Comment author → date.
 const COMMENT_META_GAP: f32 = 8.0;
 /// What read-only mode shows instead of the composer.
+/// The detail content's right inset, inside the scroll area: the pane's 16 px gutter, which holds the floating
+/// scrollbar (its width + 4 at least).
+pub const DETAIL_RIGHT: f32 = 16.0;
+
 pub const READ_ONLY_NOTE: &str = "Read-only, comments can't be posted";
 
 /// A comment card's header: the author in bold, 8, the date muted. Returns both labels' rects.
@@ -298,6 +307,8 @@ mod tests {
         assert!(composer_shown(true, true), "the snapshot override draws the writable UI");
         assert!(!snapshot_composer() || cfg!(feature = "snapshot"), "never on outside snapshot builds");
         assert_eq!(READ_ONLY_NOTE, "Read-only, comments can't be posted");
+        let bar = egui::style::ScrollStyle::floating();
+        assert!(DETAIL_RIGHT >= bar.bar_width + bar.bar_outer_margin + 4.0, "the scrollbar sits clear of the content");
         assert_eq!((COMMENT_TIP, COMPOSER_HINT), ("Post the comment (⌘Enter)", "Add a comment (⌘Enter to post)"));
         assert_eq!(COMPOSER_PAD + COMPOSER_STROKE, 12.0, "text on the comment cards' 12 px edge");
     }
