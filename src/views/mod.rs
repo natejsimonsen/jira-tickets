@@ -203,7 +203,7 @@ fn header(app: &mut App, ui: &mut Ui, p: &Palette) -> (egui::Rect, Option<egui::
                     // Painted by `main` after the rule (see `underline_rect`).
                     active_tab = Some(rect.x_range());
                 }
-                let r = r.on_hover_text(format!("{name} (⌘{})", i + 1));
+                let r = tooltip(r, format!("{name} (⌘{})", i + 1));
                 if r.clicked() {
                     app.actions.push(Action::SetScreen(s));
                 }
@@ -242,7 +242,7 @@ fn header(app: &mut App, ui: &mut Ui, p: &Palette) -> (egui::Rect, Option<egui::
                     let r = egui::Rect::from_min_size(egui::pos2(x, top_for_baseline(line, baseline(&g))), g.size());
                     ui.painter().galley(r.min, g, p.muted);
                     let resp = ui.interact(r, egui::Id::new("header-name"), Sense::click());
-                    resp.on_hover_text(format!("{full} · right-click to sign out")).context_menu(|ui| {
+                    tooltip(resp, format!("{full} · right-click to sign out")).context_menu(|ui| {
                         if ui.button("Sign out").clicked() {
                             app.actions.push(Action::SignOut);
                         }
@@ -257,7 +257,7 @@ fn header(app: &mut App, ui: &mut Ui, p: &Palette) -> (egui::Rect, Option<egui::
                 if let (Some(g), Some(x)) = (ro, at.read_only) {
                     let r = egui::Rect::from_min_size(egui::pos2(x, top_for_baseline(line, baseline(&g))), g.size());
                     ui.painter().galley(r.min, g, p.muted);
-                    ui.interact(r, egui::Id::new("header-read-only"), Sense::hover()).on_hover_text("Writes are blocked (JIRA_TICKETS_READONLY)");
+                    tooltip(ui.interact(r, egui::Id::new("header-read-only"), Sense::hover()), "Writes are blocked (JIRA_TICKETS_READONLY)");
                 }
             });
         });
@@ -364,7 +364,7 @@ pub fn sign_in(app: &mut App, ui: &mut Ui) {
                         .size(12.0),
                     );
                     ui.add_space(8.0);
-                    if ui.add(button("Sign out", p)).on_hover_text("Forget the saved token").clicked() {
+                    if tooltip(ui.add(button("Sign out", p)), "Forget the saved token").clicked() {
                         app.actions.push(Action::SignOut);
                     }
                 }
@@ -390,7 +390,7 @@ pub fn sign_in(app: &mut App, ui: &mut Ui) {
                 let again = egui::Button::new(RichText::new("Check again").color(p.text).size(14.0)).frame(false);
                 let again_h = ui.fonts_mut(|f| f.row_height(&theme::body(14.0)));
                 ui.spacing_mut().button_padding.y = 0.0;
-                if ui.add_sized([w, again_h], again).on_hover_text("Look for JIRA_API_TOKEN or the config api_token again").clicked() {
+                if tooltip(ui.add_sized([w, again_h], again), "Look for JIRA_API_TOKEN or the config api_token again").clicked() {
                     app.actions.push(Action::FindToken);
                 }
             });
@@ -398,10 +398,40 @@ pub fn sign_in(app: &mut App, ui: &mut Ui) {
     });
 }
 
-/// A one-line tooltip's height (14 px text and the frame's margins), for deciding where it fits.
-pub const TIP_H: f32 = 28.0;
-/// egui's tooltip gap under (or over) its control.
-const TIP_GAP: f32 = 4.0;
+/// A one-line tooltip's height at most (12 px text, TIP_MARGIN and the 1 px edge), for deciding where it fits:
+/// smaller than the 28 controls it labels.
+pub const TIP_H: f32 = 24.0;
+/// The tooltip's gap from its control (egui's 4 read as attached; round 11 F1).
+pub const TIP_GAP: f32 = 8.0;
+/// The tooltip's text size: the hint bar's.
+pub const TIP_TEXT: f32 = 12.0;
+/// Inside the tooltip's edge: 8 at the sides, 3 above and below.
+pub const TIP_MARGIN: Margin = Margin { left: 8, right: 8, top: 3, bottom: 3 };
+
+/// The app's one tooltip frame (F1): the hint bar's fill, a 1 px `border` (no control-weight edge, no shadow),
+/// so a tip never reads as a sibling button.
+pub fn tip_frame(p: &Palette) -> Frame {
+    Frame::new().fill(issues::hint_bar_fill(p)).stroke(Stroke::new(1.0, p.border)).corner_radius(theme::RADIUS).inner_margin(TIP_MARGIN)
+}
+
+/// `on_hover_text` in the app's tooltip style (`tip_frame`, TIP_TEXT `text`, TIP_GAP off the control).
+pub fn tooltip(resp: egui::Response, text: impl Into<String>) -> egui::Response {
+    show_tip(&resp, text.into(), None);
+    resp
+}
+
+fn show_tip(resp: &egui::Response, text: String, align: Option<egui::RectAlign>) {
+    let p = theme::palette(&resp.ctx);
+    let mut tip = egui::Tooltip::for_enabled(resp);
+    tip.popup = tip.popup.frame(tip_frame(p)).gap(TIP_GAP);
+    if let Some(align) = align {
+        tip.popup = tip.popup.align(align).align_alternatives(&[]);
+    }
+    tip.show(|ui| {
+        ui.set_max_width(ui.spacing().tooltip_width);
+        ui.add(egui::Label::new(RichText::new(text).color(p.text).size(TIP_TEXT)));
+    });
+}
 
 /// Whether a tooltip goes above its control: when, below it, it would cross `limit` (the hint bar's top rule,
 /// or the window's bottom), as the Comment tooltip did (F2, H4).
@@ -422,26 +452,19 @@ pub fn tip_align(above: bool, under_a_field: bool) -> Option<egui::RectAlign> {
     }
 }
 
-/// `on_hover_text`, but above the control when there is no room for it below, over the hint bar.
-pub fn hover_tip(resp: egui::Response, text: impl Into<egui::WidgetText>, app: &App) -> egui::Response {
+/// `tooltip`, but above the control when there is no room for it below, over the hint bar.
+pub fn hover_tip(resp: egui::Response, text: impl Into<String>, app: &App) -> egui::Response {
     hover_tip_placed(resp, text, app, false)
 }
 
 /// `hover_tip` for a control right under a field: the tip sits to its left (`tip_align`).
-pub fn hover_tip_beside(resp: egui::Response, text: impl Into<egui::WidgetText>, app: &App) -> egui::Response {
+pub fn hover_tip_beside(resp: egui::Response, text: impl Into<String>, app: &App) -> egui::Response {
     hover_tip_placed(resp, text, app, true)
 }
 
-fn hover_tip_placed(resp: egui::Response, text: impl Into<egui::WidgetText>, app: &App, under_a_field: bool) -> egui::Response {
+fn hover_tip_placed(resp: egui::Response, text: impl Into<String>, app: &App, under_a_field: bool) -> egui::Response {
     let limit = resp.ctx.content_rect().bottom() - hint_bar_height(app).unwrap_or(0.0);
-    let mut tip = egui::Tooltip::for_enabled(&resp);
-    if let Some(align) = tip_align(tip_above(resp.rect.bottom(), limit), under_a_field) {
-        tip.popup = tip.popup.align(align).align_alternatives(&[]);
-    }
-    tip.show(|ui| {
-        ui.set_max_width(ui.spacing().tooltip_width);
-        ui.add(egui::Label::new(text));
-    });
+    show_tip(&resp, text.into(), tip_align(tip_above(resp.rect.bottom(), limit), under_a_field));
     resp
 }
 
@@ -796,6 +819,9 @@ pub fn scroll_thumb(p: &Palette) -> (Color32, Color32) {
 /// `bg_fill`), returning the fills it replaced so content can put them back (`restore_fills`).
 pub fn set_thumb_fills(ui: &mut Ui, p: &Palette) -> [Color32; 3] {
     let (rest, hover) = scroll_thumb(p);
+    // Floating bars paint their thumb in the widgets' text colour unless told otherwise (egui's cool grey,
+    // round 11 F2): use the fills, so every thumb is the warm `muted`.
+    ui.spacing_mut().scroll.foreground_color = false;
     let w = &mut ui.visuals_mut().widgets;
     let saved = [w.inactive.bg_fill, w.hovered.bg_fill, w.active.bg_fill];
     (w.inactive.bg_fill, w.hovered.bg_fill, w.active.bg_fill) = (rest, hover, hover);
@@ -803,6 +829,7 @@ pub fn set_thumb_fills(ui: &mut Ui, p: &Palette) -> [Color32; 3] {
 }
 
 pub fn restore_fills(ui: &mut Ui, [inactive, hovered, active]: [Color32; 3]) {
+    ui.spacing_mut().scroll.foreground_color = egui::style::ScrollStyle::default().foreground_color;
     let w = &mut ui.visuals_mut().widgets;
     (w.inactive.bg_fill, w.hovered.bg_fill, w.active.bg_fill) = (inactive, hovered, active);
 }
@@ -1054,10 +1081,26 @@ mod widget_tests {
 
     #[test]
     fn tooltips_go_above_when_the_hint_bar_is_close() {
-        // The Comment button's bottom 20 above the hint bar: a 28 tooltip below would cross its rule.
+        // The Comment button's bottom 20 above the hint bar: a 24 tooltip 8 below would cross its rule.
         assert!(tip_above(780.0, 800.0));
         assert!(!tip_above(700.0, 800.0), "room below: below, like every tooltip");
-        assert!(!tip_above(800.0 - TIP_H - 4.0, 800.0), "exactly fits");
+        assert!(!tip_above(800.0 - TIP_H - TIP_GAP, 800.0), "exactly fits");
+    }
+
+    #[test]
+    fn tooltips_are_quieter_than_controls() {
+        // F1: the hint bar's fill and text size, a 1 px border, 8 off the control, shorter than a control.
+        for p in [&theme::LIGHT, &theme::DARK] {
+            let f = tip_frame(p);
+            assert_eq!(f.fill, issues::hint_bar_fill(p));
+            assert_eq!(f.stroke, Stroke::new(1.0, p.border));
+            assert!(theme::contrast(p.text, f.fill) >= 7.0, "dark={}", p.dark);
+        }
+        assert_eq!((TIP_GAP, TIP_TEXT), (8.0, 12.0));
+        // The real one-line height: 12 px text, the margins, the edge.
+        let h = crate::testutil::with_ui(|ui| ui.painter().layout_no_wrap("⌘Enter".into(), theme::body(TIP_TEXT), Color32::WHITE).size().y);
+        let tip_h = h + f32::from(TIP_MARGIN.top + TIP_MARGIN.bottom) + 2.0;
+        assert!(tip_h <= TIP_H && TIP_H < BUTTON_H, "{tip_h}");
     }
 
     #[test]
@@ -1164,6 +1207,20 @@ mod widget_tests {
             let lift = if p.dark { theme::contrast(edge, dimmed) } else { theme::contrast(dialog_fill(p), dimmed) };
             assert!(lift >= 1.3, "dark={}: {lift:.2}", p.dark);
         }
+    }
+
+    #[test]
+    fn thumbs_take_the_warm_fill() {
+        // F2: floating bars paint the widgets' fill (our `muted` thumb), not their text colour.
+        crate::testutil::with_ui(|ui| {
+            let p = theme::palette(ui.ctx());
+            assert!(ui.spacing().scroll.foreground_color, "egui's floating default");
+            let saved = set_thumb_fills(ui, p);
+            assert!(!ui.spacing().scroll.foreground_color);
+            assert_eq!(ui.visuals().widgets.inactive.bg_fill, scroll_thumb(p).0);
+            restore_fills(ui, saved);
+            assert!(ui.spacing().scroll.foreground_color, "content keeps egui's default");
+        });
     }
 
     #[test]

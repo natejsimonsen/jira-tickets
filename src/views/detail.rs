@@ -43,16 +43,16 @@ pub fn show(app: &mut App, ui: &mut Ui) {
                 let epic = theme::epic_tint_in(pk, &app.epic_slots, p, &app.cfg.issues.epic_colors);
                 // In the epic's text colour, underlined on hover like every other link.
                 let tip = super::issues::epic_tip(pk, ps);
-                if crate::views::text_link(ui, &format!("{pk} {ps}"), theme::body(13.0), epic.fg).on_hover_text(tip).clicked() {
+                if crate::views::tooltip(crate::views::text_link(ui, &format!("{pk} {ps}"), theme::body(13.0), epic.fg), tip).clicked() {
                     app.actions.push(Action::SetEpic(Some(pk.clone())));
                 }
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.spacing_mut().item_spacing.x = 8.0;
-                if ui.add(button("Open in Jira", p)).on_hover_text("Open in Jira (⌘O)").clicked() {
+                if crate::views::tooltip(ui.add(button("Open in Jira", p)), "Open in Jira (⌘O)").clicked() {
                     app.actions.push(Action::OpenUrl(app.cfg.browse_url(&issue.key)));
                 }
-                if ui.add(button("Copy link", p)).on_hover_text("Copy link (c)").clicked() {
+                if crate::views::tooltip(ui.add(button("Copy link", p)), "Copy link (c)").clicked() {
                     app.actions.push(Action::Copy(app.cfg.browse_url(&issue.key)));
                 }
                 if loading {
@@ -257,7 +257,7 @@ fn composer(app: &mut App, ui: &mut Ui, p: &Palette, key: &str) {
 }
 
 /// The Comment button's tooltip.
-pub const COMMENT_TIP: &str = "Post the comment (⌘Enter)";
+pub const COMMENT_TIP: &str = "⌘Enter";
 
 /// The composer's placeholder.
 pub const COMPOSER_HINT: &str = "Add a comment (⌘Enter to post)";
@@ -328,7 +328,7 @@ mod tests {
         assert_eq!(21.0 - NOTE_LIFT, 17.5, "the note's ink sits where the first card's edge does");
         let bar = egui::style::ScrollStyle::floating();
         assert!(DETAIL_RIGHT >= bar.bar_width + bar.bar_outer_margin + 4.0, "the scrollbar sits clear of the content");
-        assert_eq!((COMMENT_TIP, COMPOSER_HINT), ("Post the comment (⌘Enter)", "Add a comment (⌘Enter to post)"));
+        assert_eq!((COMMENT_TIP, COMPOSER_HINT), ("⌘Enter", "Add a comment (⌘Enter to post)"));
         assert_eq!(COMPOSER_PAD + COMPOSER_STROKE, 12.0, "text on the comment cards' 12 px edge");
         assert_eq!(BAR_CLEARANCE, 4.0, "the viewport stops 4 above the hint bar (C5)");
     }

@@ -703,7 +703,7 @@ fn filters(app: &mut App, ui: &mut Ui, p: &Palette) {
                 job.append(suffix(k), 0.0, egui::TextFormat { font_id: theme::body(14.0), color: p.muted, ..Default::default() });
                 job.wrap = egui::text::TextWrapping::truncate_at_width(row_text_w);
                 let full = format!("{}{}", entry(k, s), suffix(k));
-                if ui.selectable_label(app.filter.epic.as_deref() == Some(k), job).on_hover_text(full).clicked() {
+                if crate::views::tooltip(ui.selectable_label(app.filter.epic.as_deref() == Some(k), job), full.clone()).clicked() {
                     app.actions.push(Action::SetEpic(Some(k.clone())));
                 }
             }
@@ -722,7 +722,7 @@ fn filters(app: &mut App, ui: &mut Ui, p: &Palette) {
         if toggle_chip(ui, "Mine", app.filter.mine, p).clicked() {
             app.actions.push(Action::ToggleMine);
         }
-        if toggle_chip(ui, "Roadmap", app.filter.roadmap, p).on_hover_text("m").clicked() {
+        if crate::views::tooltip(toggle_chip(ui, "Roadmap", app.filter.roadmap, p), "m").clicked() {
             app.actions.push(Action::ToggleRoadmap);
         }
     });

@@ -73,7 +73,7 @@ pub fn icon_button(ui: &mut Ui, icon: Icon, tip: &str, p: &Palette) -> Response 
     let (rect, resp) = ui.allocate_exact_size(Vec2::splat(BUTTON), Sense::click());
     let glyph = button_frame(ui, rect, resp.hovered(), p);
     paint(ui.painter(), glyph, icon, p.text);
-    resp.on_hover_text(tip)
+    crate::views::tooltip(resp, tip)
 }
 
 /// The same 32×32 frame with a spinner the size of the sync glyph it replaces, so nothing grows on ⌘R.
