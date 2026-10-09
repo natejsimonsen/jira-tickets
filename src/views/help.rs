@@ -17,10 +17,10 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
         app.actions.push(Action::ToggleHelp);
     }
     egui::Area::new(egui::Id::new("help")).order(egui::Order::Tooltip).anchor(egui::Align2::CENTER_CENTER, vec2(0.0, -20.0)).show(ctx, |ui| {
-        // Issues on the left; Global then Pickers on the right. Each column is as wide as its widest key cell
+        // Issues on the left; Pickers then Global on the right (the columns end closer). Each column is as wide as its widest key cell
         // plus 16 plus its widest action, so the panel has 24 px on every side and no dead space.
         let left = [Group::Issues];
-        let right = [Group::Global, Group::Pickers];
+        let right = [Group::Pickers, Group::Global];
         let measure = |groups: &[Group]| {
             let rows = BINDINGS.iter().filter(|k| groups.contains(&k.group));
             let keys: Vec<f32> = rows.clone().map(|k| keys_width(ui, k.keys, p)).collect();
@@ -33,7 +33,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
             .fill(crate::views::dialog_fill(p))
             .stroke(crate::views::dialog_stroke(p))
             .corner_radius(theme::RADIUS)
-            .inner_margin(Margin::same(PAD as i8))
+            .inner_margin(Margin { left: PAD as i8, right: PAD as i8, top: TITLE_TOP as i8, bottom: PAD as i8 })
             .show(ui, |ui| {
                 ui.set_width(lw + COL_GAP + rw);
                 ui.spacing_mut().item_spacing.y = 0.0;
@@ -47,9 +47,9 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                     });
                     ui.allocate_ui_with_layout(vec2(rw, 0.0), egui::Layout::top_down(egui::Align::Min), |ui| {
                         ui.set_width(rw);
-                        group(ui, p, Group::Global, rk);
-                        ui.add_space(16.0);
                         group(ui, p, Group::Pickers, rk);
+                        ui.add_space(16.0);
+                        group(ui, p, Group::Global, rk);
                     });
                 });
             });
@@ -58,6 +58,9 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
 
 /// The panel's padding on every side, and the gap between its columns.
 const PAD: f32 = 24.0;
+/// The top padding: 20, since the title's line box carries ~4 of leading above its ink (24 to the ink; it
+/// measured 28 at 24).
+const TITLE_TOP: f32 = 20.0;
 const COL_GAP: f32 = 24.0;
 /// Key cell → action: 16 px, never more.
 const KEY_TO_ACTION: f32 = 16.0;

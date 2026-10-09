@@ -35,7 +35,8 @@ pub const BINDINGS: &[KeyBinding] = &[
     b(Group::Global, "⌘1 to ⌘4", "Issues, Grooming, Team, Roadmap"),
     b(Group::Global, "⌘R", "Refresh"),
     b(Group::Global, "⌘W", "Close the window"),
-    b(Group::Global, "?, Esc", "Toggle this help (Esc closes)"),
+    b(Group::Global, "?", "Toggle this help"),
+    b(Group::Global, "Esc", "Close this help"),
     b(Group::Issues, "⌘K", "Go to an issue by key, number, or link"),
     b(Group::Issues, "⌘F, /", "Focus search; Esc clears, then exits"),
     b(Group::Issues, "j/k, ↑/↓", "Next or previous issue"),
@@ -45,7 +46,7 @@ pub const BINDINGS: &[KeyBinding] = &[
     b(Group::Issues, "e", "Edit labels, priority, story points"),
     b(Group::Issues, "l", "Add the picked team's label"),
     b(Group::Issues, "m", "Toggle Roadmap filter"),
-    b(Group::Issues, "J/K", "Move down or up in rank"),
+    b(Group::Issues, "J/K", "Move down or up in rank (⇧j/⇧k)"),
     b(Group::Issues, "c", "Copy the issue link"),
     b(Group::Issues, "⌘O", "Open in Jira"),
     b(Group::Issues, "⌘Enter", "Post the comment; Esc keeps the draft"),
@@ -198,8 +199,8 @@ pub fn hints(c: HintContext) -> &'static [Hint] {
         HintContext::Search => &[&[K("Enter"), W("search JQL")], &[K("Esc"), W("clear")]],
         HintContext::SearchText => &[&[K("Enter"), W("run as JQL")], &[K("Esc"), W("clear")]],
         HintContext::SearchEmpty => &[&[K("Enter"), W("search JQL")], &[K("Esc"), W("done")]],
-        HintContext::Composer => &[&[K("⌘Enter"), W("post")], &[K("Esc"), W("keep draft")]],
-        HintContext::ComposerReadOnly => &[&[K("Esc"), W("keep draft")]],
+        HintContext::Composer => &[&[K("⌘Enter"), W("post")], &[K("Esc"), W("leave, draft kept")]],
+        HintContext::ComposerReadOnly => &[&[K("Esc"), W("leave, draft kept")], &[W("read-only, can't post")]],
         HintContext::EditPicker => &[&[K("Tab/⇧Tab"), W("field")], &[K("Enter"), W("confirm")], &[K("Esc"), W("cancel")]],
         HintContext::AssignPicker => &[&[W("Type to filter")], &[K("↑/↓"), W("move")], &[K("Enter"), W("confirm")], &[K("Esc"), W("cancel")]],
         HintContext::Picker => &[&[K("j/k"), W("or"), K("↑/↓"), W("move")], &[K("Enter"), W("confirm")], &[K("Esc"), W("cancel")]],
@@ -288,7 +289,8 @@ mod tests {
         assert_eq!(range("⌘1 to ⌘4"), ["⌘1", "⌘4"]);
         assert_eq!(range("j/k"), ["j/k"]);
         assert!(t.contains("| `⌘F` or `/` | Focus search; Esc clears, then exits |\n"));
-        assert!(t.contains("| `?` or `Esc` | Toggle this help (Esc closes) |\n"));
+        assert!(t.contains("| `?` | Toggle this help |\n| `Esc` | Close this help |\n"));
+        assert!(t.contains("| `J/K` | Move down or up in rank (⇧j/⇧k) |\n"));
         assert!(t.contains("| `⌘Enter` | Post the comment; Esc keeps the draft |\n"));
         assert!(!t.contains("Close the go-to box"), "the go-to bar shows its own Esc");
         assert!(t.contains("| `j/k` or `↑/↓` | Next or previous issue |\n"));
@@ -329,9 +331,9 @@ mod tests {
         assert_eq!(hint_context(st(false, false, None, true, Focus::None)), Selected);
         assert_eq!(hint_context(st(false, false, None, true, Focus::OtherText)), Browse, "letters type into the field, so no selection hints");
         assert_eq!(hint_context(st(false, false, None, false, Focus::None)), Browse);
-        assert_eq!(hint_text(hints(Composer)), "⌘Enter post · Esc keep draft");
+        assert_eq!(hint_text(hints(Composer)), "⌘Enter post · Esc leave, draft kept");
         let ro = HintState { read_only: true, has_selection: true, ..HintState::new(Focus::Composer) };
-        assert_eq!(hint_text(hints(hint_context(ro))), "Esc keep draft", "read-only: nothing to post");
+        assert_eq!(hint_text(hints(hint_context(ro))), "Esc leave, draft kept · read-only, can't post", "read-only says why");
         assert_eq!(hint_text(hints(Help)), "? or Esc close");
         assert_eq!(hint_text(hints(GoTo)), "Enter open · Esc close");
         assert_eq!(hint_text(hints(Search)), "Enter search JQL · Esc clear");

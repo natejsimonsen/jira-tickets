@@ -244,6 +244,8 @@ fn visuals(p: &Palette) -> Visuals {
     v.panel_fill = p.bg;
     v.window_fill = p.surface;
     v.extreme_bg_color = p.surface;
+    // Inputs on the page (the list pane's search box): one step under `bg` (`input_fill`).
+    v.text_edit_bg_color = Some(input_fill(p.bg, p));
     v.faint_bg_color = p.surface_2;
     v.override_text_color = Some(p.text);
     v.hyperlink_color = p.accent;
@@ -295,6 +297,17 @@ pub fn control_hover(p: &Palette) -> Color32 {
 /// #4a4a47 cursor row (muted reaches 3.8 there); `muted` everywhere else.
 pub fn muted_on(fill: Color32, p: &Palette) -> Color32 {
     if p.dark && contrast(p.muted, fill) < 4.5 { hex(0xbcbbb6) } else { p.muted }
+}
+
+/// Below `bg` in dark: the sunken field on the dark page.
+const DARK_SUNKEN: Color32 = hex(0x121211);
+
+/// One fill rule for every text input: one neutral step darker than the container it sits on (a sunken
+/// field), in both themes. Light: white → bg → surface_2; dark: dialog → surface_2 → surface → bg → #121211.
+pub fn input_fill(container: Color32, p: &Palette) -> Color32 {
+    let ramp: &[Color32] = if p.dark { &[DARK_DIALOG, p.surface_2, p.surface, p.bg, DARK_SUNKEN] } else { &[p.surface, p.bg, p.surface_2] };
+    let lum = |c: Color32| contrast(c, Color32::BLACK);
+    ramp.iter().copied().find(|&c| lum(c) < lum(container)).unwrap_or(*ramp.last().unwrap_or(&container))
 }
 
 /// The light-theme neutral step between `surface_2` and `hover_row`, for code chips on white.
@@ -402,7 +415,10 @@ fn fonts() -> FontDefinitions {
     };
     let prop = family("system", REGULAR, &builtin_prop);
     let bold = family("system-bold", SEMIBOLD, &prop);
-    let mono = family("system-mono", MONO, &builtin_mono);
+    // Mono falls back to the system face before egui's builtins, so "⌘" in a mono key (SF Mono has no ⌘)
+    // matches the text around it instead of the thin builtin glyph.
+    let mono_fallback: Vec<String> = prop.iter().take(1).cloned().chain(builtin_mono.iter().cloned()).collect();
+    let mono = family("system-mono", MONO, &mono_fallback);
     defs.families.insert(FontFamily::Proportional, prop);
     defs.families.insert(FontFamily::Name(BOLD.into()), bold);
     defs.families.insert(FontFamily::Monospace, mono);
@@ -599,6 +615,23 @@ mod tests {
             let c = contrast(over(t.bg, p.selected_row), p.selected_row);
             assert!(c >= 1.1, "dark={}: {c:.2}", p.dark);
         }
+    }
+
+    #[test]
+    fn inputs_sit_one_step_under_their_container() {
+        assert_eq!(input_fill(LIGHT.bg, &LIGHT), LIGHT.surface_2, "search box on the list pane");
+        assert_eq!(input_fill(LIGHT.surface, &LIGHT), LIGHT.bg, "dialog, sign-in panel, composer");
+        assert_eq!(input_fill(DARK_DIALOG, &DARK), DARK.surface_2);
+        assert_eq!(input_fill(DARK.surface, &DARK), DARK.bg);
+        assert_eq!(input_fill(DARK.bg, &DARK), DARK_SUNKEN);
+        for p in [&LIGHT, &DARK] {
+            for c in [p.bg, p.surface] {
+                let f = input_fill(c, p);
+                assert!(contrast(f, Color32::BLACK) < contrast(c, Color32::BLACK), "darker than its container");
+                assert!(contrast(p.text, f) >= 7.0 && contrast(placeholder(p), f) >= 4.5, "dark={} {c:?}", p.dark);
+            }
+        }
+        assert!(contrast(placeholder(&DARK), input_fill(DARK_DIALOG, &DARK)) >= 4.5);
     }
 
     #[test]

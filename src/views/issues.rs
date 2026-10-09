@@ -215,8 +215,8 @@ pub fn missing_label_pill(ui: &mut Ui, f: &filter::IssueFilter, i: &Issue, label
 
 /// The hint bar's height; the toast anchors above it.
 pub const HINT_BAR_H: f32 = 24.0;
-/// The hint bar's inner margin: 15, so the first glyph's ink (its side bearing adds ~1) sits 16 in.
-const HINT_INSET: f32 = 15.0;
+/// The hint bar's inner margin: the first token is placed by its ink, so this is the ink inset.
+const HINT_INSET: f32 = 16.0;
 
 /// The hint bar's fill: `surface_2` in both themes (a step off the white light surface, so the undimmed bar
 /// under a modal does not glow next to the grey backdrop).
@@ -1011,52 +1011,76 @@ pub fn row_fill(selected: bool, hovered: bool, p: &Palette) -> egui::Color32 {
 /// between hints; elided from the right with "…".
 fn hint_bar(ui: &mut Ui, hs: &[crate::keys::Hint], p: &Palette) {
     use crate::keys::Tok;
-    use egui::text::LayoutJob;
-    let fmt = |t: &Tok| match t {
-        Tok::K(_) => egui::TextFormat { font_id: theme::mono(12.5), color: p.text, ..Default::default() },
-        Tok::W(_) => egui::TextFormat { font_id: theme::body(12.0), color: p.muted, ..Default::default() },
+    // Each token is its own galley, placed by its ink so the gaps are what they say: KEY_TO_WORD between a
+    // key and its word, SEP_SPACE either side of "·", whatever the mono key's side bearings.
+    let galley = |t: &Tok| match t {
+        Tok::K(s) => ui.painter().layout_no_wrap(s.to_string(), theme::mono(12.5), p.text),
+        Tok::W(s) => ui.painter().layout_no_wrap(s.to_string(), theme::body(12.0), p.muted),
     };
-    let muted = egui::TextFormat { font_id: theme::body(12.0), color: p.muted, ..Default::default() };
-    let hint_job = |h: &[Tok]| {
-        let mut job = LayoutJob::default();
-        for (i, t) in h.iter().enumerate() {
-            let (Tok::K(s) | Tok::W(s)) = t;
-            job.append(s, if i > 0 { 4.0 } else { 0.0 }, fmt(t));
-        }
-        job
-    };
-    let width = |job: LayoutJob| ui.fonts_mut(|f| f.layout_job(job)).size().x;
-    let one = |s: &str| {
-        let mut j = LayoutJob::default();
-        j.append(s, 0.0, muted.clone());
-        j
-    };
-    let widths: Vec<f32> = hs.iter().map(|h| width(hint_job(h))).collect();
-    let sep = width(one("·")) + 2.0 * SEP_SPACE;
-    let (n, elided) = crate::keys::fit_hints(&widths, sep, width(one("…")), ui.available_width());
-    let mut job = LayoutJob::default();
-    for (i, h) in hs.iter().take(n).enumerate() {
+    let word = |s: &str| ui.painter().layout_no_wrap(s.to_string(), theme::body(12.0), p.muted);
+    let ink = |g: &std::sync::Arc<egui::Galley>| (g.mesh_bounds.left(), g.mesh_bounds.right());
+    let ink_w = |g: &std::sync::Arc<egui::Galley>| g.mesh_bounds.width();
+    let hints: Vec<Vec<std::sync::Arc<egui::Galley>>> = hs.iter().map(|h| h.iter().map(galley).collect()).collect();
+    let widths: Vec<f32> = hints
+        .iter()
+        .map(|gs| ink_origins(&gs.iter().enumerate().map(|(j, g)| (ink(g).0, ink(g).1, if j > 0 { KEY_TO_WORD } else { 0.0 })).collect::<Vec<_>>()).1)
+        .collect();
+    let dot = word("·");
+    let ell = word("…");
+    let sep = ink_w(&dot) + 2.0 * SEP_SPACE;
+    let (n, elided) = crate::keys::fit_hints(&widths, sep, ink_w(&ell), ui.available_width());
+    let mut items: Vec<std::sync::Arc<egui::Galley>> = Vec::new();
+    let mut gaps: Vec<f32> = Vec::new();
+    for (i, gs) in hints.into_iter().take(n).enumerate() {
         if i > 0 {
-            job.append("·", SEP_SPACE, muted.clone());
+            items.push(dot.clone());
+            gaps.push(SEP_SPACE);
         }
-        for (j, t) in h.iter().enumerate() {
-            let (Tok::K(s) | Tok::W(s)) = t;
-            let lead = match (i, j) {
-                (_, j) if j > 0 => 4.0,
+        for (j, g) in gs.into_iter().enumerate() {
+            gaps.push(match (i, j) {
+                (_, j) if j > 0 => KEY_TO_WORD,
                 (0, 0) => 0.0,
                 _ => SEP_SPACE,
-            };
-            job.append(s, lead, fmt(t));
+            });
+            items.push(g);
         }
     }
     if elided {
         if n > 0 {
-            job.append("·", SEP_SPACE, muted.clone());
+            items.push(dot.clone());
+            gaps.push(SEP_SPACE);
         }
-        job.append("…", if n > 0 { SEP_SPACE } else { 0.0 }, muted);
+        items.push(ell.clone());
+        gaps.push(if n > 0 { SEP_SPACE } else { 0.0 });
     }
-    ui.add(egui::Label::new(job).selectable(false).wrap_mode(egui::TextWrapMode::Extend));
+    let spec: Vec<(f32, f32, f32)> = items.iter().zip(&gaps).map(|(g, gap)| (ink(g).0, ink(g).1, *gap)).collect();
+    let (xs, total) = ink_origins(&spec);
+    let h = ui.available_height();
+    let (rect, _) = ui.allocate_exact_size(vec2(total.ceil(), h), Sense::hover());
+    // One baseline for keys and words: a 12 px word's line box centred in the bar.
+    let line = (rect.center().y - dot.size().y / 2.0).round() + crate::views::galley_baseline(&dot);
+    for (g, x) in items.into_iter().zip(xs) {
+        let top = line - crate::views::galley_baseline(&g);
+        // Each galley carries its own colour (keys `text`, words `muted`).
+        ui.painter().galley(egui::pos2(rect.left() + x, top), g, p.muted);
+    }
 }
+
+/// Places items left to right by their ink: each is (ink left, ink right, both from its own origin, and the
+/// ink gap before it). Returns each item's origin x and the run's ink width, from the first ink.
+pub fn ink_origins(items: &[(f32, f32, f32)]) -> (Vec<f32>, f32) {
+    let mut cursor = 0.0;
+    let mut out = Vec::with_capacity(items.len());
+    for (i, &(l, r, gap)) in items.iter().enumerate() {
+        let x = cursor + if i > 0 { gap } else { 0.0 } - l;
+        out.push(x);
+        cursor = x + r;
+    }
+    (out, cursor)
+}
+
+/// A key → its word, ink to ink.
+const KEY_TO_WORD: f32 = 4.0;
 
 /// Space either side of the "·" between hints.
 const SEP_SPACE: f32 = 12.0;
@@ -1262,6 +1286,20 @@ mod tests {
         assert_eq!(popup_width(190.0, 900.0, 12.0, 500.0), 500.0, "capped at the pane's right edge");
         assert_eq!(popup_width(190.0, 900.0, 12.0, 100.0), 190.0, "never narrower than the combo");
         assert_eq!(POPUP_ROW_PAD + POPUP_FRAME / 2.0, INNER_X, "popup text starts where the combo's does");
+    }
+
+    #[test]
+    fn hint_tokens_sit_by_their_ink() {
+        // A mono key with 1.5 of bearing each side, then a word with 0.5: the inks sit KEY_TO_WORD apart.
+        let (xs, w) = ink_origins(&[(1.5, 6.0, 0.0), (0.5, 20.0, KEY_TO_WORD)]);
+        assert_eq!(xs[0], -1.5, "the first ink starts at the bar's inset");
+        assert_eq!(xs[1] + 0.5 - (xs[0] + 6.0), KEY_TO_WORD);
+        assert_eq!(w, xs[1] + 20.0);
+        // Either side of a separator: SEP_SPACE ink to ink.
+        let (xs, _) = ink_origins(&[(0.0, 10.0, 0.0), (1.0, 3.0, SEP_SPACE), (2.0, 8.0, SEP_SPACE)]);
+        assert_eq!(xs[1] + 1.0 - 10.0, SEP_SPACE);
+        assert_eq!(xs[2] + 2.0 - (xs[1] + 3.0), SEP_SPACE);
+        assert_eq!(HINT_BAR_H, 24.0);
     }
 
     #[test]

@@ -104,6 +104,10 @@ pub fn header_labels(slot: f32, name_w: Option<f32>, read_only_w: Option<f32>) -
 }
 
 /// The y of a galley's first baseline, from its top.
+pub fn galley_baseline(g: &egui::Galley) -> f32 {
+    baseline(g)
+}
+
 fn baseline(g: &egui::Galley) -> f32 {
     g.rows.first().map_or(0.0, |r| r.pos.y + r.row.glyphs.first().map_or(0.0, |gl| gl.pos.y))
 }
@@ -303,6 +307,7 @@ pub fn sign_in(app: &mut App, ui: &mut Ui) {
                 ui.add_space(8.0);
                 ui.add(egui::Label::new(aside).extend());
                 ui.add_space(ASIDE_TO_FIELD);
+                ui.visuals_mut().text_edit_bg_color = Some(theme::input_fill(p.surface, p));
                 let r = ui.add(input_field(&mut app.token_input, "API token", theme::body(14.0), p).id(egui::Id::new("token-input")).password(true));
                 if ui.memory(|m| m.focused().is_none()) {
                     r.request_focus();
@@ -432,11 +437,12 @@ pub fn selected_edge(p: &Palette) -> Color32 {
     if p.dark { Color32::from_rgb(0x5c, 0x5b, 0x56) } else { p.muted.gamma_multiply(0.4) }
 }
 
-/// Inside a dialog, one rule in both themes: fields sit on `bg` with the dialog's edge (focus stays the accent).
+/// Inside a dialog: fields one step under the dialog's fill (`theme::input_fill`, the app's one input rule)
+/// with the dialog's edge (focus stays the accent).
 pub fn dialog_fields(ui: &mut Ui, p: &Palette) {
     let edge = dialog_stroke(p).color;
     let v = ui.visuals_mut();
-    v.text_edit_bg_color = Some(p.bg);
+    v.text_edit_bg_color = Some(theme::input_fill(dialog_fill(p), p));
     v.widgets.inactive.bg_stroke.color = edge;
     v.widgets.hovered.bg_stroke.color = edge;
 }

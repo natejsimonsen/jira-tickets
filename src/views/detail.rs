@@ -157,7 +157,8 @@ fn composer(app: &mut App, ui: &mut Ui, p: &Palette, key: &str) {
     let read_only = crate::jira::READ_ONLY.load(std::sync::atomic::Ordering::Relaxed);
     let draft = app.drafts.entry(key.to_string()).or_default();
     let resp = Frame::new()
-        .fill(p.surface)
+        // The one input rule: a step under the detail pane's surface.
+        .fill(theme::input_fill(p.surface, p))
         .stroke(Stroke::new(1.0, if focused { p.accent } else { p.border }))
         .corner_radius(theme::RADIUS)
         // The comment cards' 12 on every side.
@@ -180,14 +181,18 @@ fn composer(app: &mut App, ui: &mut Ui, p: &Palette, key: &str) {
     ui.add_space(BOX_TO_BUTTON - ui.spacing().item_spacing.y);
     ui.allocate_ui_with_layout(vec2(ui.available_width(), crate::views::BUTTON_H), egui::Layout::right_to_left(egui::Align::Center), |ui| {
         ui.spacing_mut().item_spacing.x = 8.0;
-        let tip = if read_only { "Writes are blocked (JIRA_TICKETS_READONLY)" } else { "Post the comment (⌘Enter)" };
-        if ui.add(primary_button_if("Comment", comment_primary(enabled, read_only), p)).on_hover_text(tip).clicked() || (post && enabled) {
+        if ui.add(primary_button_if("Comment", comment_primary(enabled, read_only), p)).on_hover_text(comment_tip(read_only)).clicked() || (post && enabled) {
             app.actions.push(Action::Comment);
         }
         if app.posting.is_some() {
             crate::views::icons::spinner(ui, crate::views::icons::INLINE_SPINNER, p);
         }
     });
+}
+
+/// The Comment button's tooltip: in read-only mode the greyed button says why.
+pub fn comment_tip(read_only: bool) -> &'static str {
+    if read_only { "Read-only" } else { "Post the comment (⌘Enter)" }
 }
 
 /// The composer's placeholder: in read-only mode it says nothing can be posted rather than promising ⌘Enter.
@@ -255,6 +260,8 @@ mod tests {
     #[test]
     fn read_only_composer_promises_nothing() {
         assert_eq!(composer_hint(true), "Read-only, comments can't be posted");
+        assert_eq!(comment_tip(true), "Read-only");
+        assert_eq!(comment_tip(false), "Post the comment (⌘Enter)");
         assert_eq!(composer_hint(false), "Add a comment (⌘Enter to post)");
     }
 

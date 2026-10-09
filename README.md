@@ -45,7 +45,8 @@ Only a token you paste is saved. Signing out deletes that file.
 | `⌘1` to `⌘4` | Issues, Grooming, Team, Roadmap |
 | `⌘R` | Refresh |
 | `⌘W` | Close the window |
-| `?` or `Esc` | Toggle this help (Esc closes) |
+| `?` | Toggle this help |
+| `Esc` | Close this help |
 | **Issues** | |
 | `⌘K` | Go to an issue by key, number, or link |
 | `⌘F` or `/` | Focus search; Esc clears, then exits |
@@ -56,7 +57,7 @@ Only a token you paste is saved. Signing out deletes that file.
 | `e` | Edit labels, priority, story points |
 | `l` | Add the picked team's label |
 | `m` | Toggle Roadmap filter |
-| `J/K` | Move down or up in rank |
+| `J/K` | Move down or up in rank (⇧j/⇧k) |
 | `c` | Copy the issue link |
 | `⌘O` | Open in Jira |
 | `⌘Enter` | Post the comment; Esc keeps the draft |
