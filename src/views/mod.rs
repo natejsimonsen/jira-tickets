@@ -564,14 +564,15 @@ pub fn dialog_fields(ui: &mut Ui, p: &Palette) {
     v.widgets.hovered.bg_stroke.color = edge;
 }
 
-/// A secondary button inside a dialog: a step above the dialog's fill, with the dialog's edge.
+/// A secondary button inside a dialog, with the dialog's edge: light on the dialog's own fill, dark a step above it.
 pub fn dialog_button(text: &str, p: &Palette) -> egui::Button<'static> {
     button(text, p).fill(dialog_button_fill(p)).stroke(dialog_stroke(p))
 }
 
-/// The dialog button's fill: `surface_2` on the white light dialog; in dark a raised #424240 (DARK_CANCEL).
+/// The dialog button's fill: the white dialog's own fill in light (`surface_2` #f0f0ed was 1.05 off the #ebebe7
+/// field and read as one; round 11 L3), the edge alone marks it; in dark a raised #424240 (DARK_CANCEL).
 pub fn dialog_button_fill(p: &Palette) -> Color32 {
-    if p.dark { DARK_CANCEL } else { p.surface_2 }
+    if p.dark { DARK_CANCEL } else { dialog_fill(p) }
 }
 
 /// The dark dialog's raised button fill (Cancel): a step past `selected_row` (#3d3d3a read 1.08:1 off the dialog).
@@ -1264,7 +1265,12 @@ mod widget_tests {
         for p in [&theme::LIGHT, &theme::DARK] {
             let edge = dialog_stroke(p).color;
             assert!(theme::contrast(edge, p.bg) >= 1.3, "field edge on its bg fill, dark={}", p.dark);
-            assert!(theme::contrast(dialog_button_fill(p), dialog_fill(p)) >= if p.dark { 1.15 } else { 1.05 }, "Cancel steps off the dialog, dark={}", p.dark);
+            if p.dark {
+                assert!(theme::contrast(dialog_button_fill(p), dialog_fill(p)) >= 1.15, "Cancel steps off the dark dialog");
+            } else {
+                assert_eq!(dialog_button_fill(p), dialog_fill(p), "light Cancel on the dialog's fill, edge only");
+            }
+            assert!(theme::contrast(dialog_button_fill(p), theme::dialog_input_fill(p)) >= 1.15, "a field never matches a button, dark={}", p.dark);
             assert!(theme::contrast(edge, dialog_button_fill(p)) >= 1.2, "Cancel's edge shows, dark={}", p.dark);
             assert!(theme::contrast(p.text, dialog_button_fill(p)) >= 7.0);
         }

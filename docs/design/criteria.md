@@ -68,3 +68,6 @@ These were decided in earlier rounds; raters treat them as correct and do not sc
   are different conventions on purpose.
 - **Chips at line start.** An inline-code chip that starts a line sits on the text margin (its fill starts at
   the text edge), the GitHub convention; the ragged look against plain lines is accepted.
+- **Dark page field.** The dark list-pane search box is #0c0c0b, 1.09:1 under `bg`; the ruled range for the dark
+  page field is 1.09–1.11 (it cannot reach the 1.12 input step short of near-black). Final; raters oscillated between
+  "deeper" and "within range".
