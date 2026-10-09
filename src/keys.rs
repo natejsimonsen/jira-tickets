@@ -13,7 +13,7 @@ impl Group {
         match self {
             Group::Global => "Global",
             Group::Issues => "Issues",
-            Group::Pickers => "Pickers",
+            Group::Pickers => "Pickers and Edit",
         }
     }
 }
@@ -52,7 +52,7 @@ pub const BINDINGS: &[KeyBinding] = &[
     b(Group::Pickers, "j/k, ↑/↓", "Move"),
     b(Group::Pickers, "Tab/⇧Tab", "Next or previous field in Edit"),
     b(Group::Pickers, "Enter", "Confirm"),
-    b(Group::Pickers, "Esc", "Cancel"),
+    b(Group::Pickers, "Esc", "Cancel or close"),
 ];
 
 /// The alternatives of one binding; each is one chip, or a range (see `range`).
@@ -196,7 +196,7 @@ pub fn hints(c: HintContext) -> &'static [Hint] {
         HintContext::Search => &[&[K("Enter"), W("run as JQL")], &[K("Esc"), W("clear")]],
         HintContext::SearchText => &[&[K("Enter"), W("run as JQL")], &[K("Esc"), W("clear")]],
         HintContext::SearchEmpty => &[&[K("Enter"), W("run as JQL")], &[K("Esc"), W("done")]],
-        HintContext::Composer => &[&[K("⌘Enter"), W("post")], &[K("Esc"), W("done")], &[W("draft kept")]],
+        HintContext::Composer => &[&[K("⌘Enter"), W("post")], &[K("Esc"), W("done (draft kept)")]],
         HintContext::EditPicker => &[&[K("Tab/⇧Tab"), W("field")], &[K("Enter"), W("confirm")], &[K("Esc"), W("cancel")]],
         HintContext::AssignPicker => &[&[W("Type to filter")], &[K("↑/↓"), W("move")], &[K("Enter"), W("confirm")], &[K("Esc"), W("cancel")]],
         HintContext::Picker => &[&[K("j/k"), W("or"), K("↑/↓"), W("move")], &[K("Enter"), W("confirm")], &[K("Esc"), W("cancel")]],
@@ -334,7 +334,7 @@ mod tests {
         assert_eq!(hint_context(st(false, false, None, true, Focus::None)), Selected);
         assert_eq!(hint_context(st(false, false, None, true, Focus::OtherText)), Browse, "letters type into the field, so no selection hints");
         assert_eq!(hint_context(st(false, false, None, false, Focus::None)), Browse);
-        assert_eq!(hint_text(hints(Composer)), "⌘Enter post · Esc done · draft kept");
+        assert_eq!(hint_text(hints(Composer)), "⌘Enter post · Esc done (draft kept)");
         let ro = HintState { read_only: true, has_selection: true, ..HintState::new(Focus::Composer) };
         let bar = hint_text(hints(hint_context(ro)));
         assert!(!bar.contains("⌘Enter") && !bar.contains("draft"), "read-only has no composer, so no composer keys: {bar}");

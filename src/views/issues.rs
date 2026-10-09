@@ -769,6 +769,16 @@ pub fn count_label(shown: usize, total: Option<usize>, loading_first: bool, suff
     }
 }
 
+/// The count row's note while JQL-looking text sits in the box unrun (the local filter is off for it).
+pub const JQL_ENTER_NOTE: &str = "· Enter to run as JQL";
+
+/// Whether the box holds JQL-looking text that has not been run: not the typed search on screen (`typed_shown`
+/// with `last_jql`) and nothing in flight.
+pub fn jql_awaiting_enter(text: &str, last_jql: Option<&str>, typed_shown: bool, pending: bool) -> bool {
+    let t = text.trim();
+    !pending && !t.is_empty() && filter::looks_like_jql(t) && !(typed_shown && last_jql == Some(t))
+}
+
 /// What the count row says the rows are, after the count.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum CountSuffix {
@@ -862,6 +872,10 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
             ui.label(RichText::new(label).color(color).size(12.0));
         } else {
             ui.label(RichText::new(label).color(color).size(12.0));
+            if !row_spinner && jql_awaiting_enter(&app.filter.text, app.last_search_jql.as_deref(), app.typed_search && app.search_active, pending) {
+                // The rows are not filtered by JQL-looking text; say what Enter does with it.
+                ui.label(RichText::new(JQL_ENTER_NOTE).color(p.muted).size(12.0));
+            }
             if row_spinner {
                 crate::views::icons::spinner(ui, crate::views::icons::INLINE_SPINNER, p);
                 ui.label(RichText::new("Updating…").color(p.muted).size(12.0));
@@ -1268,27 +1282,49 @@ fn hint_bar(ui: &mut Ui, hs: &[crate::keys::Hint], p: &Palette) {
     }
 }
 
-/// A hint key's runs: modifier glyphs (⌘ ⇧ ⌥ ⌃, which SF Mono lacks) apart from the rest, as (text, mono), so
-/// the letters stay in the mono face whatever the fallback does with the modifier (I2).
+/// A hint key's runs: modifier glyphs (⌘ ⇧ ⌥ ⌃, which SF Mono lacks or draws thin) apart from the rest, as
+/// (text, mono), so the letters stay in the mono face whatever the fallback does with the modifier (I2). A pair's
+/// "/" is a run of its own, so `key_job` can close it up between letters.
 pub fn key_runs(key: &str) -> Vec<(String, bool)> {
     let modifier = |c: char| matches!(c, '⌘' | '⇧' | '⌥' | '⌃');
     let mut out: Vec<(String, bool)> = Vec::new();
+    let mut alone = false;
     for c in key.chars() {
         let mono = !modifier(c);
+        let slash = c == '/' && key.len() > 1;
         match out.last_mut() {
-            Some((t, m)) if *m == mono => t.push(c),
+            Some((t, m)) if *m == mono && !slash && !alone => t.push(c),
             _ => out.push((c.to_string(), mono)),
         }
+        alone = slash;
     }
     out
 }
 
-/// A hint key as one galley of two kinds of run: modifiers in the 12.5 system face, the rest in the key font.
+/// How far a pair's "/" closes up on a mono letter beside it: SF Mono's narrow letters sit in wide cells, so
+/// "j/k" read "j / k" beside "↑/↓", whose arrows fill theirs (I2: one pair style, no spaces around the slash).
+pub const PAIR_TIGHTEN: f32 = 1.5;
+
+/// The leading space before run `i` of `runs`: −PAIR_TIGHTEN on each side of a "/" that touches an ASCII letter
+/// or digit, else 0.
+pub fn run_lead(runs: &[(String, bool)], i: usize) -> f32 {
+    let alnum = |s: Option<&(String, bool)>, last: bool| {
+        s.and_then(|(t, _)| if last { t.chars().last() } else { t.chars().next() }).is_some_and(|c| c.is_ascii_alphanumeric())
+    };
+    let is_slash = |j: usize| runs.get(j).is_some_and(|(t, _)| t == "/");
+    let before_slash = is_slash(i) && i > 0 && alnum(runs.get(i - 1), true);
+    let after_slash = i > 0 && is_slash(i - 1) && alnum(runs.get(i), false);
+    if before_slash || after_slash { -PAIR_TIGHTEN } else { 0.0 }
+}
+
+/// A hint key as one galley of two kinds of run: modifiers in the 12.5 system face, the rest in the key font,
+/// a pair's "/" closed up on letters (`run_lead`). Help chips draw their keys with it too.
 pub fn key_job(key: &str, color: egui::Color32) -> egui::text::LayoutJob {
     let mut job = egui::text::LayoutJob::default();
-    for (t, mono) in key_runs(key) {
-        let font_id = if mono { theme::key_font() } else { theme::body(12.5) };
-        job.append(&t, 0.0, egui::TextFormat { font_id, color, ..Default::default() });
+    let runs = key_runs(key);
+    for (i, (t, mono)) in runs.iter().enumerate() {
+        let font_id = if *mono { theme::key_font() } else { theme::body(12.5) };
+        job.append(t, run_lead(&runs, i), egui::TextFormat { font_id, color, ..Default::default() });
     }
     job
 }
@@ -1336,7 +1372,7 @@ fn goto_box(app: &mut App, ctx: &egui::Context, p: &Palette) {
                 ui.label(RichText::new("Go to issue").font(theme::bold(13.5)).color(p.text));
                 ui.add_space(4.0);
                 // Proportional 14 like the search box: mono is for rendered ids, not input.
-                let r = ui.add(crate::views::input_field(text, "9001, CI-9001, or a browse link", theme::body(14.0), p));
+                let r = ui.add(crate::views::focused_input_field(text, "9001, CI-9001, or a browse link", theme::body(14.0), p));
                 // The box keeps focus while open, so Enter counts whether or not the field just gave it up.
                 if (r.has_focus() || r.lost_focus()) && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                     go = true;
@@ -1658,6 +1694,16 @@ mod tests {
     }
 
     #[test]
+    fn the_count_says_enter_runs_unrun_jql() {
+        assert!(jql_awaiting_enter("status = Blocked", None, false, false), "typed, not run");
+        assert!(!jql_awaiting_enter("status = Blocked", Some("status = Blocked"), true, false), "its rows are on screen");
+        assert!(jql_awaiting_enter("status = Done", Some("status = Blocked"), true, false), "edited after a run");
+        assert!(!jql_awaiting_enter("status = Blocked", None, false, true), "in flight: the spinner says it");
+        assert!(!jql_awaiting_enter("alpha", None, false, false), "plain text filters locally");
+        assert!(!jql_awaiting_enter("  ", None, false, false));
+    }
+
+    #[test]
     fn labels_pill_skips_the_filtered_team() {
         let l = ["PLAT".to_string(), "infra".to_string()];
         assert_eq!(row_labels(&l, Some("PLAT")), "infra");
@@ -1783,8 +1829,15 @@ mod tests {
     fn hint_keys_keep_letters_mono_beside_a_modifier() {
         assert_eq!(key_runs("⌘K"), [("⌘".to_string(), false), ("K".to_string(), true)]);
         assert_eq!(key_runs("⌘Enter"), [("⌘".to_string(), false), ("Enter".to_string(), true)]);
-        assert_eq!(key_runs("Tab/⇧Tab"), [("Tab/".to_string(), true), ("⇧".to_string(), false), ("Tab".to_string(), true)]);
+        assert_eq!(key_runs("Tab/⇧Tab"), [("Tab".to_string(), true), ("/".to_string(), true), ("⇧".to_string(), false), ("Tab".to_string(), true)]);
+        assert_eq!(key_runs("j/k"), [("j".to_string(), true), ("/".to_string(), true), ("k".to_string(), true)]);
+        assert_eq!(key_runs("/"), [("/".to_string(), true)], "the slash key itself");
         assert_eq!(key_runs("?"), [("?".to_string(), true)]);
+        // I2: a "/" closes up on letters only (arrows fill their cells; ⇧ is its own run).
+        let lead = |k: &str| key_job(k, egui::Color32::WHITE).sections.iter().map(|s| s.leading_space).collect::<Vec<_>>();
+        assert_eq!(lead("j/k"), [0.0, -PAIR_TIGHTEN, -PAIR_TIGHTEN]);
+        assert!(lead("↑/↓").iter().all(|&l| l == 0.0), "arrows fill their cells");
+        assert_eq!(lead("Tab/⇧Tab"), [0.0, -PAIR_TIGHTEN, 0.0, 0.0]);
         let job = key_job("⌘F", egui::Color32::WHITE);
         assert_eq!(job.sections.len(), 2);
         assert_eq!(job.sections[1].format.font_id, theme::key_font(), "the letter is in the mono face");

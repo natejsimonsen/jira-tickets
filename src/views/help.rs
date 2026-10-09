@@ -48,7 +48,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                     ui.allocate_ui_with_layout(vec2(rw, 0.0), egui::Layout::top_down(egui::Align::Min), |ui| {
                         ui.set_width(rw);
                         group(ui, p, Group::Pickers, rk);
-                        let gap = section_gap(row_h(ui, p));
+                        let gap = section_gap(row_h(ui, p), header_h(ui));
                         ui.add_space(gap);
                         group(ui, p, Group::Global, rk);
                     });
@@ -77,7 +77,7 @@ pub fn column_width(keys: &[f32], actions: &[f32]) -> f32 {
 }
 
 fn chip_size(ui: &egui::Ui, text: &str, p: &Palette) -> egui::Vec2 {
-    let g = ui.painter().layout_no_wrap(text.to_string(), theme::key_font(), p.text);
+    let g = ui.painter().layout_job(crate::views::issues::key_job(text, p.text));
     vec2((g.size().x + 12.0).max(20.0), g.size().y + 4.0)
 }
 
@@ -108,12 +108,20 @@ pub fn row_gap(row_h: f32) -> f32 {
     (ROW_PITCH - row_h).max(0.0)
 }
 
-/// Extra space above every section header after the first, on top of the row gap, so groups read apart.
-const SECTION_EXTRA: f32 = 12.0;
+/// Header → its first row.
+const HEADER_TO_ROWS: f32 = 8.0;
 
-/// The space between a group's last row and the next group's header.
-pub fn section_gap(row_h: f32) -> f32 {
-    row_gap(row_h) + SECTION_EXTRA
+/// The space between a group's last row and the next group's header: the row gap, then enough that the header
+/// (`header_h` plus HEADER_TO_ROWS) takes exactly one ROW_PITCH more, so the rows under a second header stay on
+/// the column's 34 grid and both columns' last rows line up (round 10 measured the right one 1 pt low: the old
+/// 12 extra + 15 header + 8 made 35).
+pub fn section_gap(row_h: f32, header_h: f32) -> f32 {
+    row_gap(row_h) + (ROW_PITCH - HEADER_TO_ROWS - header_h).max(0.0)
+}
+
+/// A section header's slot height, on whole points.
+fn header_h(ui: &mut egui::Ui) -> f32 {
+    slot_h(ui.fonts_mut(|f| f.row_height(&theme::bold(12.0))))
 }
 
 /// A help row's height: its tallest part, a chip or the 14 px action.
@@ -128,12 +136,12 @@ pub fn slot_h(h: f32) -> f32 {
 }
 
 fn group(ui: &mut egui::Ui, p: &Palette, g: Group, key_w: f32) {
-    let header = slot_h(ui.fonts_mut(|f| f.row_height(&theme::bold(12.0))));
+    let header = header_h(ui);
     ui.allocate_ui_with_layout(vec2(ui.available_width(), header), egui::Layout::left_to_right(egui::Align::Center), |ui| {
         ui.set_min_height(header);
         ui.label(RichText::new(g.name()).font(theme::bold(12.0)).color(crate::views::dialog_muted(p)));
     });
-    ui.add_space(8.0);
+    ui.add_space(HEADER_TO_ROWS);
     // Every row is as tall as its tallest part (a chip or the action), and chips, words and the action are
     // all centred on that row.
     let row_h = row_h(ui, p);
@@ -169,9 +177,10 @@ fn group(ui: &mut egui::Ui, p: &Palette, g: Group, key_w: f32) {
 }
 
 /// A key chip: mono 12.5 in a 6/2 frame, at least 20 wide, text centred. Its fill steps off the dialog's
-/// (`chip_fill_on`).
+/// (`chip_fill_on`). The key is the hint bar's `key_job`: ⌘ and ⇧ each in the system face (SF Mono's ⇧ is
+/// thin), a pair's "/" closed up.
 fn chip(ui: &mut egui::Ui, text: &str, p: &Palette) {
-    let galley = ui.painter().layout_no_wrap(text.to_string(), theme::key_font(), p.text);
+    let galley = ui.painter().layout_job(crate::views::issues::key_job(text, p.text));
     let size = chip_size(ui, text, p);
     let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
     let fill = theme::chip_fill_on(crate::views::dialog_fill(p), p);
@@ -222,8 +231,18 @@ mod tests {
     }
 
     #[test]
-    fn later_sections_get_12_more() {
-        assert_eq!(super::section_gap(18.0), super::row_gap(18.0) + 12.0);
+    fn a_later_section_header_takes_one_row_pitch() {
+        // H1: the header block (extra + header + 8) is one 34 pitch, so a second section's rows stay on the grid.
+        for header in [15.0, 17.0] {
+            let block = super::section_gap(18.0, header) - super::row_gap(18.0) + header + super::HEADER_TO_ROWS;
+            assert_eq!(block, super::ROW_PITCH, "header {header}");
+        }
+        assert_eq!(super::section_gap(18.0, 15.0), super::row_gap(18.0) + 11.0);
+        // Left: 11 Issues rows; right: 4 Pickers, a header block, 6 Global: last rows level.
+        let (h, pitch) = (15.0, super::ROW_PITCH);
+        let left = h + 8.0 + 10.0 * pitch;
+        let right = h + 8.0 + 3.0 * pitch + pitch + (super::section_gap(18.0, h) - super::row_gap(18.0)) + h + 8.0 + 5.0 * pitch;
+        assert_eq!(left, right);
     }
 
     #[test]

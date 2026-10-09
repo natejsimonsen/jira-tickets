@@ -372,7 +372,7 @@ pub fn sign_in(app: &mut App, ui: &mut Ui) {
                 ui.add(egui::Label::new(aside).extend());
                 ui.add_space(ASIDE_TO_FIELD);
                 ui.visuals_mut().text_edit_bg_color = Some(theme::input_fill(p.surface, p));
-                let r = ui.add(input_field(&mut app.token_input, "API token", theme::body(14.0), p).id(egui::Id::new("token-input")).password(true));
+                let r = ui.add(focused_input_field(&mut app.token_input, "API token", theme::body(14.0), p).id(egui::Id::new("token-input")).password(true));
                 if ui.memory(|m| m.focused().is_none()) {
                     r.request_focus();
                 }
@@ -386,7 +386,8 @@ pub fn sign_in(app: &mut App, ui: &mut Ui) {
                 }
                 ui.add_space(SIGN_IN_TO_AGAIN);
                 // Only as tall as its text, so the panel's 16 bottom padding is all that shows under it.
-                let again = egui::Button::new(RichText::new("Check again").color(p.muted).size(14.0)).frame(false);
+                // `text`, so it reads as a control beside the muted aside.
+                let again = egui::Button::new(RichText::new("Check again").color(p.text).size(14.0)).frame(false);
                 let again_h = ui.fonts_mut(|f| f.row_height(&theme::body(14.0)));
                 ui.spacing_mut().button_padding.y = 0.0;
                 if ui.add_sized([w, again_h], again).on_hover_text("Look for JIRA_API_TOKEN or the config api_token again").clicked() {
@@ -408,12 +409,34 @@ pub fn tip_above(anchor_bottom: f32, limit: f32) -> bool {
     anchor_bottom + TIP_GAP + TIP_H > limit
 }
 
+/// Where a tooltip goes, when not egui's default (below, start-aligned): beside the control on its left, its
+/// right edge at the control and growing leftward, for a control right under a field (the Comment button under
+/// the focused composer: above it covered the box, F2); else above when there is no room below (`tip_above`).
+pub fn tip_align(above: bool, under_a_field: bool) -> Option<egui::RectAlign> {
+    if under_a_field {
+        Some(egui::RectAlign::LEFT)
+    } else if above {
+        Some(egui::RectAlign::TOP_START)
+    } else {
+        None
+    }
+}
+
 /// `on_hover_text`, but above the control when there is no room for it below, over the hint bar.
 pub fn hover_tip(resp: egui::Response, text: impl Into<egui::WidgetText>, app: &App) -> egui::Response {
+    hover_tip_placed(resp, text, app, false)
+}
+
+/// `hover_tip` for a control right under a field: the tip sits to its left (`tip_align`).
+pub fn hover_tip_beside(resp: egui::Response, text: impl Into<egui::WidgetText>, app: &App) -> egui::Response {
+    hover_tip_placed(resp, text, app, true)
+}
+
+fn hover_tip_placed(resp: egui::Response, text: impl Into<egui::WidgetText>, app: &App, under_a_field: bool) -> egui::Response {
     let limit = resp.ctx.content_rect().bottom() - hint_bar_height(app).unwrap_or(0.0);
     let mut tip = egui::Tooltip::for_enabled(&resp);
-    if tip_above(resp.rect.bottom(), limit) {
-        tip.popup = tip.popup.align(egui::RectAlign::TOP_START).align_alternatives(&[]);
+    if let Some(align) = tip_align(tip_above(resp.rect.bottom(), limit), under_a_field) {
+        tip.popup = tip.popup.align(align).align_alternatives(&[]);
     }
     tip.show(|ui| {
         ui.set_max_width(ui.spacing().tooltip_width);
@@ -557,9 +580,23 @@ const DARK_CANCEL: Color32 = Color32::from_rgb(0x42, 0x42, 0x40);
 /// Placeholder text for a field, in the `placeholder` token, starting exactly where typed text does (the first
 /// keystroke moves nothing; round 8 measured it 2 pt right).
 pub fn field_hint(text: &str, font: egui::FontId, p: &Palette) -> egui::text::LayoutJob {
+    field_hint_at(text, font, p, 0.0)
+}
+
+/// `field_hint` moved `lead` right: HINT_CARET_GAP for the fields that open focused (sign-in, go-to), whose caret
+/// touched the placeholder.
+pub fn field_hint_at(text: &str, font: egui::FontId, p: &Palette, lead: f32) -> egui::text::LayoutJob {
     let mut job = egui::text::LayoutJob::default();
-    job.append(text, 0.0, egui::TextFormat { font_id: font, color: theme::placeholder(p), ..Default::default() });
+    job.append(text, lead, egui::TextFormat { font_id: font, color: theme::placeholder(p), ..Default::default() });
     job
+}
+
+/// The gap between the caret and the placeholder in an empty, focused-on-open field.
+pub const HINT_CARET_GAP: f32 = 2.0;
+
+/// `input_field` for a field that opens focused: its placeholder HINT_CARET_GAP right of the caret.
+pub fn focused_input_field<'a>(text: &'a mut String, hint: &str, font: egui::FontId, p: &Palette) -> egui::TextEdit<'a> {
+    input_field(text, hint, font.clone(), p).hint_text(field_hint_at(hint, font, p, HINT_CARET_GAP))
 }
 
 /// Every dialog field's text (and placeholder) inset: 8, aligned with the dialog's rows (round 8: sign-in read 10,
@@ -916,6 +953,8 @@ mod widget_tests {
         assert!(super::hint_bar_shown(true, false));
         let job = super::field_hint("API token", crate::theme::body(14.0), &crate::theme::LIGHT);
         assert_eq!(job.sections[0].leading_space, 0.0, "the placeholder starts at the typed text's origin");
+        let job = super::field_hint_at("API token", crate::theme::body(14.0), &crate::theme::LIGHT, super::HINT_CARET_GAP);
+        assert_eq!(job.sections[0].leading_space, 2.0, "J2: fields that open focused keep 2 off the caret");
     }
 
     use super::*;
@@ -978,6 +1017,17 @@ mod widget_tests {
         assert_eq!(truncate_pill("Platform Team", 11.0, w), "Platform…");
         assert_eq!(truncate_pill("Supercalifragilistic", 5.0, w), "Supe…", "one word is still cut");
         assert_eq!(truncate_pill("short", 10.0, w), "short");
+    }
+
+    #[test]
+    fn the_comment_tip_sits_left_of_the_button() {
+        assert_eq!(tip_align(true, true), Some(egui::RectAlign::LEFT), "under the composer: beside, never over the box");
+        assert_eq!(tip_align(false, true), Some(egui::RectAlign::LEFT));
+        assert_eq!(tip_align(true, false), Some(egui::RectAlign::TOP_START));
+        assert_eq!(tip_align(false, false), None);
+        // LEFT: the tip's right edge on the control's left edge, centred on it.
+        assert_eq!(egui::RectAlign::LEFT.parent(), egui::Align2::LEFT_CENTER);
+        assert_eq!(egui::RectAlign::LEFT.child(), egui::Align2::RIGHT_CENTER);
     }
 
     #[test]

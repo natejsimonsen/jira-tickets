@@ -60,11 +60,11 @@ Only a token you paste is saved. Signing out deletes that file.
 | `J/K` | Move down or up in rank |
 | `c` | Copy the issue link |
 | `⌘Enter` | Post the comment |
-| **Pickers** | |
+| **Pickers and Edit** | |
 | `j/k` or `↑/↓` | Move |
 | `Tab/⇧Tab` | Next or previous field in Edit |
 | `Enter` | Confirm |
-| `Esc` | Cancel |
+| `Esc` | Cancel or close |
 <!-- keys:end -->
 
 Only `⌘1`–`⌘4`, `⌘R`, `⌘W`, and `?` work on every screen. The rest are bound on the Issues screen only. Plain keys (letters, `/`, `?`) do nothing while a text field has focus. While a picker is open, only `Esc`, the arrow keys (and `j` / `k`, except in the Assign picker), and `Enter` apply (in the Edit dialog, `Tab` and `⇧Tab` move between fields and `Enter` confirms); `?` also works while a picker without a text field is open. Selecting a row shows its detail. `?` (or the "?" button in the header) opens this list in the app, and a bar at the bottom of every screen shows the keys that apply right now. While the help is open only the global keys apply; `?` or `Esc` closes it.
