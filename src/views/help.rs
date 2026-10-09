@@ -148,8 +148,8 @@ fn chip(ui: &mut egui::Ui, text: &str, p: &Palette) {
     let size = chip_size(ui, text, p);
     let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
     let fill = theme::chip_fill_on(crate::views::dialog_fill(p), p);
-    // In dark the chip fill is the dialog edge itself, so its outline is the next step up.
-    let edge = if p.dark { crate::views::selected_edge(p) } else { p.border };
+    // In dark the chip (#454542) takes the dialog edge as its outline, one quiet step up.
+    let edge = if p.dark { theme::DARK_EDGE } else { p.border };
     ui.painter().rect(rect, 4.0, fill, Stroke::new(1.0, edge), egui::StrokeKind::Inside);
     // Centred on the glyphs' ink, not their advance box: "⌘" carries extra advance on its right.
     let x = ink_left(rect.center().x, galley.mesh_bounds.center().x);

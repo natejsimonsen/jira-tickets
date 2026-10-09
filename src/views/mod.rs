@@ -406,9 +406,15 @@ pub fn toast(app: &mut App, ctx: &egui::Context) {
 /// Height of every text button (and the filter combos), so rows of controls line up.
 pub const BUTTON_H: f32 = 28.0;
 
-/// The page dimming behind a modal: light needs less to read as "behind".
+/// The page dimming behind a modal: light needs much less to read as "behind" (100 dimmed it 2.78:1).
 pub fn backdrop_alpha(p: &Palette) -> u8 {
-    if p.dark { 110 } else { 100 }
+    if p.dark { 110 } else { 64 }
+}
+
+/// A dialog's cursor row: `selected_row` in light; #4a4a47 in dark, where selected_row sat 1.16:1 off the
+/// #333331 dialog.
+pub fn dialog_cursor_fill(p: &Palette) -> Color32 {
+    if p.dark { theme::DARK_DIALOG_CURSOR } else { p.selected_row }
 }
 
 /// A modal dialog's one edge colour, used for its 1 px stroke and for the fields and buttons inside it, in both
@@ -449,7 +455,7 @@ pub fn dialog_button_fill(p: &Palette) -> Color32 {
 /// nothing).
 pub fn field_hint(text: &str, font: egui::FontId, p: &Palette) -> egui::text::LayoutJob {
     let mut job = egui::text::LayoutJob::default();
-    job.append(text, 0.0, egui::TextFormat { font_id: font, color: p.muted, ..Default::default() });
+    job.append(text, 0.0, egui::TextFormat { font_id: font, color: theme::placeholder(p), ..Default::default() });
     job
 }
 
@@ -541,7 +547,7 @@ pub fn toggle_chip(ui: &mut Ui, text: &str, active: bool, p: &Palette) -> egui::
     if ui.is_rect_visible(rect) {
         let (fill, stroke) = match (active, resp.hovered()) {
             (true, _) => (active_chip_fill(p), active_chip_fill(p)),
-            (false, true) => (p.hover_row, p.border),
+            (false, true) => (theme::control_hover(p), p.border),
             (false, false) => (p.surface_2, p.border),
         };
         ui.painter().rect(rect, f32::from(theme::RADIUS), fill, Stroke::new(1.0, stroke), egui::StrokeKind::Inside);
@@ -789,7 +795,10 @@ mod widget_tests {
             let edge = dialog_stroke(p).color;
             let dimmed = theme::over(Color32::from_black_alpha(backdrop_alpha(p)), p.bg);
             assert!(theme::contrast(edge, dialog_fill(p)) >= 1.5, "dark={}", p.dark);
-            assert!(theme::contrast(edge, dimmed) >= 1.3, "dark={}: {:.2}", p.dark, theme::contrast(edge, dimmed));
+            // What separates the dialog from the dimmed page: its edge in dark; in light the white fill itself
+            // (the lighter 64 backdrop leaves the edge close to the page, 1.06:1, but the fill stands ~2:1).
+            let lift = if p.dark { theme::contrast(edge, dimmed) } else { theme::contrast(dialog_fill(p), dimmed) };
+            assert!(lift >= 1.3, "dark={}: {lift:.2}", p.dark);
         }
     }
 

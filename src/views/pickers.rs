@@ -96,7 +96,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                         edit_group(ui, p, "Story points", field(points, crate::app::POINTS_HINT, p));
                     }
                 }
-                ui.add_space(16.0);
+                ui.add_space(BUTTONS_GAP);
                 // The hint bar carries the keys; the dialog carries one primary action.
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 8.0;
@@ -139,9 +139,19 @@ const ASSIGN_ROWS: f32 = (crate::app::ASSIGN_USERS + 2) as f32;
 /// One picker row: 14 px text plus 6 px above and below.
 const ROW_H: f32 = 30.0;
 
+/// Title → first row, and last row → buttons: 24 measured ink to fill (round 6 measured 22 with 12 and 16).
+const TITLE_GAP: f32 = 14.0;
+const BUTTONS_GAP: f32 = 18.0;
+
 fn title(ui: &mut egui::Ui, p: &Palette, text: &str) {
     ui.label(RichText::new(text).font(theme::bold(15.0)).color(p.text));
-    ui.add_space(12.0);
+    ui.add_space(TITLE_GAP);
+}
+
+/// The space above Assign's note row, so the note ("N matches", "Type to see more") sits at the bottom of its
+/// fixed block, just above the buttons, however few rows the filter leaves.
+pub fn note_gap(block_h: f32, rows_h: f32, note_h: f32) -> f32 {
+    (block_h - rows_h - note_h).max(0.0)
 }
 
 /// The app's one single-line input (`views::input_field`): text and placeholder from the same 12 px inset.
@@ -190,8 +200,10 @@ fn rows(ui: &mut egui::Ui, p: &Palette, names: Vec<Row>, confirm: &mut bool, cur
         let h = ASSIGN_ROWS * ROW_H;
         ui.allocate_ui_with_layout(vec2(ui.available_width(), h), egui::Layout::top_down(egui::Align::Min), |ui| {
             ui.set_min_height(h);
+            let top = ui.cursor().top();
             row_list(ui, p, &names, confirm, cursor);
             if let Some(note) = note {
+                ui.add_space(note_gap(h, ui.cursor().top() - top, ROW_H));
                 Frame::new().inner_margin(Margin::symmetric(8, 6)).show(ui, |ui| {
                     ui.set_min_height(ROW_H - 12.0);
                     ui.label(RichText::new(note).size(12.0).color(p.muted));
@@ -207,7 +219,8 @@ fn row_list(ui: &mut egui::Ui, p: &Palette, names: &[Row], confirm: &mut bool, c
     {
         ui.spacing_mut().item_spacing.y = 0.0;
         for (i, n) in names.iter().enumerate() {
-            let fill = if i == *cursor { p.selected_row } else { egui::Color32::TRANSPARENT };
+            let on_cursor = i == *cursor;
+            let fill = if on_cursor { crate::views::dialog_cursor_fill(p) } else { egui::Color32::TRANSPARENT };
             let r = Frame::new()
                 .fill(fill)
                 .corner_radius(4)
@@ -215,8 +228,8 @@ fn row_list(ui: &mut egui::Ui, p: &Palette, names: &[Row], confirm: &mut bool, c
                 .show(ui, |ui| {
                     ui.set_width(ui.available_width());
                     ui.set_min_height(ROW_H - 12.0);
-                    // Muted holds 4.5:1 on the cursor fill too, so secondary text stays muted there.
-                    let muted = p.muted;
+                    // Secondary text lifts on the cursor fill where muted would fall under 4.5:1 (dark).
+                    let muted = if on_cursor { theme::muted_on(fill, p) } else { p.muted };
                     let color = if n.muted { muted } else { p.text };
                     let mut job = egui::text::LayoutJob::default();
                     job.append(&n.text, 0.0, egui::TextFormat { font_id: theme::body(14.0), color, ..Default::default() });
@@ -237,6 +250,13 @@ fn row_list(ui: &mut egui::Ui, p: &Palette, names: &[Row], confirm: &mut bool, c
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn assign_note_sits_above_the_buttons() {
+        assert_eq!(super::note_gap(300.0, 60.0, 30.0), 210.0, "two rows: the note drops to the block's bottom");
+        assert_eq!(super::note_gap(300.0, 270.0, 30.0), 0.0, "a full list: right under the rows");
+        assert_eq!(super::note_gap(300.0, 290.0, 30.0), 0.0);
+    }
+
     #[test]
     fn dialog_sits_a_fifth_down() {
         assert_eq!(super::dialog_top(900.0), 188.0);

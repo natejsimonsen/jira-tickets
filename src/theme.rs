@@ -67,7 +67,7 @@ pub const LIGHT: Palette = Palette {
     done: hex(0x6b6a66),
     today: hex(0xc8403a),
     selected_row: hex(0xdfdfda),
-    hover_row: hex(0xe6e6e2),
+    hover_row: hex(0xebebe8),
     danger_subtle: hex(0xfbe9e8),
     tooltip: hex(0x1f1f1d),
     tooltip_text: hex(0xf7f7f5),
@@ -250,13 +250,13 @@ fn visuals(p: &Palette) -> Visuals {
     // One blue: the caret is the accent, not egui's default.
     v.text_cursor.stroke.color = p.accent;
     // Hint (placeholder) text uses this; egui's default fades `text`, which drops below 4.5:1 in light.
-    v.weak_text_color = Some(p.muted);
+    v.weak_text_color = Some(placeholder(p));
     v.selection.bg_fill = p.selected_row;
     v.widgets.noninteractive.bg_stroke = Stroke::new(1.0, p.border);
     v.widgets.inactive.bg_fill = p.surface_2;
     v.widgets.inactive.weak_bg_fill = p.surface_2;
-    v.widgets.hovered.bg_fill = p.hover_row;
-    v.widgets.hovered.weak_bg_fill = p.hover_row;
+    v.widgets.hovered.bg_fill = control_hover(p);
+    v.widgets.hovered.weak_bg_fill = control_hover(p);
     v.widgets.active.bg_fill = p.selected_row;
     v.widgets.active.weak_bg_fill = p.selected_row;
     // Every control gets a 1 px edge in both themes; focus and press are the accent, never near-white.
@@ -279,12 +279,34 @@ fn visuals(p: &Palette) -> Visuals {
     v
 }
 
+/// Placeholder text: `muted` in light; in dark a step below it (#93928d), so an empty field never reads as
+/// filled in (muted was 1.95:1 from typed text), still ≥4.5:1 on the dark field fills.
+pub fn placeholder(p: &Palette) -> Color32 {
+    if p.dark { hex(0x93928d) } else { p.muted }
+}
+
+/// A hovered control (button, chip, combo) that rests on `surface_2`: in light the old #e6e6e2 step, since the
+/// lighter list-row `hover_row` (#ebebe8) is only 1.05:1 off surface_2; in dark `hover_row`.
+pub fn control_hover(p: &Palette) -> Color32 {
+    if p.dark { p.hover_row } else { hex(0xe6e6e2) }
+}
+
+/// Muted text on a cursor or selected fill: in dark lifted to #bcbbb6, so it holds 4.5:1 on the dark dialog's
+/// #4a4a47 cursor row (muted reaches 3.8 there); `muted` everywhere else.
+pub fn muted_on(fill: Color32, p: &Palette) -> Color32 {
+    if p.dark && contrast(p.muted, fill) < 4.5 { hex(0xbcbbb6) } else { p.muted }
+}
+
 /// The light-theme neutral step between `surface_2` and `hover_row`, for code chips on white.
 const LIGHT_CHIP: Color32 = hex(0xe8e8e4);
 /// The dark modal dialog's fill: one step above `surface_2`, so a dialog lifts off the dimmed page.
 pub const DARK_DIALOG: Color32 = hex(0x333331);
 /// The lifted dark edge: modal dialogs, fields and buttons inside them.
 pub const DARK_EDGE: Color32 = hex(0x504f4b);
+/// The dark dialog's chip step (help keys): 1.32:1 off the dialog, quieter than DARK_EDGE's 1.54.
+const DARK_DIALOG_CHIP: Color32 = hex(0x454542);
+/// The cursor row in a dark dialog: 1.42:1 off #333331 (selected_row was 1.16).
+pub const DARK_DIALOG_CURSOR: Color32 = hex(0x4a4a47);
 /// A chip's fill must stand at least this far off its container (1.14:1 read as flat).
 const CHIP_STEP: f32 = 1.17;
 
@@ -292,8 +314,11 @@ const CHIP_STEP: f32 = 1.17;
 /// theme's neutral ramp at least CHIP_STEP off it, darker in light and lighter in dark (a key reads raised).
 /// On the page (surface) that is #e8e8e4 light, #333331 dark; in a comment card #dfdfda / #3a3a37.
 pub fn chip_fill_on(container: Color32, p: &Palette) -> Color32 {
-    let ramp: &[Color32] =
-        if p.dark { &[p.surface_2, DARK_DIALOG, p.border, p.selected_row, DARK_EDGE] } else { &[p.surface_2, LIGHT_CHIP, p.selected_row, p.border] };
+    let ramp: &[Color32] = if p.dark {
+        &[p.surface_2, DARK_DIALOG, p.border, p.selected_row, DARK_DIALOG_CHIP, DARK_EDGE]
+    } else {
+        &[p.surface_2, LIGHT_CHIP, p.selected_row, p.border]
+    };
     let lum = |c: Color32| contrast(c, Color32::BLACK);
     let ahead = |c: Color32| if p.dark { lum(c) > lum(container) } else { lum(c) < lum(container) };
     ramp.iter().copied().find(|&c| ahead(c) && contrast(c, container) >= CHIP_STEP).unwrap_or(p.border)
@@ -492,7 +517,7 @@ mod tests {
         assert_eq!(chip_fill_on(DARK.surface, &DARK), DARK_DIALOG, "code on the dark page");
         assert_eq!(chip_fill_on(LIGHT.surface_2, &LIGHT), LIGHT.selected_row, "code in a light comment card");
         assert_eq!(chip_fill_on(DARK.surface_2, &DARK), DARK.border, "code in a dark comment card");
-        assert_eq!(chip_fill_on(DARK_DIALOG, &DARK), DARK_EDGE, "help keys in the dark dialog");
+        assert_eq!(chip_fill_on(DARK_DIALOG, &DARK), DARK_DIALOG_CHIP, "help keys in the dark dialog");
     }
 
     #[test]
@@ -577,9 +602,38 @@ mod tests {
     }
 
     #[test]
+    fn placeholders_read_apart_from_typed_text() {
+        assert_eq!(placeholder(&DARK), hex(0x93928d));
+        assert_eq!(placeholder(&LIGHT), LIGHT.muted);
+        for p in [&LIGHT, &DARK] {
+            // On the field fills (page bg in dialogs, surface_2 / surface elsewhere).
+            for fill in [p.bg, p.surface, p.surface_2] {
+                assert!(contrast(placeholder(p), fill) >= 4.5, "dark={}: {:.2}", p.dark, contrast(placeholder(p), fill));
+            }
+        }
+        assert!(contrast(placeholder(&DARK), DARK.text) > contrast(DARK.muted, DARK.text));
+    }
+
+    #[test]
+    fn muted_stays_readable_on_cursor_rows() {
+        for p in [&LIGHT, &DARK] {
+            for fill in [p.selected_row, p.hover_row, DARK_DIALOG_CURSOR] {
+                if !p.dark && fill == DARK_DIALOG_CURSOR {
+                    continue;
+                }
+                assert!(contrast(muted_on(fill, p), fill) >= 4.5, "dark={} {fill:?}: {:.2}", p.dark, contrast(muted_on(fill, p), fill));
+            }
+        }
+        assert_eq!(muted_on(DARK_DIALOG_CURSOR, &DARK), hex(0xbcbbb6));
+        assert_eq!(muted_on(DARK.surface, &DARK), DARK.muted, "narrow: only where muted falls short");
+        assert!(contrast(DARK_DIALOG_CURSOR, DARK_DIALOG) >= 1.4);
+    }
+
+    #[test]
     fn hover_is_a_step_off_surface_2_in_both_themes() {
         for p in [&LIGHT, &DARK] {
-            assert!(contrast(p.hover_row, p.surface_2) > 1.05, "dark={}", p.dark);
+            assert!(contrast(control_hover(p), p.surface_2) > 1.05, "dark={}", p.dark);
+            assert!(contrast(p.hover_row, p.surface) > 1.1, "dark={}: a list row's hover", p.dark);
             assert_ne!(p.selected_row, p.surface_2);
         }
     }
