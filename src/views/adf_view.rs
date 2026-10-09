@@ -9,11 +9,15 @@ use egui::{Frame, Margin, RichText, Stroke, TextFormat, Ui};
 pub fn show_value(ui: &mut Ui, v: &serde_json::Value, p: &Palette, container: egui::Color32) {
     let doc = adf::parse(v);
     if doc.blocks.is_empty() {
-        ui.label(RichText::new("No description").italics().color(p.muted));
+        // Upright muted 14, like every other empty value (it was the only italic in the app).
+        ui.label(RichText::new(NO_DESCRIPTION).font(theme::body(14.0)).color(p.muted));
         return;
     }
     show(ui, &doc, p, theme::chip_fill_on(container, p));
 }
+
+/// The empty description's line.
+pub const NO_DESCRIPTION: &str = "No description";
 
 /// Space after a paragraph (or any block).
 const BLOCK_GAP: f32 = 12.0;
@@ -198,10 +202,72 @@ fn span_format(sp: &Span, p: &Palette, size: f32, heading: bool, fit: &MonoFit) 
         fmt.strikethrough = Stroke::new(1.0, p.muted);
     }
     if sp.link.is_some() {
+        // Underlined by `spans` (`link_underlines`), LINK_UNDERLINE_DROP under the baseline: egui's own
+        // underline sits on the line box's bottom, 3–4 px down.
         fmt.color = p.accent;
-        fmt.underline = Stroke::new(1.0, p.accent);
     }
     fmt
+}
+
+/// A link's underline: its 1 pt line's top this far under the baseline.
+pub const LINK_UNDERLINE_DROP: f32 = 2.0;
+
+/// The y of a link underline's centre for a run whose baseline is `baseline`: its 1 pt line starts
+/// LINK_UNDERLINE_DROP under the baseline, on whole points so it stays one crisp line.
+pub fn underline_y(baseline: f32) -> f32 {
+    (baseline + LINK_UNDERLINE_DROP).round() + 0.5
+}
+
+/// The underlined spans of one row: runs of link glyphs given as (is link, left, right), with whitespace at
+/// either end of a run left out (the space after a link is not underlined).
+pub fn underline_runs(glyphs: &[(bool, bool, f32, f32)]) -> Vec<(f32, f32)> {
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < glyphs.len() {
+        if !glyphs[i].0 {
+            i += 1;
+            continue;
+        }
+        let start = i;
+        while i < glyphs.len() && glyphs[i].0 {
+            i += 1;
+        }
+        let run = &glyphs[start..i];
+        let (Some(a), Some(b)) = (run.iter().position(|g| !g.1), run.iter().rposition(|g| !g.1)) else { continue };
+        out.push((run[a].2, run[b].3));
+    }
+    out
+}
+
+/// Every link underline in a laid-out paragraph, relative to the galley: (x range, the run's baseline). `links` is each
+/// char of the paragraph and whether it is in a link, in text order.
+fn link_underlines(g: &egui::Galley, links: &[(char, bool)]) -> Vec<(egui::Rangef, f32)> {
+    let mut out = Vec::new();
+    let mut at = 0;
+    for row in &g.rows {
+        let mut baseline = None;
+        let boxes: Vec<(bool, bool, f32, f32)> = row
+            .row
+            .glyphs
+            .iter()
+            .map(|gl| {
+                while at < links.len() && links[at].0 != gl.chr {
+                    at += 1;
+                }
+                let link = links.get(at).is_some_and(|c| c.1);
+                at += 1;
+                if link && baseline.is_none() {
+                    baseline = Some(row.pos.y + gl.pos.y);
+                }
+                let lr = gl.logical_rect();
+                (link, gl.chr.is_whitespace(), row.pos.x + lr.left(), row.pos.x + lr.right())
+            })
+            .collect();
+        if let Some(b) = baseline {
+            out.extend(underline_runs(&boxes).into_iter().map(|(l, r)| (egui::Rangef::new(l, r), b)));
+        }
+    }
+    out
 }
 
 /// The line heights inline code and key links take in one paragraph so their baselines meet the body's.
@@ -431,19 +497,34 @@ fn spans(ui: &mut Ui, s: &[Span], p: &Palette, size: f32, heading: bool, chip: e
     let (job, chars) = paragraph_job(&s, p, size, heading, &fit);
     let sense = if has_link { egui::Sense::click() } else { egui::Sense::hover() };
     let chips = ui.painter().add(egui::Shape::Noop);
-    let r = if chars.iter().any(|c| c.1) || s.iter().any(is_key_link) {
+    let links: Vec<(char, bool)> = s.iter().flat_map(|sp| sp.text.chars().map(move |c| (c, sp.link.is_some()))).collect();
+    let (r, galley) = if chars.iter().any(|c| c.1) || s.iter().any(is_key_link) {
         // Lay the paragraph out ourselves (see `layout_paragraph`), paint the chips under it, then show that
         // exact galley.
         let width = ui.available_width();
         let (g, rects) = ui.fonts_mut(|f| layout_paragraph(f, job, &chars, width, line_height(size)));
-        let r = ui.add(egui::Label::new(std::sync::Arc::new(g)).sense(sense));
+        let g = std::sync::Arc::new(g);
+        let r = ui.add(egui::Label::new(g.clone()).sense(sense));
         let shapes = rects.into_iter().map(|rc| egui::Shape::rect_filled(rc.translate(r.rect.min.to_vec2()), 4.0, chip)).collect();
         ui.painter().set(chips, egui::Shape::Vec(shapes));
-        r
+        (r, Some(g))
+    } else if has_link {
+        // Laid out here (as `Label::wrap` would) so the underlines can be placed on its glyphs.
+        let mut job = job;
+        job.wrap.max_width = ui.available_width();
+        let g = ui.fonts_mut(|f| f.layout_job(job));
+        (ui.add(egui::Label::new(g.clone()).sense(sense)), Some(g))
     } else {
-        ui.add(egui::Label::new(job).wrap().sense(sense))
+        (ui.add(egui::Label::new(job).wrap().sense(sense)), None)
     };
     if has_link {
+        if let Some(g) = &galley {
+            let origin = r.rect.min.to_vec2();
+            for (x, baseline) in link_underlines(g, &links) {
+                let y = underline_y(baseline + origin.y);
+                ui.painter().hline(egui::Rangef::new(x.min + origin.x, x.max + origin.x), y, Stroke::new(1.0, p.accent));
+            }
+        }
         r.clone().on_hover_cursor(egui::CursorIcon::PointingHand);
     }
     // One link per paragraph is the common case; open the first on click.
@@ -493,6 +574,19 @@ mod tests {
     }
 
     #[test]
+    fn link_underlines_sit_two_under_the_baseline() {
+        // E2: egui's underline sat on the line box's bottom, 3–4 px down; ours starts 2 under the baseline.
+        assert_eq!(underline_y(15.0), 17.5, "a 1 pt line from 17 to 18");
+        assert_eq!(underline_y(15.3), 17.5, "on whole points");
+        assert!(underline_y(15.0) - 0.5 - 15.0 == LINK_UNDERLINE_DROP);
+        let g = |link: bool, c: char, l: f32| (link, c.is_whitespace(), l, l + 5.0);
+        let row = [g(false, 'a', 0.0), g(true, 'x', 5.0), g(true, ' ', 10.0), g(true, 'y', 15.0), g(true, ' ', 20.0), g(false, 'b', 25.0)];
+        assert_eq!(underline_runs(&row), [(5.0, 20.0)], "one run, its trailing space left out");
+        assert!(underline_runs(&[g(true, ' ', 0.0)]).is_empty());
+        assert_eq!(underline_runs(&[g(true, 'x', 0.0), g(false, 'y', 5.0), g(true, 'z', 10.0)]).len(), 2);
+    }
+
+    #[test]
     fn span_format_maps_marks() {
         let p = palette();
         let plain = span_format(&span("a"), &p, 14.0, false, &FIT);
@@ -516,7 +610,7 @@ mod tests {
 
         let link = Span { link: Some("https://x".into()), ..span("l") };
         assert_eq!(span_format(&link, &p, 14.0, false, &FIT).color, p.accent);
-        assert_eq!(span_format(&link, &p, 14.0, false, &FIT).underline, Stroke::new(1.0, p.accent), "links are always underlined");
+        assert_eq!(span_format(&link, &p, 14.0, false, &FIT).underline, Stroke::NONE, "links are underlined by `spans`, not egui");
 
         let key = Span { link: Some("https://x.atlassian.net/browse/CI-1".into()), ..span("CI-1") };
         let k = span_format(&key, &p, 14.0, false, &FIT);

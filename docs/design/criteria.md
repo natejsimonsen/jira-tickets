@@ -64,3 +64,7 @@ These were decided in earlier rounds; raters treat them as correct and do not sc
   tab. Final; it oscillated 24 ↔ 32 across rounds.
 - **Help button glyph.** The header "?" is a painted glyph with the sync icon's 1.5 px stroke (not a font glyph),
   so the two buttons weigh the same. Final; it oscillated bold ↔ regular across rounds.
+- **Empty values.** "Unassigned" is a Jira state name, shown as text; a value that is missing shows "—". The two
+  are different conventions on purpose.
+- **Chips at line start.** An inline-code chip that starts a line sits on the text margin (its fill starts at
+  the text edge), the GitHub convention; the ragged look against plain lines is accepted.
