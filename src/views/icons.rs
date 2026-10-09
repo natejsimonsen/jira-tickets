@@ -62,8 +62,8 @@ const GLYPH: f32 = 16.0;
 
 /// The 32×32 button frame (hover fill when `hovered`); returns the centred 16×16 glyph rect.
 fn button_frame(ui: &Ui, rect: Rect, hovered: bool, p: &Palette) -> Rect {
-    // control_hover is a step off surface_2 in both palettes.
-    let fill = if hovered { crate::theme::control_hover(p) } else { p.surface_2 };
+    // control_hover is a step off button_fill in both palettes; the header buttons share the filter row's resting fill.
+    let fill = if hovered { crate::theme::control_hover(p) } else { crate::theme::button_fill(p) };
     ui.painter().rect(rect, f32::from(crate::theme::RADIUS), fill, Stroke::new(1.0, p.border), egui::StrokeKind::Inside);
     Rect::from_center_size(rect.center(), Vec2::splat(GLYPH))
 }
