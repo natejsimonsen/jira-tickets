@@ -7,6 +7,7 @@ mod auth;
 mod cache;
 mod config;
 mod filter;
+mod grooming;
 mod jira;
 mod keys;
 mod report;
