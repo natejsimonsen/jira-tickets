@@ -9,6 +9,7 @@ mod config;
 mod filter;
 mod jira;
 mod keys;
+mod report;
 #[cfg(feature = "snapshot")]
 mod snapshot;
 mod store;
