@@ -2,6 +2,7 @@
 //! send a `Msg` back over a channel; the UI never waits on the network.
 
 mod actions;
+mod groom;
 mod loads;
 mod msg;
 mod pickers;
@@ -24,7 +25,8 @@ use crate::config::Config;
 use crate::jira::{self, Client, Sprint, User};
 use crate::store::{ListId, Store};
 use crate::{theme, views};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::{Duration, Instant};
@@ -58,6 +60,40 @@ pub enum ToastKind {
     /// A notice, not a failure (read-only refusals, "No changes").
     Info,
     Error,
+}
+
+/// The Grooming screen's two modes: walking `New` before the meeting, and the epic-by-epic session.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum GroomMode {
+    #[default]
+    PreCheck,
+    Session,
+}
+
+/// Everything the Grooming screen keeps between frames.
+#[derive(Default)]
+pub struct GroomingState {
+    pub mode: GroomMode,
+    /// The newest report in `report_dir`, read on every refresh.
+    pub report: Option<(PathBuf, crate::report::Report)>,
+    /// Pre-check verdicts by issue key, pre-filled from the report.
+    pub verdicts: BTreeMap<String, crate::grooming::Verdict>,
+    /// The pre-check row, or the session candidate index.
+    pub cursor: usize,
+    /// Session: the selected epic in the rail.
+    pub epic_index: usize,
+    /// Session: the ghost row's index in the Ready queue while accepting.
+    pub placement: Option<usize>,
+    /// Session: the open bounce box's text.
+    pub bounce_text: Option<String>,
+    /// When the focused ticket took focus, for the per-ticket timer.
+    pub focused_since: Option<Instant>,
+    /// A Promote is in flight.
+    pub promoting: bool,
+    /// (key, step, error) for each transition Promote could not make.
+    pub promote_failures: Vec<(String, String, String)>,
+    /// The text of the last written report, for copy.
+    pub last_summary: Option<String>,
 }
 
 pub struct Toast {
@@ -152,6 +188,7 @@ pub struct App {
     pending_transition: Option<(String, String)>,
     /// Optimistic rank swaps awaiting their Done: (list, issue, neighbour), oldest first.
     pending_ranks: Vec<(ListId, String, String)>,
+    pub grooming: GroomingState,
     pub(crate) client: Option<Arc<Client>>,
     tx: Sender<Msg>,
     rx: Receiver<Msg>,
@@ -230,6 +267,7 @@ impl App {
             picker_loading: false,
             pending_transition: None,
             pending_ranks: Vec::new(),
+            grooming: GroomingState::default(),
             client: None,
             tx,
             rx,
@@ -475,6 +513,37 @@ mod tests {
         let issue = crate::jira::Issue { key: "CI-2".into(), ..Default::default() };
         app.handle(Msg::List { id: ListId::Search, result: Ok(vec![issue]), stale: false, seq: Some(4), with_members: false });
         assert!(app.store.list(ListId::Search).is_empty());
+    }
+
+    #[test]
+    fn report_loaded_prefills_pre_check_verdicts() {
+        let mut app = App::for_test(cfg(), None);
+        let r = crate::report::parse(
+            "# x — 2026-10-01\n\n## Planning — by epic\n\n### [E-1 Epic](u?issueParent=1)\n\n- [CI-1](u) — a · rank 1 · older\n\n## Needs detail (still in `New`)\n\n### (no epic)\n\n- [CI-2](u) — b · rank 2 · created 2026-09-01 · missing: empty\n",
+        );
+        app.handle(Msg::ReportLoaded(Some((std::path::PathBuf::from("/tmp/x.md"), r))));
+        assert_eq!(app.grooming.verdicts.get("CI-1"), Some(&crate::grooming::Verdict::Ready));
+        assert!(matches!(app.grooming.verdicts.get("CI-2"), Some(crate::grooming::Verdict::NeedsDetail(c)) if c == &vec![crate::grooming::Code::Empty]));
+    }
+
+    #[test]
+    fn verdict_actions_set_and_undo() {
+        let mut app = App::for_test(cfg(), None);
+        app.screen = Screen::Grooming;
+        app.store.absorb(
+            ListId::TeamOpen,
+            vec![crate::jira::Issue {
+                key: "CI-1".into(),
+                labels: vec!["PLAT".into()],
+                status: crate::jira::Status { name: "New".into(), category: "new".into() },
+                ..Default::default()
+            }],
+        );
+        let ctx = egui::Context::default();
+        app.apply(Action::Verdict(crate::grooming::Verdict::Ready), &ctx);
+        assert_eq!(app.grooming.verdicts.get("CI-1"), Some(&crate::grooming::Verdict::Ready));
+        app.apply(Action::UndoVerdict, &ctx);
+        assert!(!app.grooming.verdicts.contains_key("CI-1"));
     }
 
     #[test]

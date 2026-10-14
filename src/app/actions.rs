@@ -50,6 +50,19 @@ pub enum Action {
     Rank(i32),
     /// Shows or hides the keyboard help overlay (`?`).
     ToggleHelp,
+    /// Switches the Grooming screen between Pre-check and Session.
+    GroomMode(super::GroomMode),
+    /// Moves the Grooming cursor: a pre-check row, or a session candidate.
+    GroomMove(i32),
+    /// Steps the session rail by `delta` epics, skipping those with nothing in Planning when `skip_empty`.
+    GroomEpic {
+        delta: i32,
+        skip_empty: bool,
+    },
+    /// Judges the pre-check row under the cursor and moves on.
+    Verdict(crate::grooming::Verdict),
+    /// Clears the previous pre-check row's verdict and moves back to it.
+    UndoVerdict,
 }
 
 impl App {
@@ -117,6 +130,11 @@ impl App {
     pub(crate) fn apply(&mut self, a: Action, ctx: &egui::Context) {
         match a {
             Action::SetScreen(s) => self.screen = s,
+            Action::GroomMode(m) => self.groom_mode(m),
+            Action::GroomMove(d) => self.groom_move(d),
+            Action::GroomEpic { delta, skip_empty } => self.groom_epic(delta, skip_empty),
+            Action::Verdict(v) => self.groom_verdict(v),
+            Action::UndoVerdict => self.groom_undo(),
             Action::Refresh => {
                 self.refresh_all();
                 // A quick filter's, No team label's or the text search is part of what's shown; rerun it

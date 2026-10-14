@@ -2,6 +2,7 @@
 
 pub mod adf_view;
 pub mod detail;
+pub mod grooming;
 pub mod help;
 pub mod icons;
 pub mod issues;
@@ -21,7 +22,7 @@ pub fn main(app: &mut App, ui: &mut Ui) {
     }
     match app.screen {
         Screen::Issues => issues::show(app, ui),
-        Screen::Grooming => placeholder(ui, p, "Grooming"),
+        Screen::Grooming => grooming::show(app, ui),
         Screen::Team => placeholder(ui, p, "Team"),
         Screen::Roadmap => placeholder(ui, p, "Roadmap"),
     }
@@ -1690,7 +1691,7 @@ mod widget_tests {
 
     #[test]
     fn placeholders_name_the_tab() {
-        assert_eq!(placeholder_text("Grooming"), "Grooming is coming soon");
+        assert_eq!(placeholder_text("Team"), "Team is coming soon");
     }
 
     #[test]

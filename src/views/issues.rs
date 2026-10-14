@@ -265,7 +265,9 @@ pub fn hint_bar_fill(p: &Palette) -> egui::Color32 {
 /// The hint bar, on every signed-in screen. Drawn before the screen's panels, so the strip spans the full
 /// width under them.
 pub fn hints_panel(app: &App, ui: &mut Ui, p: &Palette) {
-    let placeholder = app.screen != crate::app::Screen::Issues;
+    use crate::app::Screen;
+    let placeholder = !matches!(app.screen, Screen::Issues | Screen::Grooming);
+    let grooming = (app.screen == Screen::Grooming).then_some(app.grooming.mode == crate::app::GroomMode::Session);
     let edit = app.picker.as_ref().map(|pk| match pk {
         crate::app::Picker::Edit { .. } => crate::keys::PickerHint::Edit,
         crate::app::Picker::Assign { .. } => crate::keys::PickerHint::Assign,
@@ -281,6 +283,7 @@ pub fn hints_panel(app: &App, ui: &mut Ui, p: &Palette) {
         search_shown: esc_clears_search(app.search_active, app.typed_search, app.text_search.is_some()),
         read_only: super::detail::composer_read_only(),
         placeholder,
+        grooming,
     });
     hint_strip(ui, crate::keys::hints(c), p);
 }

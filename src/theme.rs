@@ -223,7 +223,7 @@ pub fn status_tint(status_name: &str, category: &str, p: &Palette, overrides: &B
             "new" => GREY,
             "planning" => BLUE,
             "ready for work" => TEAL,
-            "in progress" => ACCENT,
+            "in progress" | "work in progress" => ACCENT,
             "in review" | "code review" => PURPLE,
             "blocked" => RED,
             n if n.starts_with("waiting") => AMBER,
@@ -768,6 +768,13 @@ mod tests {
             // An unparsable override is ignored.
             let bad = BTreeMap::from([("Blocked".to_string(), "red".to_string())]);
             assert_eq!(status_tint("Blocked", "new", p, &bad), tint_from_hue(hex(RED), p));
+        }
+    }
+
+    #[test]
+    fn work_in_progress_reads_as_in_progress() {
+        for p in [&LIGHT, &DARK] {
+            assert_eq!(status_tint("Work in Progress", "new", p, &none()), status_tint("In Progress", "indeterminate", p, &none()));
         }
     }
 

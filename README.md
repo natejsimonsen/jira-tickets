@@ -61,6 +61,8 @@ Only a token you paste is saved. Signing out deletes that file.
 | `J/K` | Move down or up in rank |
 | `c` | Copy the issue link |
 | `⌘Enter` | Post the comment |
+| **Grooming** | |
+| `Tab` | Switch between Pre-check and Session |
 | **Pickers and Edit** | |
 | `j/k` or `↑/↓` | Move |
 | `Tab/⇧Tab` | Next or previous field |

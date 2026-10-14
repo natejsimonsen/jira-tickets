@@ -50,11 +50,14 @@ pub enum Msg {
     },
     /// The board's active and future sprints, for the Issues sprint scope.
     BoardSprints(jira::Result<Vec<Sprint>>),
+    /// The newest pre-check report in `report_dir` (None when there is none), read on every refresh.
+    ReportLoaded(Option<(std::path::PathBuf, crate::report::Report)>),
 }
 
 impl App {
     pub(crate) fn handle(&mut self, msg: Msg) {
         match msg {
+            Msg::ReportLoaded(report) => self.report_loaded(report),
             Msg::Login(Ok(login)) => {
                 self.token_error = None;
                 self.connect(login);

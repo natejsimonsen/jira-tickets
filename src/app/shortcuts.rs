@@ -2,7 +2,7 @@
 
 use super::actions::Action;
 use super::pickers::Picker;
-use super::{App, Screen};
+use super::{App, GroomMode, Screen};
 use egui::{Key, KeyboardShortcut, Modifiers};
 
 impl App {
@@ -54,6 +54,10 @@ impl App {
             if shortcut(Modifiers::NONE, Key::Enter) {
                 self.actions.push(Action::PickerConfirm);
             }
+            return;
+        }
+        if self.screen == Screen::Grooming {
+            self.grooming_shortcuts(ctx);
             return;
         }
         if self.screen != Screen::Issues {
@@ -120,6 +124,26 @@ impl App {
         {
             self.actions.push(Action::Copy(u));
         }
+    }
+}
+
+impl App {
+    /// The Grooming screen's keys (`keys::Group::Grooming`).
+    fn grooming_shortcuts(&mut self, ctx: &egui::Context) {
+        if ctx.text_edit_focused() {
+            return;
+        }
+        if ctx.input_mut(|i| i.consume_shortcut(&KeyboardShortcut::new(Modifiers::NONE, Key::Tab))) {
+            self.actions.push(Action::GroomMode(other_mode(self.grooming.mode)));
+        }
+    }
+}
+
+/// The mode Tab switches to.
+fn other_mode(m: GroomMode) -> GroomMode {
+    match m {
+        GroomMode::PreCheck => GroomMode::Session,
+        GroomMode::Session => GroomMode::PreCheck,
     }
 }
 

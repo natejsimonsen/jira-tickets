@@ -5,6 +5,7 @@
 pub enum Group {
     Global,
     Issues,
+    Grooming,
     Pickers,
 }
 
@@ -13,6 +14,7 @@ impl Group {
         match self {
             Group::Global => "Global",
             Group::Issues => "Issues",
+            Group::Grooming => "Grooming",
             Group::Pickers => "Pickers and Edit",
         }
     }
@@ -51,6 +53,7 @@ pub const BINDINGS: &[KeyBinding] = &[
     b(Group::Issues, "J/K", "Move down or up in rank"),
     b(Group::Issues, "c", "Copy the issue link"),
     b(Group::Issues, "⌘Enter", "Post the comment"),
+    b(Group::Grooming, "Tab", "Switch between Pre-check and Session"),
     b(Group::Pickers, "j/k, ↑/↓", "Move"),
     b(Group::Pickers, "Tab/⇧Tab", "Next or previous field"),
     b(Group::Pickers, "Enter", "Confirm"),
@@ -119,6 +122,10 @@ pub enum HintContext {
     SelectedSearch,
     /// Browse, with a server search on screen.
     BrowseSearch,
+    /// The Grooming screen in Pre-check mode.
+    GroomPreCheck,
+    /// The Grooming screen in Session mode.
+    GroomSession,
 }
 
 /// Which text field has keyboard focus, if any.
@@ -156,21 +163,35 @@ pub struct HintState {
     pub search_shown: bool,
     /// Writes are blocked and no composer is drawn (`detail::composer_read_only`): no composer keys.
     pub read_only: bool,
-    /// A screen that is not built yet (Grooming, Team, Roadmap).
+    /// A screen that is not built yet (Team, Roadmap).
     pub placeholder: bool,
+    /// The Grooming screen is showing: `Some(true)` in Session mode, `Some(false)` in Pre-check.
+    pub grooming: Option<bool>,
 }
 
 impl HintState {
     pub fn new(focus: Focus) -> Self {
-        HintState { help_open: false, goto_open: false, picker: None, has_selection: false, focus, search_shown: false, read_only: false, placeholder: false }
+        HintState {
+            help_open: false,
+            goto_open: false,
+            picker: None,
+            has_selection: false,
+            focus,
+            search_shown: false,
+            read_only: false,
+            placeholder: false,
+            grooming: None,
+        }
     }
 }
 
 pub fn hint_context(s: HintState) -> HintContext {
-    let HintState { help_open, goto_open, picker, has_selection, focus, search_shown, read_only, placeholder } = s;
+    let HintState { help_open, goto_open, picker, has_selection, focus, search_shown, read_only, placeholder, grooming } = s;
     match (help_open, goto_open, picker) {
         (true, _, _) => HintContext::Help,
         _ if placeholder => HintContext::Placeholder,
+        _ if grooming == Some(true) => HintContext::GroomSession,
+        _ if grooming == Some(false) => HintContext::GroomPreCheck,
         (_, _, Some(PickerHint::Edit)) => HintContext::EditPicker,
         (_, _, Some(PickerHint::Assign)) => HintContext::AssignPicker,
         (_, _, Some(PickerHint::Other)) => HintContext::Picker,
@@ -227,6 +248,7 @@ pub fn hints(c: HintContext) -> &'static [Hint] {
             &[K("?"), W("help")],
         ],
         HintContext::Placeholder => &[&[K("⌘1"), W("Issues")], &[K("?"), W("help")]],
+        HintContext::GroomPreCheck | HintContext::GroomSession => &[&[K("Tab"), W("switch mode")], &[K("⌘1"), W("Issues")], &[K("?"), W("help")]],
         HintContext::SignIn => &[&[K("Enter"), W("sign in")]],
         HintContext::Browse => &[&[K("j/k"), W("or"), K("↑/↓"), W("move")], &[K("⌘K"), W("go to")], &[K("⌘F"), W("search")], &[K("?"), W("help")]],
         HintContext::BrowseSearch => {
@@ -299,7 +321,8 @@ mod tests {
         assert!(t.contains("| `⌘Enter` | Post the comment |\n"));
         assert!(!t.contains("Close the go-to box"), "the go-to bar shows its own Esc");
         assert!(t.contains("| `j/k` or `↑/↓` | Next or previous issue |\n"));
-        assert_eq!(t.matches("| **").count(), 3);
+        assert!(t.contains("| **Grooming** | |\n| `Tab` | Switch between Pre-check and Session |\n"));
+        assert_eq!(t.matches("| **").count(), 4);
     }
 
     fn st(help_open: bool, goto_open: bool, picker: Option<PickerHint>, has_selection: bool, focus: Focus) -> HintState {
@@ -342,6 +365,12 @@ mod tests {
         assert!(!bar.contains("⌘Enter") && !bar.contains("draft"), "read-only has no composer, so no composer keys: {bar}");
         assert_eq!(hint_text(hints(Help)), "? or Esc close");
         assert_eq!(hint_text(hints(SignIn)), "Enter sign in");
+        let groom = |session| HintState { grooming: Some(session), has_selection: true, ..HintState::new(Focus::None) };
+        assert_eq!(hint_context(groom(false)), GroomPreCheck, "the Issues selection does not leak onto Grooming");
+        assert_eq!(hint_context(groom(true)), GroomSession);
+        assert_eq!(hint_context(HintState { help_open: true, ..groom(true) }), Help, "help wins on Grooming too");
+        assert_eq!(hint_text(hints(GroomPreCheck)), "Tab switch mode · ⌘1 Issues · ? help");
+        assert_eq!(hint_text(hints(GroomSession)), "Tab switch mode · ⌘1 Issues · ? help");
         assert_eq!(hint_text(hints(GoTo)), "Enter open · Esc close");
         assert_eq!(hint_text(hints(Search)), "Enter run as JQL · Esc clear", "one Enter wording for every search text");
         assert_eq!(hint_text(hints(EditPicker)), "Tab/⇧Tab next or previous field · Enter confirm · Esc cancel");
