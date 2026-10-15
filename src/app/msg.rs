@@ -205,7 +205,7 @@ impl App {
                         undo_swap(rows, &a, &b);
                     }
                 }
-                if matches!(what, "Accept" | "Bounce" | "Park") {
+                if matches!(what, "Accept" | "Bounce" | "Bounce move" | "Park") {
                     self.session_done(&key, what, &result);
                 }
                 if what == "Comment" {
@@ -214,7 +214,11 @@ impl App {
                         self.drafts.remove(&key);
                     }
                 }
-                let (text, kind) = done_toast(what, &result);
+                let (text, kind) = match (&result, what) {
+                    // Its error already says what happened: comment posted, move failed.
+                    (Err(e), "Bounce move") => (e.to_string(), ToastKind::Error),
+                    _ => done_toast(what, &result),
+                };
                 self.toast_kind(text, kind);
                 // A write read-only mode refused changed nothing, so there is nothing to reload.
                 if self.client.is_some() && reload_after_write(&result) {

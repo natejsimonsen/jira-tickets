@@ -435,8 +435,16 @@ impl App {
         self.grooming.deciding = Some(key.clone());
         let status = self.cfg.grooming.status_new.clone();
         self.spawn_write(move |c, tx| {
-            let result = jira::check_writable().and_then(|_| c.add_comment(&key, text.trim())).and_then(|_| transition_to(c, &key, &status));
-            let _ = tx.send(Msg::Done { key, what: "Bounce", result });
+            // A move that fails after the comment posted is its own answer ("Bounce move"): the box must close so
+            // the same comment is never posted twice.
+            let (what, result) = match jira::check_writable().and_then(|_| c.add_comment(&key, text.trim())) {
+                Err(e) => ("Bounce", Err(e)),
+                Ok(()) => match transition_to(c, &key, &status) {
+                    Ok(()) => ("Bounce", Ok(())),
+                    Err(e) => ("Bounce move", Err(jira::Error::Other(bounce_move_failed(&key, &status, &e)))),
+                },
+            };
+            let _ = tx.send(Msg::Done { key, what, result });
         });
     }
 
@@ -458,6 +466,10 @@ impl App {
     pub(super) fn session_done(&mut self, key: &str, what: &str, result: &jira::Result<()>) {
         if self.grooming.deciding.as_deref() == Some(key) {
             self.grooming.deciding = None;
+        }
+        if what == "Bounce move" {
+            // The comment is on the ticket; only the move is left to retry.
+            self.grooming.bounce_text = None;
         }
         if result.is_err() {
             return;
@@ -506,6 +518,11 @@ impl App {
             self.grooming.focused_since = Some(Instant::now());
         }
     }
+}
+
+/// The toast when a bounce's comment posted but its move failed.
+pub fn bounce_move_failed(key: &str, status: &str, e: &jira::Error) -> String {
+    format!("Comment posted on {key}, but the move to {status} failed: {e}")
 }
 
 /// "Promoted 9 to Planning", or "Promoted 8 of 10 to Planning, 2 failed".
@@ -875,6 +892,30 @@ mod tests {
         assert_eq!(app.grooming.bounce_text.as_deref(), Some("Which clusters?"));
         assert!(!writes(&rx).iter().any(|(_, p, _)| p.ends_with("/transitions")));
         assert_eq!(app.store.get("CI-1").map(|i| i.status.name.as_str()), Some("Planning"));
+    }
+
+    #[test]
+    fn a_bounce_whose_move_fails_keeps_the_posted_comment_and_closes_the_box() {
+        let _g = crate::jira::tests::WRITE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // The comment posts; no transition leads to New from here.
+        let (base, rx) = crate::jira::tests::stub_server(vec![
+            ("POST", "/rest/api/3/issue/CI-1/comment", serde_json::json!({})),
+            ("GET", "/rest/api/3/issue/CI-1/transitions", serde_json::json!({"transitions": []})),
+        ]);
+        let mut app = session_app(&base);
+        app.grooming.bounce_text = Some("Which clusters?".into());
+        app.actions.push(super::super::Action::Bounce);
+        drain_until(&mut app, |a| a.grooming.deciding.is_none());
+        let w = writes(&rx);
+        assert_eq!(w.iter().filter(|(_, p, _)| p.ends_with("/comment")).count(), 1, "{w:?}");
+        assert!(app.grooming.bounce_text.is_none(), "the comment is on the ticket: ⌘Enter again must not post it twice");
+        let toast = app.toast.as_ref().map(|t| t.text.clone()).unwrap_or_default();
+        assert!(toast.contains("Comment posted") && toast.contains("move to New failed"), "{toast}");
+        assert_eq!(app.store.get("CI-1").map(|i| i.status.name.as_str()), Some("Planning"), "still in Planning");
+        // Nothing more is sent: the box is gone, so ⌘Enter has nothing to post.
+        app.actions.push(super::super::Action::Bounce);
+        app.drain();
+        assert!(app.grooming.deciding.is_none());
     }
 
     #[test]
