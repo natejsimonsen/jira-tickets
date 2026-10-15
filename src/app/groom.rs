@@ -218,8 +218,10 @@ impl App {
         if self.grooming.promote_remaining > 0 {
             return;
         }
+        self.retire_promoted();
+        // The lists only: the report is reloaded once, after it is written (`write_report`).
         if self.client.is_some() {
-            self.refresh_all();
+            self.refresh_lists();
         }
         let mut parents: Vec<String> = self.promoted_rows().iter().filter_map(|r| r.epic.as_ref().map(|e| e.key.clone())).collect();
         parents.sort();
@@ -232,6 +234,23 @@ impl App {
         self.spawn(move |c, tx| {
             let _ = tx.send(Msg::Siblings(c.search(&jql, jira::LIST_FIELDS)));
         });
+    }
+
+    /// The tickets this run moved to Planning leave the pre-check at once: their status is set to Planning in the
+    /// store (the refresh confirms it) and their verdicts go, so the plan cannot offer them again before the
+    /// refresh lands.
+    fn retire_promoted(&mut self) {
+        let done: Vec<String> = self.promoted_rows().iter().map(|r| r.key.clone()).collect();
+        let planning = self.cfg.grooming.status_planning.clone();
+        for key in &done {
+            if let Some(i) = self.store.issues.get_mut(key) {
+                i.status.name = planning.clone();
+                i.status.category = "indeterminate".into();
+            }
+            self.grooming.verdicts.remove(key);
+        }
+        let n = self.pre_check_candidates().len();
+        self.grooming.cursor = self.grooming.cursor.min(n);
     }
 
     /// The run's rows whose transition succeeded, in rank order.
@@ -445,6 +464,50 @@ mod tests {
         assert!(text.contains("issueParent=10002"), "the epic's numeric id: {text}");
         assert_eq!(app.grooming.last_summary.as_deref(), Some(text.as_str()));
         assert!(app.grooming.promote_failures.is_empty());
+    }
+
+    #[test]
+    fn promoted_tickets_leave_the_plan_before_the_refresh_lands() {
+        let _g = crate::jira::tests::WRITE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // No search route: the refresh's lists fail (404) and keep their rows, as if they had not landed yet.
+        let (base, _rx) = crate::jira::tests::stub_server(vec![
+            ("POST", "/rest/api/3/issue/CI-1/transitions", serde_json::json!({})),
+            ("POST", "/rest/api/3/issue/CI-2/transitions", serde_json::json!({})),
+        ]);
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = promote_app(&base, dir.path());
+        app.actions.push(super::super::Action::Promote);
+        drain_until(&mut app, |a| !a.grooming.promoting);
+        assert_eq!(app.store.list(ListId::TeamOpen).len(), 3, "the team list still holds the rows from before the run");
+        let (plan, _) = app.promotion_plan();
+        assert!(plan.promoted.is_empty(), "nothing left to promote again: {:?}", plan.promoted);
+        assert!(!app.grooming.verdicts.contains_key("CI-1") && !app.grooming.verdicts.contains_key("CI-2"));
+        assert_eq!(app.pre_check_candidates().iter().map(|c| c.issue.key.as_str()).collect::<Vec<_>>(), ["CI-3"]);
+        assert!(app.grooming.cursor <= 1);
+    }
+
+    #[test]
+    fn the_report_reloads_once_after_the_write() {
+        let _g = crate::jira::tests::WRITE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (base, _rx) = crate::jira::tests::stub_server(vec![
+            ("POST", "/rest/api/3/issue/CI-1/transitions", serde_json::json!({})),
+            ("POST", "/rest/api/3/issue/CI-2/transitions", serde_json::json!({})),
+            ("POST", "/rest/api/3/search/jql", serde_json::json!({"issues": []})),
+        ]);
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = promote_app(&base, dir.path());
+        app.actions.push(super::super::Action::Promote);
+        drain_until(&mut app, |a| !a.grooming.promoting && a.grooming.report.is_some());
+        assert_eq!(app.report_reads, 1, "one read, after the write: an earlier one could land last with the previous report");
+        // Nothing later replaces it.
+        let start = Instant::now();
+        while start.elapsed() < std::time::Duration::from_millis(200) {
+            app.drain();
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let date = chrono::Local::now().date_naive().format("%Y-%m-%d").to_string();
+        let held = app.grooming.report.as_ref().map(|(p, _)| p.clone());
+        assert_eq!(held, Some(dir.path().join(format!("{date}.md"))), "the header shows the report just written");
     }
 
     #[test]

@@ -11,8 +11,14 @@ const DETAIL_FRESH: Duration = Duration::from_secs(60);
 
 impl App {
     pub fn refresh_all(&mut self) {
-        self.last_refresh = Instant::now();
         self.load_report();
+        self.refresh_lists();
+    }
+
+    /// Everything `refresh_all` reloads except the report: Promote reloads the report itself, once, after
+    /// writing it, so no earlier read can land after it with the previous report.
+    pub(super) fn refresh_lists(&mut self) {
+        self.last_refresh = Instant::now();
         let cfg = self.cfg.clone();
         let fields: Vec<String> = jira::LIST_FIELDS.iter().map(|s| s.to_string()).collect();
         self.load_list(ListId::TeamOpen, store::jql_team_open(&cfg, !self.members_disabled), fields.clone());
@@ -98,7 +104,11 @@ impl App {
     /// `force` refetches even a detail fetched within DETAIL_FRESH.
     /// Reads the newest report in `report_dir`. A local file read needs no client, so it runs on its own thread,
     /// not `spawn`.
-    pub(super) fn load_report(&self) {
+    pub(super) fn load_report(&mut self) {
+        #[cfg(test)]
+        {
+            self.report_reads += 1;
+        }
         let dir = self.cfg.report_dir();
         let (tx, ctx) = (self.tx.clone(), self.ctx.clone());
         std::thread::spawn(move || {

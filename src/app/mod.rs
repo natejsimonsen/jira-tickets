@@ -210,6 +210,9 @@ pub struct App {
     /// Optimistic rank swaps awaiting their Done: (list, issue, neighbour), oldest first.
     pending_ranks: Vec<(ListId, String, String)>,
     pub grooming: GroomingState,
+    /// How many report reads were started, for tests.
+    #[cfg(test)]
+    pub(crate) report_reads: usize,
     pub(crate) client: Option<Arc<Client>>,
     tx: Sender<Msg>,
     rx: Receiver<Msg>,
@@ -289,6 +292,8 @@ impl App {
             pending_transition: None,
             pending_ranks: Vec::new(),
             grooming: GroomingState::default(),
+            #[cfg(test)]
+            report_reads: 0,
             client: None,
             tx,
             rx,
