@@ -3,7 +3,7 @@
 use super::actions::Action;
 use super::pickers::Picker;
 use super::{App, GroomMode, Screen};
-use crate::grooming::{Code, Verdict};
+use crate::grooming::{Code, Verdict, bounce_comment_ok};
 use egui::{Key, KeyboardShortcut, Modifiers};
 
 impl App {
@@ -149,6 +149,33 @@ impl App {
             }
             return;
         }
+        if self.grooming.mode == GroomMode::Session {
+            // The bounce box has focus: only ⌘Enter (when the comment would do) and Esc act.
+            if let Some(text) = &self.grooming.bounce_text {
+                if ctx.input_mut(|i| i.consume_shortcut(&KeyboardShortcut::new(Modifiers::COMMAND, Key::Enter))) {
+                    if bounce_comment_ok(text) {
+                        self.actions.push(Action::Bounce);
+                    }
+                } else if key(Key::Escape) {
+                    self.actions.push(Action::CancelBounce);
+                }
+                return;
+            }
+            if self.grooming.placement.is_some() {
+                if key(Key::ArrowUp) {
+                    self.actions.push(Action::PlacementMove(-1));
+                }
+                if key(Key::ArrowDown) {
+                    self.actions.push(Action::PlacementMove(1));
+                }
+                if key(Key::Enter) {
+                    self.actions.push(Action::Accept);
+                } else if key(Key::Escape) {
+                    self.actions.push(Action::CancelPlacement);
+                }
+                return;
+            }
+        }
         if ctx.text_edit_focused() {
             return;
         }
@@ -179,11 +206,20 @@ impl App {
                 }
             }
             GroomMode::Session => {
-                if key(Key::CloseBracket) {
-                    self.actions.push(Action::GroomEpic { delta: 1, skip_empty: true });
+                // Shift lands on epics with nothing in Planning too. Shift+] arrives as `}` on most layouts; checked
+                // before plain ] because consume_shortcut(NONE, ]) also matches Shift+].
+                let shifted = |k: Key| ctx.input_mut(|i| i.consume_shortcut(&KeyboardShortcut::new(Modifiers::SHIFT, k)));
+                for (keys, delta) in [([Key::CloseBracket, Key::CloseCurlyBracket], 1), ([Key::OpenBracket, Key::OpenCurlyBracket], -1)] {
+                    if shifted(keys[0]) || key(keys[1]) {
+                        self.actions.push(Action::GroomEpic { delta, skip_empty: false });
+                    } else if key(keys[0]) {
+                        self.actions.push(Action::GroomEpic { delta, skip_empty: true });
+                    }
                 }
-                if key(Key::OpenBracket) {
-                    self.actions.push(Action::GroomEpic { delta: -1, skip_empty: true });
+                for (k, a) in [(Key::Y, Action::StartAccept), (Key::B, Action::StartBounce), (Key::P, Action::Park)] {
+                    if key(k) {
+                        self.actions.push(a);
+                    }
                 }
             }
         }

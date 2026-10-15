@@ -3,7 +3,7 @@
 use super::msg::{Msg, done_toast};
 use super::{App, GroomMode, PromoteRun, ToastKind};
 use crate::grooming::{self, Candidate, Code, EpicQueue, Promotion, RunRow, Verdict};
-use crate::jira::{self, Issue};
+use crate::jira::{self, Client, Issue};
 use crate::report::{self, WriteError};
 use crate::store::ListId;
 use std::path::PathBuf;
@@ -356,6 +356,158 @@ impl App {
     }
 }
 
+/// Moves `key` to the status named `target_status`: the transition that leads there from its current status (by
+/// target name, case-insensitive), with no fields.
+pub fn transition_to(c: &Client, key: &str, target_status: &str) -> jira::Result<()> {
+    let ts = c.transitions(key)?;
+    let id =
+        grooming::pick_transition(&ts, target_status).ok_or_else(|| jira::Error::Other(format!("no transition to {target_status} from the current status")))?;
+    c.transition(key, &id, None)
+}
+
+/// The session's decisions: accept with placement, bounce with a comment, park.
+impl App {
+    /// Session: the focused Planning candidate.
+    pub fn session_focus(&self) -> Option<&Issue> {
+        let at = self.grooming.cursor;
+        self.session_queues().get(self.grooming.epic_index).and_then(|q| q.planning.get(at).copied())
+    }
+
+    /// The selected epic's Ready for Work keys, in rank order.
+    fn session_ready_keys(&self) -> Vec<String> {
+        self.session_queues().get(self.grooming.epic_index).map(|q| q.ready.iter().map(|i| i.key.clone()).collect()).unwrap_or_default()
+    }
+
+    /// The candidate a decision acts on: in Session mode, with a client, and no decision in flight.
+    fn decidable(&self) -> Option<String> {
+        let ok = self.grooming.mode == GroomMode::Session && self.grooming.deciding.is_none() && self.client.is_some();
+        ok.then(|| self.session_focus().map(|i| i.key.clone())).flatten()
+    }
+
+    /// `y`: the ghost starts under the Ready queue.
+    pub(super) fn start_accept(&mut self) {
+        if self.decidable().is_none() {
+            return;
+        }
+        self.grooming.bounce_text = None;
+        self.grooming.placement = Some(self.session_ready_keys().len());
+    }
+
+    pub(super) fn placement_move(&mut self, delta: i32) {
+        let Some(at) = self.grooming.placement else { return };
+        let n = self.session_ready_keys().len() as i64;
+        self.grooming.placement = Some((at as i64 + delta as i64).clamp(0, n) as usize);
+    }
+
+    /// Enter in placement: one transition to Ready for Work, then one rank call before (or after) the ghost's
+    /// neighbour. An empty Ready queue has nothing to rank against, so only the transition is made.
+    pub(super) fn accept(&mut self) {
+        let Some(at) = self.grooming.placement else { return };
+        let Some(key) = self.decidable() else { return };
+        let (before, after) = grooming::placement_target(&self.session_ready_keys(), at);
+        self.grooming.placement = None;
+        self.grooming.deciding = Some(key.clone());
+        let status = self.cfg.grooming.status_ready.clone();
+        self.spawn_write(move |c, tx| {
+            let result = jira::check_writable().and_then(|_| transition_to(c, &key, &status)).and_then(|_| match (&before, &after) {
+                (None, None) => Ok(()),
+                _ => c.rank(&key, before.as_deref(), after.as_deref()),
+            });
+            let _ = tx.send(Msg::Done { key, what: "Accept", result });
+        });
+    }
+
+    /// `b`: the comment box opens, empty, and takes focus.
+    pub(super) fn start_bounce(&mut self) {
+        if self.decidable().is_none() {
+            return;
+        }
+        self.grooming.placement = None;
+        self.grooming.bounce_text = Some(String::new());
+        self.grooming.bounce_focus = true;
+    }
+
+    /// ⌘Enter in the bounce box: the comment first, then the transition to New. A blank or longer-than-two-line
+    /// comment sends nothing.
+    pub(super) fn bounce(&mut self) {
+        let Some(text) = self.grooming.bounce_text.clone().filter(|t| grooming::bounce_comment_ok(t)) else { return };
+        let Some(key) = self.decidable() else { return };
+        self.grooming.deciding = Some(key.clone());
+        let status = self.cfg.grooming.status_new.clone();
+        self.spawn_write(move |c, tx| {
+            let result = jira::check_writable().and_then(|_| c.add_comment(&key, text.trim())).and_then(|_| transition_to(c, &key, &status));
+            let _ = tx.send(Msg::Done { key, what: "Bounce", result });
+        });
+    }
+
+    /// `p`: one transition to Backlog.
+    pub(super) fn park(&mut self) {
+        let Some(key) = self.decidable() else { return };
+        self.grooming.placement = None;
+        self.grooming.bounce_text = None;
+        self.grooming.deciding = Some(key.clone());
+        let status = self.cfg.grooming.status_backlog.clone();
+        self.spawn_write(move |c, tx| {
+            let result = jira::check_writable().and_then(|_| transition_to(c, &key, &status));
+            let _ = tx.send(Msg::Done { key, what: "Park", result });
+        });
+    }
+
+    /// A decision answered. On success the ticket takes its new status in the store at once (the refresh the
+    /// generic Done handling starts confirms it), so it leaves the Planning list and the focus moves on.
+    pub(super) fn session_done(&mut self, key: &str, what: &str, result: &jira::Result<()>) {
+        if self.grooming.deciding.as_deref() == Some(key) {
+            self.grooming.deciding = None;
+        }
+        if result.is_err() {
+            return;
+        }
+        let g = &self.cfg.grooming;
+        let (status, category) = match what {
+            "Accept" => (g.status_ready.clone(), "indeterminate"),
+            "Bounce" => (g.status_new.clone(), "new"),
+            _ => (g.status_backlog.clone(), "new"),
+        };
+        match what {
+            "Accept" => self.grooming.placement = None,
+            "Bounce" => self.grooming.bounce_text = None,
+            _ => {}
+        }
+        let (epic, focus) = self.session_anchor();
+        if let Some(i) = self.store.issues.get_mut(key) {
+            i.status.name = status;
+            i.status.category = category.into();
+        }
+        self.session_keep(epic, focus);
+    }
+
+    /// The selected epic's key and the focused candidate's, taken before the lists change.
+    pub(super) fn session_anchor(&self) -> (Option<Option<String>>, Option<String>) {
+        let epic = self.session_queues().get(self.grooming.epic_index).map(|q| q.epic.clone());
+        (epic, self.session_focus().map(|i| i.key.clone()))
+    }
+
+    /// After the lists changed: the rail stays on the same epic (its place may move, as the rail sorts by Planning
+    /// count), the cursor clamps to its candidates, and a new focused ticket restarts the timer.
+    pub(super) fn session_keep(&mut self, epic: Option<Option<String>>, focus: Option<String>) {
+        if self.grooming.mode != GroomMode::Session {
+            return;
+        }
+        let queues = self.session_queues();
+        let at = epic.and_then(|k| queues.iter().position(|q| q.epic == k)).unwrap_or(self.grooming.epic_index).min(queues.len().saturating_sub(1));
+        let n = queues.get(at).map_or(0, |q| q.planning.len());
+        drop(queues);
+        self.grooming.epic_index = at;
+        self.grooming.cursor = self.grooming.cursor.min(n.saturating_sub(1));
+        if self.session_focus().map(|i| i.key.clone()) != focus {
+            // A placement or bounce box was for the ticket that left.
+            self.grooming.placement = None;
+            self.grooming.bounce_text = None;
+            self.grooming.focused_since = Some(Instant::now());
+        }
+    }
+}
+
 /// "Promoted 9 to Planning", or "Promoted 8 of 10 to Planning, 2 failed".
 pub fn promote_lead(done: usize, tried: usize) -> String {
     if done == tried { format!("Promoted {done} to Planning") } else { format!("Promoted {done} of {tried} to Planning, {} failed", tried - done) }
@@ -571,6 +723,207 @@ mod tests {
         std::thread::sleep(std::time::Duration::from_millis(50));
         assert!(rx.try_iter().next().is_none());
         assert!(app.toast.as_ref().is_some_and(|t| t.text.contains("Read-only")));
+    }
+
+    fn session_issue(key: &str, status: &str) -> crate::jira::Issue {
+        crate::jira::Issue {
+            key: key.into(),
+            summary: format!("Summary {key}"),
+            labels: vec!["PLAT".into()],
+            status: crate::jira::Status { name: status.into(), category: "indeterminate".into() },
+            parent_key: Some("CI-79".into()),
+            parent_summary: Some("Epic CI-79".into()),
+            ..Default::default()
+        }
+    }
+
+    /// A session on epic CI-79: CI-5 and CI-6 in Ready for Work (in rank order), CI-1 and CI-2 in Planning.
+    fn session_app(base: &str) -> App {
+        let cfg: crate::config::Config = toml::from_str("site = \"https://x.atlassian.net\"\nemail = \"a@b.c\"\n").unwrap();
+        let login = crate::auth::Login { email: "a@b.c".into(), token: "t".into(), source: crate::auth::Source::Env };
+        let client = std::sync::Arc::new(crate::jira::Client::new(base, &login));
+        let mut app = App::for_test(cfg, Some(client));
+        app.screen = super::super::Screen::Grooming;
+        app.grooming.mode = GroomMode::Session;
+        app.store.absorb(
+            ListId::TeamOpen,
+            vec![
+                session_issue("CI-5", "Ready for Work"),
+                session_issue("CI-1", "Planning"),
+                session_issue("CI-6", "Ready for Work"),
+                session_issue("CI-2", "Planning"),
+            ],
+        );
+        app
+    }
+
+    fn transitions_json() -> serde_json::Value {
+        serde_json::json!({"transitions": [
+            {"id": "31", "name": "Ready", "to": {"name": "Ready for Work"}},
+            {"id": "41", "name": "Bounce", "to": {"name": "New"}},
+            {"id": "51", "name": "Park", "to": {"name": "Backlog"}},
+        ]})
+    }
+
+    /// The writes the stub saw (POST and PUT), in order, as (method, path, body).
+    fn writes(rx: &std::sync::mpsc::Receiver<crate::jira::tests::Recorded>) -> Vec<(String, String, serde_json::Value)> {
+        rx.try_iter()
+            .filter(|r| r.method == "POST" || r.method == "PUT")
+            .filter(|r| !r.path.starts_with("/rest/api/3/search"))
+            .map(|r| (r.method.clone(), r.path.clone(), serde_json::from_str(&r.body).unwrap_or_default()))
+            .collect()
+    }
+
+    #[test]
+    fn accept_transitions_to_ready_then_ranks_at_the_ghost() {
+        let _g = crate::jira::tests::WRITE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (base, rx) = crate::jira::tests::stub_server(vec![
+            ("GET", "/rest/api/3/issue/CI-1/transitions", serde_json::json!({"transitions":[{"id":"31","name":"Ready","to":{"name":"Ready for Work"}}]})),
+            ("POST", "/rest/api/3/issue/CI-1/transitions", serde_json::json!({})),
+            ("PUT", "/rest/agile/1.0/issue/rank", serde_json::json!({})),
+        ]);
+        let mut app = session_app(&base);
+        app.grooming.placement = Some(0);
+        app.actions.push(super::super::Action::Accept);
+        app.drain();
+        assert_eq!(app.grooming.deciding.as_deref(), Some("CI-1"), "in flight");
+        drain_until(&mut app, |a| a.grooming.deciding.is_none());
+        let w = writes(&rx);
+        assert_eq!(
+            w.iter().map(|(m, p, _)| (m.as_str(), p.as_str())).collect::<Vec<_>>(),
+            [("POST", "/rest/api/3/issue/CI-1/transitions"), ("PUT", "/rest/agile/1.0/issue/rank")]
+        );
+        assert_eq!(w[0].2, serde_json::json!({"transition": {"id": "31"}}));
+        assert_eq!(w[1].2["issues"], serde_json::json!(["CI-1"]));
+        assert_eq!(w[1].2["rankBeforeIssue"], "CI-5", "before the first Ready ticket");
+        assert!(app.grooming.placement.is_none());
+        assert_eq!(app.store.get("CI-1").map(|i| i.status.name.as_str()), Some("Ready for Work"), "moved at once");
+    }
+
+    #[test]
+    fn accept_at_the_end_ranks_after_the_last_ready_ticket() {
+        let _g = crate::jira::tests::WRITE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (base, rx) = crate::jira::tests::stub_server(vec![
+            ("GET", "/rest/api/3/issue/CI-1/transitions", transitions_json()),
+            ("POST", "/rest/api/3/issue/CI-1/transitions", serde_json::json!({})),
+            ("PUT", "/rest/agile/1.0/issue/rank", serde_json::json!({})),
+        ]);
+        let mut app = session_app(&base);
+        app.actions.push(super::super::Action::StartAccept);
+        app.drain();
+        assert_eq!(app.grooming.placement, Some(2), "the ghost starts under the queue");
+        app.actions.push(super::super::Action::PlacementMove(1));
+        app.drain();
+        assert_eq!(app.grooming.placement, Some(2), "clamped at the end");
+        app.actions.push(super::super::Action::Accept);
+        drain_until(&mut app, |a| a.grooming.deciding.is_none());
+        let w = writes(&rx);
+        assert_eq!(w.len(), 2, "one transition and one rank: {w:?}");
+        assert_eq!(w[1].2["rankAfterIssue"], "CI-6");
+    }
+
+    #[test]
+    fn bounce_posts_the_comment_then_moves_to_new() {
+        let _g = crate::jira::tests::WRITE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (base, rx) = crate::jira::tests::stub_server(vec![
+            ("POST", "/rest/api/3/issue/CI-1/comment", serde_json::json!({})),
+            ("GET", "/rest/api/3/issue/CI-1/transitions", transitions_json()),
+            ("POST", "/rest/api/3/issue/CI-1/transitions", serde_json::json!({})),
+        ]);
+        let mut app = session_app(&base);
+        app.actions.push(super::super::Action::StartBounce);
+        app.drain();
+        assert_eq!(app.grooming.bounce_text.as_deref(), Some(""));
+        app.grooming.bounce_text = Some("Which clusters?".into());
+        app.actions.push(super::super::Action::Bounce);
+        drain_until(&mut app, |a| a.grooming.deciding.is_none());
+        let w = writes(&rx);
+        assert_eq!(
+            w.iter().map(|(m, p, _)| (m.as_str(), p.as_str())).collect::<Vec<_>>(),
+            [("POST", "/rest/api/3/issue/CI-1/comment"), ("POST", "/rest/api/3/issue/CI-1/transitions")]
+        );
+        assert!(w[0].2.to_string().contains("Which clusters?"));
+        assert_eq!(w[1].2, serde_json::json!({"transition": {"id": "41"}}));
+        assert!(app.grooming.bounce_text.is_none(), "the box closes on success");
+    }
+
+    #[test]
+    fn bounce_needs_a_comment() {
+        let _g = crate::jira::tests::WRITE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (base, rx) = crate::jira::tests::stub_server(vec![]);
+        let mut app = session_app(&base);
+        for text in ["  ", "a\nb\nc"] {
+            app.grooming.bounce_text = Some(text.into());
+            app.actions.push(super::super::Action::Bounce);
+            app.drain();
+            assert!(app.grooming.deciding.is_none());
+            assert_eq!(app.grooming.bounce_text.as_deref(), Some(text), "the box stays open");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        assert!(rx.try_iter().next().is_none(), "nothing sent");
+    }
+
+    #[test]
+    fn a_failed_bounce_keeps_the_text() {
+        let _g = crate::jira::tests::WRITE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // The comment has no route (404): the transition is never tried.
+        let (base, rx) = crate::jira::tests::stub_server(vec![("GET", "/rest/api/3/issue/CI-1/transitions", transitions_json())]);
+        let mut app = session_app(&base);
+        app.grooming.bounce_text = Some("Which clusters?".into());
+        app.actions.push(super::super::Action::Bounce);
+        drain_until(&mut app, |a| a.grooming.deciding.is_none());
+        assert_eq!(app.grooming.bounce_text.as_deref(), Some("Which clusters?"));
+        assert!(!writes(&rx).iter().any(|(_, p, _)| p.ends_with("/transitions")));
+        assert_eq!(app.store.get("CI-1").map(|i| i.status.name.as_str()), Some("Planning"));
+    }
+
+    #[test]
+    fn park_is_one_transition_to_backlog() {
+        let _g = crate::jira::tests::WRITE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (base, rx) = crate::jira::tests::stub_server(vec![
+            ("GET", "/rest/api/3/issue/CI-1/transitions", transitions_json()),
+            ("POST", "/rest/api/3/issue/CI-1/transitions", serde_json::json!({})),
+        ]);
+        let mut app = session_app(&base);
+        app.actions.push(super::super::Action::Park);
+        drain_until(&mut app, |a| a.grooming.deciding.is_none());
+        let w = writes(&rx);
+        assert_eq!(w.len(), 1, "{w:?}");
+        assert_eq!(w[0].2, serde_json::json!({"transition": {"id": "51"}}));
+        assert_eq!(app.grooming.cursor, 0, "the next candidate takes the focus");
+        assert_eq!(app.session_focus().map(|i| i.key.clone()).as_deref(), Some("CI-2"));
+    }
+
+    #[test]
+    fn a_missing_transition_says_so() {
+        let _g = crate::jira::tests::WRITE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (base, rx) = crate::jira::tests::stub_server(vec![("GET", "/rest/api/3/issue/CI-1/transitions", serde_json::json!({"transitions": []}))]);
+        let mut app = session_app(&base);
+        app.actions.push(super::super::Action::Park);
+        drain_until(&mut app, |a| a.grooming.deciding.is_none());
+        assert!(writes(&rx).is_empty());
+        assert!(app.toast.as_ref().is_some_and(|t| t.text.contains("no transition to Backlog")), "{:?}", app.toast.as_ref().map(|t| &t.text));
+    }
+
+    #[test]
+    fn read_only_session_writes_send_nothing() {
+        let _g = crate::jira::tests::WRITE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _ro = crate::jira::tests::ReadOnlyGuard::new();
+        let (base, rx) = crate::jira::tests::stub_server(vec![("GET", "/rest/api/3/issue/CI-1/transitions", transitions_json())]);
+        let mut app = session_app(&base);
+        app.actions.push(super::super::Action::Park);
+        drain_until(&mut app, |a| a.grooming.deciding.is_none());
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        assert!(rx.try_iter().next().is_none(), "not even the transitions read");
+        assert!(app.toast.as_ref().is_some_and(|t| t.text.contains("Read-only")));
+    }
+
+    #[test]
+    fn entering_grooming_starts_the_timer() {
+        let mut app = App::for_test(toml::from_str("site = \"https://x.atlassian.net\"\nemail = \"a@b.c\"\n").unwrap(), None);
+        assert!(app.grooming.focused_since.is_none());
+        app.apply(super::super::Action::SetScreen(super::super::Screen::Grooming), &egui::Context::default());
+        assert!(app.grooming.focused_since.is_some());
     }
 
     #[test]

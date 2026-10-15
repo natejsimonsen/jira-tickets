@@ -226,12 +226,16 @@ pub struct EpicQueue<'a> {
 }
 
 /// Groups team tickets by epic; most Planning tickets first, then epic key, with "(no epic)" last among equals.
+/// An epic is named by its summary, else its key; epics with nothing in Ready, Planning or New are left out.
 pub fn epic_queues<'a>(issues: &[&'a Issue], team_label: &str, g: &config::Grooming) -> Vec<EpicQueue<'a>> {
     let mut by_epic: BTreeMap<Option<String>, EpicQueue<'a>> = BTreeMap::new();
     for i in issues.iter().filter(|i| i.labels.iter().any(|l| l == team_label)) {
         let q = by_epic.entry(i.parent_key.clone()).or_insert_with(|| EpicQueue {
             epic: i.parent_key.clone(),
-            summary: i.parent_key.as_ref().and_then(|_| i.parent_summary.clone()).unwrap_or_else(|| "(no epic)".to_string()),
+            summary: match &i.parent_key {
+                Some(k) => i.parent_summary.clone().unwrap_or_else(|| k.clone()),
+                None => "(no epic)".to_string(),
+            },
             ready: vec![],
             planning: vec![],
             new_count: 0,
@@ -243,7 +247,8 @@ pub fn epic_queues<'a>(issues: &[&'a Issue], team_label: &str, g: &config::Groom
             _ => {}
         }
     }
-    let mut out: Vec<_> = by_epic.into_values().collect();
+    // An epic whose team tickets are all past grooming (in progress, say) has nothing for the rail.
+    let mut out: Vec<_> = by_epic.into_values().filter(|q| !q.ready.is_empty() || !q.planning.is_empty() || q.new_count > 0).collect();
     out.sort_by_key(|q| (Reverse(q.planning.len()), q.epic.is_none(), q.epic.clone()));
     out
 }
@@ -282,6 +287,16 @@ pub fn timer_level(elapsed_secs: u64) -> Level {
         180.. => Level::Amber,
         _ => Level::Ok,
     }
+}
+
+/// The id of the transition in `ts` that leads to `target` (status names compare case-insensitively).
+pub fn pick_transition(ts: &[crate::jira::Transition], target: &str) -> Option<String> {
+    ts.iter().find(|t| t.to.eq_ignore_ascii_case(target)).map(|t| t.id.clone())
+}
+
+/// The per-ticket timer: "0:07", "4:59", "12:03".
+pub fn fmt_elapsed(secs: u64) -> String {
+    format!("{}:{:02}", secs / 60, secs % 60)
 }
 
 /// A bounce comment must be non-blank and at most two lines.
@@ -367,6 +382,44 @@ mod tests {
         assert_eq!(q[0].ready.len(), 1);
         assert_eq!(q[0].planning.len(), 2);
         assert_eq!(q[2].new_count, 1);
+    }
+
+    #[test]
+    fn epic_without_parent_summary_falls_back_to_its_key() {
+        let g = crate::config::Grooming::default();
+        let mut i = issue("CI-1", "Planning", Some("E-7"), "", &["PLAT"]);
+        i.parent_summary = None;
+        let n = issue("CI-2", "Planning", None, "", &["PLAT"]);
+        let q = epic_queues(&[&i, &n], "PLAT", &g);
+        assert_eq!(q[0].summary, "E-7", "an epic's key, not \"(no epic)\"");
+        assert_eq!(q[1].summary, "(no epic)");
+    }
+
+    #[test]
+    fn epics_with_nothing_to_groom_are_left_out() {
+        let g = crate::config::Grooming::default();
+        let a = issue("CI-1", "In Progress", Some("E-1"), "", &["PLAT"]);
+        let b = issue("CI-2", "New", Some("E-2"), "", &["PLAT"]);
+        let q = epic_queues(&[&a, &b], "PLAT", &g);
+        assert_eq!(q.iter().map(|e| e.epic.clone().unwrap()).collect::<Vec<_>>(), ["E-2"]);
+    }
+
+    #[test]
+    fn transitions_are_picked_by_target_status() {
+        let t = |id: &str, to: &str| crate::jira::Transition { id: id.into(), name: format!("to {to}"), to: to.into() };
+        let ts = [t("11", "Backlog"), t("31", "Ready for Work"), t("41", "New")];
+        assert_eq!(pick_transition(&ts, "Ready for Work"), Some("31".to_string()));
+        assert_eq!(pick_transition(&ts, "ready FOR work"), Some("31".to_string()), "case-insensitive");
+        assert_eq!(pick_transition(&ts, "Done"), None);
+        assert_eq!(pick_transition(&[], "New"), None);
+    }
+
+    #[test]
+    fn elapsed_reads_as_minutes_and_seconds() {
+        assert_eq!(fmt_elapsed(7), "0:07");
+        assert_eq!(fmt_elapsed(299), "4:59");
+        assert_eq!(fmt_elapsed(723), "12:03");
+        assert_eq!(fmt_elapsed(0), "0:00");
     }
 
     #[test]

@@ -57,10 +57,11 @@ pub const BINDINGS: &[KeyBinding] = &[
     b(Group::Grooming, "w/n/e", "Unclear what, unclear when, or empty"),
     b(Group::Grooming, "u", "Undo the last verdict"),
     b(Group::Grooming, "Enter", "Pre-check summary and Promote"),
-    b(Group::Grooming, "y", "Accept into Ready for Work"),
-    b(Group::Grooming, "b", "Bounce back to New"),
+    b(Group::Grooming, "y", "Accept into Ready for Work: ↑/↓ to place, Enter to commit"),
+    b(Group::Grooming, "b", "Bounce back to New with a comment (⌘Enter posts)"),
     b(Group::Grooming, "p", "Park in Backlog"),
-    b(Group::Grooming, "]/[", "Next or previous epic"),
+    // Shift lands on epics with nothing in Planning too; plain ]/[ steps over them.
+    b(Group::Grooming, "]/[, ⇧]/⇧[", "Next or previous epic (with Shift, empty ones too)"),
     b(Group::Grooming, "Tab", "Switch between Pre-check and Session"),
     b(Group::Pickers, "j/k, ↑/↓", "Move"),
     b(Group::Pickers, "Tab/⇧Tab", "Next or previous field"),
@@ -138,6 +139,10 @@ pub enum HintContext {
     GroomOverwrite,
     /// The Grooming screen in Session mode.
     GroomSession,
+    /// Session: placing an accepted ticket in the Ready for Work queue.
+    GroomPlacement,
+    /// Session: the bounce comment box is open.
+    GroomBounce,
 }
 
 /// Which text field has keyboard focus, if any.
@@ -164,6 +169,10 @@ pub enum GroomHint {
     /// The overwrite confirm is open.
     Overwrite,
     Session,
+    /// Session, placing an accepted ticket.
+    Placement,
+    /// Session, with the bounce box open.
+    Bounce,
 }
 
 /// Which kind of picker is open.
@@ -222,6 +231,8 @@ pub fn hint_context(s: HintState) -> HintContext {
         _ if grooming == Some(GroomHint::Summary) => HintContext::GroomSummary,
         _ if grooming == Some(GroomHint::Overwrite) => HintContext::GroomOverwrite,
         _ if grooming == Some(GroomHint::Session) => HintContext::GroomSession,
+        _ if grooming == Some(GroomHint::Placement) => HintContext::GroomPlacement,
+        _ if grooming == Some(GroomHint::Bounce) => HintContext::GroomBounce,
         _ => match focus {
             Focus::Search { clear: true, plain: true } => HintContext::SearchText,
             Focus::Search { clear: true, plain: false } => HintContext::Search,
@@ -284,7 +295,17 @@ pub fn hints(c: HintContext) -> &'static [Hint] {
         ],
         HintContext::GroomSummary => &[&[K("Enter"), W("promote")], &[K("Esc"), W("cancel")]],
         HintContext::GroomOverwrite => &[&[K("Enter"), W("overwrite")], &[K("Esc"), W("keep the old one")]],
-        HintContext::GroomSession => &[&[K("Tab"), W("switch mode")], &[K("⌘1"), W("Issues")], &[K("?"), W("help")]],
+        HintContext::GroomSession => &[
+            &[K("j/k"), W("or"), K("↑/↓"), W("move")],
+            &[K("]/["), W("epic")],
+            &[K("y"), W("accept")],
+            &[K("b"), W("bounce")],
+            &[K("p"), W("park")],
+            &[K("Tab"), W("pre-check")],
+            &[K("?"), W("help")],
+        ],
+        HintContext::GroomPlacement => &[&[K("↑/↓"), W("move")], &[K("Enter"), W("place")], &[K("Esc"), W("cancel")]],
+        HintContext::GroomBounce => &[&[K("⌘Enter"), W("post")], &[K("Esc"), W("cancel")]],
         HintContext::SignIn => &[&[K("Enter"), W("sign in")]],
         HintContext::Browse => &[&[K("j/k"), W("or"), K("↑/↓"), W("move")], &[K("⌘K"), W("go to")], &[K("⌘F"), W("search")], &[K("?"), W("help")]],
         HintContext::BrowseSearch => {
@@ -411,7 +432,11 @@ mod tests {
         assert_eq!(hint_text(hints(GroomPreCheck)), "j/k or ↑/↓ move · r ready · w/n/e code · u undo · Enter summary · Tab session");
         assert_eq!(hint_text(hints(GroomSummary)), "Enter promote · Esc cancel");
         assert_eq!(hint_text(hints(GroomOverwrite)), "Enter overwrite · Esc keep the old one");
-        assert_eq!(hint_text(hints(GroomSession)), "Tab switch mode · ⌘1 Issues · ? help");
+        assert_eq!(hint_text(hints(GroomSession)), "j/k or ↑/↓ move · ]/[ epic · y accept · b bounce · p park · Tab pre-check · ? help");
+        assert_eq!(hint_context(groom(GroomHint::Placement)), GroomPlacement);
+        assert_eq!(hint_text(hints(GroomPlacement)), "↑/↓ move · Enter place · Esc cancel");
+        assert_eq!(hint_context(HintState { focus: Focus::OtherText, ..groom(GroomHint::Bounce) }), GroomBounce, "the box has focus");
+        assert_eq!(hint_text(hints(GroomBounce)), "⌘Enter post · Esc cancel");
         assert_eq!(hint_text(hints(GoTo)), "Enter open · Esc close");
         assert_eq!(hint_text(hints(Search)), "Enter run as JQL · Esc clear", "one Enter wording for every search text");
         assert_eq!(hint_text(hints(EditPicker)), "Tab/⇧Tab next or previous field · Enter confirm · Esc cancel");

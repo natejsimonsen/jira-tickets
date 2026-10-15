@@ -74,6 +74,8 @@ pub fn hint(g: &GroomingState) -> GroomHint {
         (true, _, _) => GroomHint::Overwrite,
         (_, true, _) => GroomHint::Summary,
         (_, _, GroomMode::PreCheck) => GroomHint::PreCheck,
+        (_, _, GroomMode::Session) if g.bounce_text.is_some() => GroomHint::Bounce,
+        (_, _, GroomMode::Session) if g.placement.is_some() => GroomHint::Placement,
         (_, _, GroomMode::Session) => GroomHint::Session,
     }
 }
@@ -116,7 +118,10 @@ fn pre_check_body(app: &mut App, ui: &mut Ui, p: &Palette) {
         let right_w = ui.available_width();
         ui.allocate_ui_with_layout(vec2(right_w, h), egui::Layout::top_down(egui::Align::Min), |ui| {
             ui.set_width(right_w);
-            if cursor < n { focused_ticket(app, ui, p, cursor) } else { summary_pane(app, ui, p) }
+            match app.pre_check_candidates().get(cursor).map(|c| c.issue.clone()) {
+                Some(issue) => focused_ticket(app, ui, p, issue),
+                None => summary_pane(app, ui, p),
+            }
         });
     });
 }
@@ -146,7 +151,7 @@ fn candidate_list(app: &mut App, ui: &mut Ui, p: &Palette, cursor: usize) {
                 let b = r.badge_for(&i.key)?;
                 (verdict.is_none() || verdict == grooming::prefill(Some(r), &i.key).as_ref()).then(|| (b, d.clone()))
             });
-            let resp = row_frame(ui, p, sel, idx, total, |ui| {
+            let resp = row_frame(ui, p, "groom-row", sel, idx, total, |ui| {
                 title_line(ui, p, &i.key, &i.summary, sel);
                 ui.add_space(LINE_GAP);
                 ui.horizontal(|ui| {
@@ -185,7 +190,7 @@ fn candidate_list(app: &mut App, ui: &mut Ui, p: &Palette, cursor: usize) {
         }
         let idx = cands.len();
         let sel = cursor == idx;
-        let resp = row_frame(ui, p, sel, idx, total, |ui| {
+        let resp = row_frame(ui, p, "groom-row", sel, idx, total, |ui| {
             let g = ui.painter().layout_no_wrap(summary_line(&plan, unjudged), theme::bold(13.5), p.text);
             ui.label(g);
             ui.add_space(LINE_GAP);
@@ -204,7 +209,7 @@ fn candidate_list(app: &mut App, ui: &mut Ui, p: &Palette, cursor: usize) {
 }
 
 /// A list row card: `selected_row` under the cursor, the hover fill otherwise; returns its click response.
-fn row_frame(ui: &mut Ui, p: &Palette, sel: bool, idx: usize, n: usize, content: impl FnOnce(&mut Ui)) -> egui::Response {
+fn row_frame(ui: &mut Ui, p: &Palette, salt: &str, sel: bool, idx: usize, n: usize, content: impl FnOnce(&mut Ui)) -> egui::Response {
     let corners = super::issues::row_corners(idx, n);
     let bg = ui.painter().add(egui::Shape::Noop);
     let r = Frame::new().stroke(Stroke::new(1.0, p.border)).corner_radius(corners).inner_margin(ROW_PAD).show(ui, |ui| {
@@ -212,7 +217,7 @@ fn row_frame(ui: &mut Ui, p: &Palette, sel: bool, idx: usize, n: usize, content:
         content(ui);
     });
     let rect = r.response.rect;
-    let resp = ui.interact(rect, egui::Id::new(("groom-row", idx)), egui::Sense::click());
+    let resp = ui.interact(rect, egui::Id::new((salt, idx)), egui::Sense::click());
     let fill = super::issues::row_fill(sel, resp.hovered(), p);
     ui.painter().set(bg, egui::epaint::RectShape::filled(rect, corners, fill));
     resp
@@ -241,8 +246,7 @@ fn neutral_pill(ui: &mut Ui, p: &Palette, text: &str, sel: bool) {
 }
 
 /// The focused ticket: key and epic, title, status, and the rendered description (its full detail is fetched).
-fn focused_ticket(app: &mut App, ui: &mut Ui, p: &Palette, cursor: usize) {
-    let Some(issue) = app.pre_check_candidates().get(cursor).map(|c| c.issue.clone()) else { return };
+fn focused_ticket(app: &mut App, ui: &mut Ui, p: &Palette, issue: jira::Issue) {
     let loading = app.detail_loading.contains(&issue.key);
     // Once per focus: a failed fetch is not retried every frame.
     if app.grooming.detail_for.as_deref() != Some(issue.key.as_str()) {
@@ -441,10 +445,268 @@ fn dialog(ctx: &egui::Context, p: &Palette, id: &str, width: f32, content: impl 
     });
 }
 
-/// Task 7 fills this in: the epic rail, the Ready queue and its Planning candidates.
+/// The rail's width.
+const RAIL_W: f32 = 300.0;
+/// The bounce box's height: two 14 pt lines and its padding.
+const BOUNCE_H: f32 = 64.0;
+/// The bounce box's placeholder.
+pub const BOUNCE_HINT: &str = "What is missing? One or two lines (⌘Enter to post)";
+
+/// One epic on the session rail, taken from `grooming::epic_queues`.
+struct RailRow {
+    epic: Option<String>,
+    summary: String,
+    planning: usize,
+    ready: usize,
+    new: usize,
+}
+
+/// The epic-by-epic walk: the epic rail, the selected epic's Ready for Work queue over its Planning candidates, and
+/// the focused candidate's description.
 fn session_body(app: &mut App, ui: &mut Ui, p: &Palette) {
-    let epics = app.session_queues().iter().filter(|q| !q.planning.is_empty()).count();
-    empty_state(ui, p, &format!("Session: {epics} {} with Planning tickets", if epics == 1 { "epic" } else { "epics" }));
+    // The per-ticket timer ticks.
+    ui.ctx().request_repaint_after(std::time::Duration::from_secs(1));
+    let queues = app.session_queues();
+    let rail: Vec<RailRow> = queues
+        .iter()
+        .map(|q| RailRow { epic: q.epic.clone(), summary: q.summary.clone(), planning: q.planning.len(), ready: q.ready.len(), new: q.new_count })
+        .collect();
+    let at = app.grooming.epic_index.min(rail.len().saturating_sub(1));
+    let (ready, planning): (Vec<jira::Issue>, Vec<jira::Issue>) =
+        queues.get(at).map(|q| (q.ready.iter().map(|i| (*i).clone()).collect(), q.planning.iter().map(|i| (*i).clone()).collect())).unwrap_or_default();
+    drop(queues);
+    if rail.is_empty() {
+        let g = &app.cfg.grooming;
+        empty_state(ui, p, &format!("Nothing in {}, {} or {}", g.status_planning, g.status_ready, g.status_new));
+        return;
+    }
+    let cursor = app.grooming.cursor.min(planning.len().saturating_sub(1));
+    let list_w = (ui.available_width() * 0.36).clamp(LIST_MIN, LIST_MAX).min(ui.available_width());
+    ui.horizontal_top(|ui| {
+        ui.spacing_mut().item_spacing.x = PANE_GAP;
+        let h = ui.available_height();
+        ui.allocate_ui_with_layout(vec2(RAIL_W, h), egui::Layout::top_down(egui::Align::Min), |ui| {
+            ui.set_width(RAIL_W);
+            epic_rail(app, ui, p, &rail, at);
+        });
+        ui.allocate_ui_with_layout(vec2(list_w, h), egui::Layout::top_down(egui::Align::Min), |ui| {
+            ui.set_width(list_w);
+            epic_queue(app, ui, p, &ready, &planning, cursor);
+        });
+        let right_w = ui.available_width();
+        ui.allocate_ui_with_layout(vec2(right_w, h), egui::Layout::top_down(egui::Align::Min), |ui| {
+            ui.set_width(right_w);
+            match planning.get(cursor) {
+                Some(issue) => focused_ticket(app, ui, p, issue.clone()),
+                None => card(ui, p, |ui| {
+                    ui.label(RichText::new(format!("Nothing in {} under this epic", app.cfg.grooming.status_planning)).color(p.muted).size(14.0));
+                }),
+            }
+        });
+    });
+}
+
+/// "CI-1860 Progressive Delivery · P 3 · R 7 · N 12": the epic, then its Planning, Ready for Work and New counts. An epic
+/// named only by its key shows the key once.
+pub fn rail_line(epic: Option<&str>, summary: &str, planning: usize, ready: usize, new: usize) -> String {
+    let name = match epic {
+        Some(k) if k != summary => format!("{k} {summary}"),
+        _ => summary.to_string(),
+    };
+    format!("{name}{}", rail_counts(planning, ready, new))
+}
+
+/// The rail row's tail: " · P 3 · R 7 · N 12".
+fn rail_counts(planning: usize, ready: usize, new: usize) -> String {
+    format!(" · P {planning} · R {ready} · N {new}")
+}
+
+/// The epics, each in its epic hue; those with nothing in Planning are muted (`]`/`[` step over them).
+fn epic_rail(app: &mut App, ui: &mut Ui, p: &Palette, rail: &[RailRow], at: usize) {
+    let mut clicked = None;
+    egui::ScrollArea::vertical().id_salt("groom-rail").auto_shrink([false, false]).show(ui, |ui| {
+        ui.spacing_mut().item_spacing.y = ROW_GAP;
+        for (idx, r) in rail.iter().enumerate() {
+            let sel = idx == at;
+            let color = match &r.epic {
+                _ if r.planning == 0 => p.muted,
+                Some(k) => theme::epic_tint_in(k, &app.epic_slots, p, &app.cfg.issues.epic_colors).fg,
+                None => p.text,
+            };
+            let full = rail_line(r.epic.as_deref(), &r.summary, r.planning, r.ready, r.new);
+            let resp = row_frame(ui, p, "groom-rail", sel, idx, rail.len(), |ui| {
+                let font = theme::body(13.0);
+                let painter = ui.painter().clone();
+                let measure = |t: &str| painter.layout_no_wrap(t.to_string(), font.clone(), color).size().x;
+                // The counts always show; the epic's name gives way.
+                let tail = rail_counts(r.planning, r.ready, r.new);
+                let head = full.strip_suffix(&tail).unwrap_or(&full);
+                let head = crate::views::truncate_title(head, ui.available_width() - measure(&tail), measure);
+                ui.label(RichText::new(format!("{head}{tail}")).font(font.clone()).color(color));
+            });
+            let resp = crate::views::tooltip(resp, full);
+            if resp.clicked() {
+                clicked = Some(idx);
+            }
+        }
+    });
+    if let Some(i) = clicked {
+        app.actions.push(Action::GroomEpic { delta: i as i32 - at as i32, skip_empty: false });
+    }
+}
+
+/// A section label over a list: "Ready for Work · 7".
+fn queue_label(ui: &mut Ui, p: &Palette, name: &str, n: usize) {
+    ui.label(RichText::new(format!("{name} · {n}")).font(theme::bold(12.0)).color(p.muted));
+    ui.add_space(8.0);
+}
+
+/// The selected epic's Ready for Work queue (muted, rank order, with the ghost row while placing), then its Planning
+/// candidates with the focused one's timer and, when open, the bounce box under it.
+fn epic_queue(app: &mut App, ui: &mut Ui, p: &Palette, ready: &[jira::Issue], planning: &[jira::Issue], cursor: usize) {
+    let report = app.grooming.report.as_ref().map(|(path, r)| (report_date(path, r), r.clone()));
+    let placement = app.grooming.placement.map(|at| at.min(ready.len()));
+    let elapsed = app.grooming.focused_since.map_or(0, |t| t.elapsed().as_secs());
+    let today = chrono::Local::now().date_naive();
+    let mut clicked = None;
+    egui::ScrollArea::vertical().id_salt("groom-queue").auto_shrink([false, false]).show(ui, |ui| {
+        queue_label(ui, p, &app.cfg.grooming.status_ready, ready.len());
+        ui.spacing_mut().item_spacing.y = ROW_GAP;
+        let rows = ready.len() + usize::from(placement.is_some());
+        if rows == 0 {
+            ui.label(RichText::new("None yet").color(p.muted).size(12.0));
+        }
+        let mut row = 0;
+        for at in 0..=ready.len() {
+            if placement == Some(at)
+                && let Some(c) = planning.get(cursor)
+            {
+                ghost_row(ui, p, c, row, rows);
+                row += 1;
+            }
+            if let Some(i) = ready.get(at) {
+                row_frame(ui, p, "groom-ready", false, row, rows, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 8.0;
+                        ui.label(RichText::new(&i.key).font(theme::mono(12.5)).color(p.muted));
+                        let painter = ui.painter().clone();
+                        let t = crate::views::truncate_title(&i.summary, ui.available_width(), |t| {
+                            painter.layout_no_wrap(t.to_string(), theme::body(13.5), p.muted).size().x
+                        });
+                        ui.label(RichText::new(t).font(theme::body(13.5)).color(p.muted));
+                    });
+                });
+                row += 1;
+            }
+        }
+        ui.spacing_mut().item_spacing.y = ui.style().spacing.item_spacing.y;
+        ui.add_space(GROUP_GAP);
+        queue_label(ui, p, &app.cfg.grooming.status_planning, planning.len());
+        ui.spacing_mut().item_spacing.y = ROW_GAP;
+        for (idx, i) in planning.iter().enumerate() {
+            let sel = idx == cursor;
+            let resp = row_frame(ui, p, "groom-cand", sel, idx, planning.len(), |ui| {
+                title_line(ui, p, &i.key, &i.summary, sel);
+                ui.add_space(LINE_GAP);
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = PILL_GAP;
+                    if let Some((d, b)) = report.as_ref().and_then(|(d, r)| r.badge_for(&i.key).map(|b| (d, b))) {
+                        badge(ui, p, &b, d);
+                    }
+                    neutral_pill(ui, p, &grooming::age_tag(&i.created, today), sel);
+                    neutral_pill(ui, p, i.assignee.as_ref().map_or("Unassigned", |u| u.display_name.as_str()), sel);
+                    if sel {
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            let c = timer_color(grooming::timer_level(elapsed), p);
+                            crate::views::tooltip(
+                                ui.label(RichText::new(grooming::fmt_elapsed(elapsed)).font(theme::mono(12.5)).color(c)),
+                                "Time on this ticket: amber at 3 minutes, red at 5",
+                            );
+                        });
+                    }
+                });
+            });
+            if resp.clicked() && app.grooming.placement.is_none() && app.grooming.bounce_text.is_none() {
+                clicked = Some(idx);
+            }
+            if sel && app.grooming.bounce_text.is_some() {
+                ui.spacing_mut().item_spacing.y = ui.style().spacing.item_spacing.y;
+                ui.add_space(8.0);
+                bounce_box(app, ui, p);
+                ui.add_space(8.0);
+                ui.spacing_mut().item_spacing.y = ROW_GAP;
+            }
+        }
+    });
+    if let Some(i) = clicked {
+        app.actions.push(Action::GroomMove(i as i32 - cursor as i32));
+    }
+}
+
+/// Where the accepted ticket would land: the selected-row fill with a muted outline.
+fn ghost_row(ui: &mut Ui, p: &Palette, c: &jira::Issue, idx: usize, n: usize) {
+    Frame::new()
+        .fill(super::issues::row_fill(true, false, p))
+        .stroke(Stroke::new(1.0, p.muted))
+        .corner_radius(super::issues::row_corners(idx, n))
+        .inner_margin(ROW_PAD)
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            title_line(ui, p, &c.key, &c.summary, true);
+            ui.add_space(LINE_GAP);
+            ui.label(RichText::new("Lands here · Enter to place").color(p.muted).size(12.0));
+        });
+}
+
+/// The bounce comment box, under the focused candidate.
+fn bounce_box(app: &mut App, ui: &mut Ui, p: &Palette) {
+    let id = egui::Id::new("groom-bounce");
+    let focus_now = std::mem::take(&mut app.grooming.bounce_focus);
+    let status_new = app.cfg.grooming.status_new.clone();
+    let Some(text) = app.grooming.bounce_text.as_mut() else { return };
+    let focused = ui.memory(|m| m.has_focus(id));
+    Frame::new()
+        .fill(theme::input_fill(p.bg, p))
+        .stroke(Stroke::new(1.0, if focused { p.accent } else { p.border }))
+        .corner_radius(theme::RADIUS)
+        .inner_margin(Margin::symmetric(11, 8))
+        .show(ui, |ui| {
+            let empty = text.is_empty();
+            let size = vec2(ui.available_width(), BOUNCE_H);
+            let r = crate::views::add_field(ui, Some(size), text, |t| {
+                egui::TextEdit::multiline(t)
+                    .id(id)
+                    .font(theme::body(14.0))
+                    .frame(Frame::new().inner_margin(crate::views::caret_margin(Margin::ZERO, empty)))
+                    .hint_text(crate::views::empty_field_hint(BOUNCE_HINT, theme::body(14.0), p))
+            });
+            if focus_now {
+                r.request_focus();
+            }
+        });
+    let (note, warn) = bounce_note(text, &status_new);
+    ui.add_space(4.0);
+    ui.label(RichText::new(note).color(if warn { p.at_risk } else { p.muted }).size(12.0));
+}
+
+/// The line under the bounce box, and whether it warns.
+pub fn bounce_note(text: &str, status_new: &str) -> (String, bool) {
+    if grooming::bounce_comment_ok(text) {
+        (format!("⌘Enter posts the comment, then moves the ticket to {status_new}"), false)
+    } else if text.trim().is_empty() {
+        ("A one- or two-line comment is required".to_string(), false)
+    } else {
+        ("Two lines at most".to_string(), true)
+    }
+}
+
+/// The per-ticket timer's colour: plain text, then amber, then red.
+pub fn timer_color(level: Level, p: &Palette) -> Color32 {
+    match level {
+        Level::Ok => p.text,
+        Level::Amber => p.at_risk,
+        Level::Red => p.off_track,
+    }
 }
 
 /// "Report 2026-09-04 · 11 promoted · 14 need detail", or "No report found in <dir>" naming the configured dir.
@@ -545,8 +807,12 @@ mod tests {
         assert_eq!(hint(&g), GroomHint::Summary);
         g.pending_report = Some(String::new());
         assert_eq!(hint(&g), GroomHint::Overwrite, "the confirm sits over everything");
-        let g = GroomingState { mode: GroomMode::Session, ..Default::default() };
+        let mut g = GroomingState { mode: GroomMode::Session, ..Default::default() };
         assert_eq!(hint(&g), GroomHint::Session);
+        g.placement = Some(0);
+        assert_eq!(hint(&g), GroomHint::Placement);
+        g.bounce_text = Some(String::new());
+        assert_eq!(hint(&g), GroomHint::Bounce);
     }
 
     #[test]
@@ -601,6 +867,58 @@ mod tests {
         app.grooming.pending_report = None;
         app.grooming.mode = GroomMode::Session;
         let session = texts(&mut app);
-        assert!(session.iter().any(|t| t == "Session: 0 epics with Planning tickets"), "{session:?}");
+        assert!(session.iter().any(|t| t == "(no epic) · P 0 · R 1 · N 1"), "{session:?}");
+    }
+
+    #[test]
+    fn session_draws_rail_queue_ghost_and_bounce_box() {
+        let cfg: crate::config::Config = toml::from_str("site = \"https://x.atlassian.net\"\nemail = \"a@b.c\"\n").unwrap();
+        let mut app = App::for_test(cfg, None);
+        let issue = |k: &str, st: &str, epic: Option<&str>| crate::jira::Issue {
+            key: k.into(),
+            summary: format!("Summary {k}"),
+            labels: vec!["PLAT".into()],
+            status: crate::jira::Status { name: st.into(), category: "new".into() },
+            parent_key: epic.map(String::from),
+            parent_summary: epic.map(|_| "Blue Green Ops".to_string()),
+            ..Default::default()
+        };
+        app.store.absorb(
+            crate::store::ListId::TeamOpen,
+            vec![issue("CI-5", "Ready for Work", Some("CI-1860")), issue("CI-1", "Planning", Some("CI-1860")), issue("CI-9", "New", None)],
+        );
+        app.grooming.mode = GroomMode::Session;
+        app.grooming.focused_since = Some(std::time::Instant::now());
+        let texts = |app: &mut App| {
+            let shapes = crate::testutil::paint_at2(egui::vec2(1400.0, 800.0), |ui| show(app, ui));
+            crate::testutil::inks(&shapes).into_iter().map(|(t, _)| t).collect::<Vec<_>>()
+        };
+        let t = texts(&mut app);
+        for want in
+            ["CI-1860 Progressive Delivery · P 1 · R 1 · N 0", "(no epic) · P 0 · R 0 · N 1", "Ready for Work · 1", "Planning · 1", "0:00", "Unassigned", "CI-5"]
+        {
+            assert!(t.iter().any(|x| x == want), "{want} in {t:?}");
+        }
+        app.grooming.placement = Some(0);
+        let t = texts(&mut app);
+        assert!(t.iter().any(|x| x == "Lands here · Enter to place"), "{t:?}");
+        app.grooming.placement = None;
+        app.grooming.bounce_text = Some(String::new());
+        let t = texts(&mut app);
+        assert!(t.iter().any(|x| x == "A one- or two-line comment is required"), "{t:?}");
+    }
+
+    #[test]
+    fn session_wording() {
+        assert_eq!(rail_line(Some("CI-1860"), "Progressive Delivery", 3, 7, 12), "CI-1860 Progressive Delivery · P 3 · R 7 · N 12");
+        assert_eq!(rail_line(Some("CI-1860"), "CI-1860", 0, 1, 2), "CI-1860 · P 0 · R 1 · N 2", "a key-only epic shows the key once");
+        assert_eq!(rail_line(None, "(no epic)", 1, 0, 0), "(no epic) · P 1 · R 0 · N 0");
+        assert_eq!(bounce_note("Which clusters?", "New"), ("⌘Enter posts the comment, then moves the ticket to New".to_string(), false));
+        assert_eq!(bounce_note(" ", "New").0, "A one- or two-line comment is required");
+        assert_eq!(bounce_note("a\nb\nc", "New"), ("Two lines at most".to_string(), true));
+        let p = &theme::LIGHT;
+        assert_eq!(timer_color(Level::Ok, p), p.text);
+        assert_eq!(timer_color(Level::Amber, p), p.at_risk);
+        assert_eq!(timer_color(Level::Red, p), p.off_track);
     }
 }

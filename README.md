@@ -66,10 +66,10 @@ Only a token you paste is saved. Signing out deletes that file.
 | `w/n/e` | Unclear what, unclear when, or empty |
 | `u` | Undo the last verdict |
 | `Enter` | Pre-check summary and Promote |
-| `y` | Accept into Ready for Work |
-| `b` | Bounce back to New |
+| `y` | Accept into Ready for Work: ↑/↓ to place, Enter to commit |
+| `b` | Bounce back to New with a comment (⌘Enter posts) |
 | `p` | Park in Backlog |
-| `]/[` | Next or previous epic |
+| `]/[` or `⇧]/⇧[` | Next or previous epic (with Shift, empty ones too) |
 | `Tab` | Switch between Pre-check and Session |
 | **Pickers and Edit** | |
 | `j/k` or `↑/↓` | Move |

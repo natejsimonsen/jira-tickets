@@ -86,6 +86,10 @@ pub struct GroomingState {
     pub placement: Option<usize>,
     /// Session: the open bounce box's text.
     pub bounce_text: Option<String>,
+    /// Session: the bounce box takes keyboard focus on its next frame.
+    pub bounce_focus: bool,
+    /// Session: the ticket whose Accept, Bounce or Park is in flight; no other decision starts meanwhile.
+    pub deciding: Option<String>,
     /// When the focused ticket took focus, for the per-ticket timer.
     pub focused_since: Option<Instant>,
     /// The pre-check summary dialog is open.

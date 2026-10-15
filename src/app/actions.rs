@@ -75,6 +75,20 @@ pub enum Action {
     Overwrite(bool),
     /// The pre-check focus moved to this issue: fetch its full detail (description) without selecting it.
     GroomFocusDetail(String),
+    /// Session `y`: places a ghost of the focused candidate under the epic's Ready for Work queue.
+    StartAccept,
+    /// Moves the ghost row up or down the Ready for Work queue.
+    PlacementMove(i32),
+    /// Commits the placement: one transition to Ready for Work, then one rank call at the ghost.
+    Accept,
+    CancelPlacement,
+    /// Session `b`: opens the bounce comment box.
+    StartBounce,
+    /// Posts the bounce comment, then transitions the ticket to New.
+    Bounce,
+    CancelBounce,
+    /// Session `p`: transitions the focused candidate to Backlog.
+    Park,
 }
 
 impl App {
@@ -141,7 +155,21 @@ impl App {
 
     pub(crate) fn apply(&mut self, a: Action, ctx: &egui::Context) {
         match a {
-            Action::SetScreen(s) => self.screen = s,
+            Action::SetScreen(s) => {
+                // The per-ticket timer starts when the screen is entered, not only on the first move.
+                if s == Screen::Grooming && self.screen != Screen::Grooming {
+                    self.grooming.focused_since = Some(std::time::Instant::now());
+                }
+                self.screen = s;
+            }
+            Action::StartAccept => self.start_accept(),
+            Action::PlacementMove(d) => self.placement_move(d),
+            Action::Accept => self.accept(),
+            Action::CancelPlacement => self.grooming.placement = None,
+            Action::StartBounce => self.start_bounce(),
+            Action::Bounce => self.bounce(),
+            Action::CancelBounce => self.grooming.bounce_text = None,
+            Action::Park => self.park(),
             Action::GroomMode(m) => self.groom_mode(m),
             Action::GroomMove(d) => self.groom_move(d),
             Action::GroomEpic { delta, skip_empty } => self.groom_epic(delta, skip_empty),

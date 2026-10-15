@@ -113,7 +113,11 @@ impl App {
                         entry.error = None;
                         entry.fetched = Some(Instant::now());
                         self.offline = false;
+                        let session = (id == ListId::TeamOpen).then(|| self.session_anchor());
                         self.store.absorb(id, issues);
+                        if let Some((epic, focus)) = session {
+                            self.session_keep(epic, focus);
+                        }
                         self.store.fetched_at = Some(chrono::Utc::now().timestamp());
                         if self.persist_cache {
                             let store = self.store.clone();
@@ -200,6 +204,9 @@ impl App {
                     {
                         undo_swap(rows, &a, &b);
                     }
+                }
+                if matches!(what, "Accept" | "Bounce" | "Park") {
+                    self.session_done(&key, what, &result);
                 }
                 if what == "Comment" {
                     self.posting = None;
