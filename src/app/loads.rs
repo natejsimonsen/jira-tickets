@@ -12,13 +12,7 @@ const DETAIL_FRESH: Duration = Duration::from_secs(60);
 impl App {
     pub fn refresh_all(&mut self) {
         self.last_refresh = Instant::now();
-        // The report is a local file read: it needs no client, so it runs on its own thread, not `spawn`.
-        let dir = self.cfg.report_dir();
-        let (tx, ctx) = (self.tx.clone(), self.ctx.clone());
-        std::thread::spawn(move || {
-            let _ = tx.send(Msg::ReportLoaded(crate::report::latest(&dir)));
-            ctx.request_repaint();
-        });
+        self.load_report();
         let cfg = self.cfg.clone();
         let fields: Vec<String> = jira::LIST_FIELDS.iter().map(|s| s.to_string()).collect();
         self.load_list(ListId::TeamOpen, store::jql_team_open(&cfg, !self.members_disabled), fields.clone());
@@ -102,6 +96,17 @@ impl App {
     }
 
     /// `force` refetches even a detail fetched within DETAIL_FRESH.
+    /// Reads the newest report in `report_dir`. A local file read needs no client, so it runs on its own thread,
+    /// not `spawn`.
+    pub(super) fn load_report(&self) {
+        let dir = self.cfg.report_dir();
+        let (tx, ctx) = (self.tx.clone(), self.ctx.clone());
+        std::thread::spawn(move || {
+            let _ = tx.send(Msg::ReportLoaded(crate::report::latest(&dir)));
+            ctx.request_repaint();
+        });
+    }
+
     pub fn load_detail(&mut self, key: &str, force: bool) {
         if !should_load(self.client.is_some(), self.detail_loading.contains(key)) {
             return;

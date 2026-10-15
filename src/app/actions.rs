@@ -63,6 +63,18 @@ pub enum Action {
     Verdict(crate::grooming::Verdict),
     /// Clears the previous pre-check row's verdict and moves back to it.
     UndoVerdict,
+    /// Adds or removes a needs-detail code on the pre-check row under the cursor (`grooming::toggle_code`).
+    ToggleCode(crate::grooming::Code),
+    /// Opens the pre-check summary dialog.
+    OpenSummary,
+    /// Closes the pre-check summary dialog.
+    CloseSummary,
+    /// Transitions the summary's promoted tickets `New → Planning`, then writes the report.
+    Promote,
+    /// Answers "Report for today exists. Overwrite?".
+    Overwrite(bool),
+    /// The pre-check focus moved to this issue: fetch its full detail (description) without selecting it.
+    GroomFocusDetail(String),
 }
 
 impl App {
@@ -135,6 +147,15 @@ impl App {
             Action::GroomEpic { delta, skip_empty } => self.groom_epic(delta, skip_empty),
             Action::Verdict(v) => self.groom_verdict(v),
             Action::UndoVerdict => self.groom_undo(),
+            Action::ToggleCode(c) => self.groom_toggle_code(c),
+            Action::OpenSummary => self.grooming.summary_open = self.grooming.mode == super::GroomMode::PreCheck,
+            Action::CloseSummary => self.grooming.summary_open = false,
+            Action::Promote => self.promote(),
+            Action::Overwrite(yes) => self.overwrite_report(yes),
+            Action::GroomFocusDetail(key) => {
+                self.load_detail(&key, false);
+                self.grooming.detail_for = Some(key);
+            }
             Action::Refresh => {
                 self.refresh_all();
                 // A quick filter's, No team label's or the text search is part of what's shown; rerun it

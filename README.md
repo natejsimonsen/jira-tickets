@@ -62,6 +62,14 @@ Only a token you paste is saved. Signing out deletes that file.
 | `c` | Copy the issue link |
 | `⌘Enter` | Post the comment |
 | **Grooming** | |
+| `r` | Ready |
+| `w/n/e` | Unclear what, unclear when, or empty |
+| `u` | Undo the last verdict |
+| `Enter` | Pre-check summary and Promote |
+| `y` | Accept into Ready for Work |
+| `b` | Bounce back to New |
+| `p` | Park in Backlog |
+| `]/[` | Next or previous epic |
 | `Tab` | Switch between Pre-check and Session |
 | **Pickers and Edit** | |
 | `j/k` or `↑/↓` | Move |

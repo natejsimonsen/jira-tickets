@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 
 use crate::config;
 use crate::jira::Issue;
-use crate::report::{Badge, Report};
+use crate::report::{Badge, EpicRef, NeedsDetailEpic, NeedsDetailRow, PlanningRow, PromotedEpic, Report};
 
 /// Why a ticket needs more detail before it can be promoted.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -91,6 +91,121 @@ pub fn plan_promotion(verdicts: &[(String, Verdict)], cap: usize) -> Promotion {
         }
     }
     p
+}
+
+/// The verdict after a code key (`w`, `n`, `e`): adds `code` to a needs-detail verdict or takes it away; taking away
+/// the last code leaves the ticket ready. An unjudged or ready ticket starts a needs-detail verdict with it.
+pub fn toggle_code(v: Option<&Verdict>, code: Code) -> Verdict {
+    match v {
+        Some(Verdict::NeedsDetail(codes)) if codes.contains(&code) => {
+            let rest: Vec<Code> = codes.iter().copied().filter(|c| *c != code).collect();
+            if rest.is_empty() { Verdict::Ready } else { Verdict::NeedsDetail(rest) }
+        }
+        Some(Verdict::NeedsDetail(codes)) => Verdict::NeedsDetail(codes.iter().copied().chain([code]).collect()),
+        _ => Verdict::NeedsDetail(vec![code]),
+    }
+}
+
+/// The promotion plan over the candidates in rank order, each with its verdict. Verdicts for keys that are no
+/// longer candidates (an old report's) are ignored, and unjudged candidates are left out.
+pub fn promote_order(verdicts: &BTreeMap<String, Verdict>, candidates_in_rank_order: &[String], cap: usize) -> Promotion {
+    let judged: Vec<(String, Verdict)> = candidates_in_rank_order.iter().filter_map(|k| verdicts.get(k).map(|v| (k.clone(), v.clone()))).collect();
+    plan_promotion(&judged, cap)
+}
+
+/// Candidates with no verdict yet.
+pub fn unjudged(verdicts: &BTreeMap<String, Verdict>, candidates_in_rank_order: &[String]) -> usize {
+    candidates_in_rank_order.iter().filter(|k| !verdicts.contains_key(*k)).count()
+}
+
+/// A candidate as the report needs it, taken when Promote starts.
+#[derive(Clone, Debug)]
+pub struct RunRow {
+    pub key: String,
+    pub summary: String,
+    pub rank: u32,
+    pub age: String,
+    /// `YYYY-MM-DD`.
+    pub created: String,
+    pub epic: Option<EpicRef>,
+}
+
+/// Quotes a JQL value unless it is one plain word.
+fn jql_value(v: &str) -> String {
+    if !v.is_empty() && v.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-') { v.to_string() } else { crate::store::jql_quote(v) }
+}
+
+/// The pre-check's query as the report header names it: the team's `New` tickets in rank order.
+pub fn pre_check_jql(project: &str, team_label: &str, status_new: &str) -> String {
+    format!("project = {} AND labels = {} AND status = {} ORDER BY rank ASC", jql_value(project), jql_value(team_label), jql_value(status_new))
+}
+
+/// The tickets already in Ready for Work under the promoted epics, in rank order.
+pub fn siblings_jql(project: &str, status_ready: &str, parents: &[String]) -> String {
+    format!(
+        "project = {} AND status = {} AND parent in ({}) ORDER BY Rank ASC",
+        crate::store::jql_quote(project),
+        crate::store::jql_quote(status_ready),
+        parents.join(", ")
+    )
+}
+
+/// The report's "Planning — by epic": the promoted rows grouped by epic, most promoted first, then epic key, with
+/// "(no epic)" last among equals. Each epic lists its Ready for Work `siblings` (in rank order) with their 1-based
+/// position among that epic's Ready tickets.
+pub fn promoted_epics(promoted: &[&RunRow], siblings: &[Issue]) -> Vec<PromotedEpic> {
+    let mut by_epic: Vec<PromotedEpic> = Vec::new();
+    for r in promoted {
+        let key = r.epic.as_ref().map(|e| e.key.as_str());
+        let at = match by_epic.iter().position(|e| e.epic.as_ref().map(|e| e.key.as_str()) == key) {
+            Some(i) => i,
+            None => {
+                let existing_ready = key
+                    .map(|k| {
+                        siblings
+                            .iter()
+                            .filter(|s| s.parent_key.as_deref() == Some(k))
+                            .enumerate()
+                            .map(|(n, s)| (s.key.clone(), s.summary.clone(), n as u32 + 1))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                by_epic.push(PromotedEpic { epic: r.epic.clone(), existing_ready, candidates: vec![] });
+                by_epic.len() - 1
+            }
+        };
+        by_epic[at].candidates.push(PlanningRow {
+            key: r.key.clone(),
+            summary: r.summary.clone(),
+            rank: Some(r.rank),
+            age: Some(r.age.clone()),
+            epic: key.map(String::from),
+        });
+    }
+    by_epic.sort_by_key(|e| (Reverse(e.candidates.len()), e.epic.is_none(), e.epic.as_ref().map(|e| e.key.clone())));
+    by_epic
+}
+
+/// The report's "Needs detail": the first `cap` rows in rank order, grouped by epic in the order their first row
+/// ranks, and the count before the cap.
+pub fn needs_detail_epics(rows: &[(&RunRow, Vec<Code>)], cap: usize) -> (Vec<NeedsDetailEpic>, usize) {
+    let mut out: Vec<NeedsDetailEpic> = Vec::new();
+    for (r, codes) in rows.iter().take(cap) {
+        let key = r.epic.as_ref().map(|e| e.key.as_str());
+        let row = NeedsDetailRow {
+            key: r.key.clone(),
+            summary: r.summary.clone(),
+            rank: Some(r.rank),
+            created: Some(r.created.clone()),
+            codes: codes.iter().map(|c| c.slug().to_string()).collect(),
+            epic: key.map(String::from),
+        };
+        match out.iter_mut().find(|e| e.epic.as_ref().map(|e| e.key.as_str()) == key) {
+            Some(e) => e.rows.push(row),
+            None => out.push(NeedsDetailEpic { epic: r.epic.clone(), rows: vec![row] }),
+        }
+    }
+    (out, rows.len())
 }
 
 /// A live-session decision on a ticket.
@@ -274,5 +389,81 @@ mod tests {
         assert!(bounce_comment_ok("Needs a success condition.\nWhich clusters?"));
         assert!(!bounce_comment_ok("  "));
         assert!(!bounce_comment_ok("a\nb\nc"));
+    }
+
+    #[test]
+    fn code_keys_toggle() {
+        use Code::*;
+        assert_eq!(toggle_code(None, UnclearWhen), Verdict::NeedsDetail(vec![UnclearWhen]));
+        assert_eq!(toggle_code(Some(&Verdict::Ready), Empty), Verdict::NeedsDetail(vec![Empty]));
+        let one = Verdict::NeedsDetail(vec![UnclearWhat]);
+        assert_eq!(toggle_code(Some(&one), UnclearWhen), Verdict::NeedsDetail(vec![UnclearWhat, UnclearWhen]), "codes add up");
+        assert_eq!(toggle_code(Some(&one), UnclearWhat), Verdict::Ready, "removing the last code leaves it ready");
+        let two = Verdict::NeedsDetail(vec![UnclearWhat, Empty]);
+        assert_eq!(toggle_code(Some(&two), UnclearWhat), Verdict::NeedsDetail(vec![Empty]));
+    }
+
+    #[test]
+    fn promote_order_follows_rank_not_the_map() {
+        let mut v = BTreeMap::new();
+        for k in ["CI-10", "CI-2", "CI-3", "CI-99"] {
+            v.insert(k.to_string(), Verdict::Ready);
+        }
+        v.insert("CI-5".to_string(), Verdict::NeedsDetail(vec![Code::Empty]));
+        // CI-99 has a verdict (from an old report) but is no longer a candidate; CI-7 is unjudged.
+        let rank: Vec<String> = ["CI-3", "CI-10", "CI-5", "CI-7", "CI-2"].map(String::from).to_vec();
+        let p = promote_order(&v, &rank, 2);
+        assert_eq!(p.promoted, ["CI-3", "CI-10"]);
+        assert_eq!(p.held_back, ["CI-2"]);
+        assert_eq!(p.needs_detail, [("CI-5".to_string(), vec![Code::Empty])]);
+        assert_eq!(unjudged(&v, &rank), 1);
+    }
+
+    fn run_row(key: &str, epic: Option<&str>, rank: u32) -> RunRow {
+        RunRow {
+            key: key.into(),
+            summary: format!("S {key}"),
+            rank,
+            age: "older".into(),
+            created: "2026-09-01".into(),
+            epic: epic.map(|e| crate::report::EpicRef { key: e.into(), summary: format!("Epic {e}"), numeric_id: Some("1".into()), status: None }),
+        }
+    }
+
+    #[test]
+    fn report_epics_order_by_count_then_key_with_ready_siblings() {
+        let rows = [run_row("CI-1", Some("E-2"), 1), run_row("CI-2", Some("E-1"), 2), run_row("CI-3", Some("E-2"), 3), run_row("CI-4", None, 4)];
+        let ready = |k: &str, e: &str| Issue { key: k.into(), summary: format!("R {k}"), parent_key: Some(e.into()), ..Default::default() };
+        let sib = [ready("CI-50", "E-2"), ready("CI-51", "E-1"), ready("CI-52", "E-2")];
+        let refs: Vec<&RunRow> = rows.iter().collect();
+        let out = promoted_epics(&refs, &sib);
+        let keys: Vec<Option<&str>> = out.iter().map(|e| e.epic.as_ref().map(|e| e.key.as_str())).collect();
+        assert_eq!(keys, [Some("E-2"), Some("E-1"), None], "most promoted first, then key, no epic last among equals");
+        assert_eq!(out[0].candidates.iter().map(|c| c.key.as_str()).collect::<Vec<_>>(), ["CI-1", "CI-3"]);
+        assert_eq!(out[0].existing_ready, [("CI-50".to_string(), "R CI-50".to_string(), 1), ("CI-52".to_string(), "R CI-52".to_string(), 2)]);
+        assert_eq!(out[1].existing_ready, [("CI-51".to_string(), "R CI-51".to_string(), 1)]);
+        assert!(out[2].existing_ready.is_empty());
+    }
+
+    #[test]
+    fn needs_detail_is_capped_and_counted() {
+        let rows: Vec<RunRow> = (1..=5).map(|i| run_row(&format!("CI-{i}"), if i % 2 == 0 { Some("E-1") } else { None }, i)).collect();
+        let nd: Vec<(&RunRow, Vec<Code>)> = rows.iter().map(|r| (r, vec![Code::UnclearWhen])).collect();
+        let (epics, total) = needs_detail_epics(&nd, 3);
+        assert_eq!(total, 5);
+        assert_eq!(epics.iter().map(|e| e.rows.len()).sum::<usize>(), 3);
+        assert_eq!(epics[0].epic, None, "groups in the order their first row ranks");
+        assert_eq!(epics[0].rows.iter().map(|r| r.key.as_str()).collect::<Vec<_>>(), ["CI-1", "CI-3"]);
+        assert_eq!(epics[1].rows[0].codes, ["unclear-when"]);
+    }
+
+    #[test]
+    fn pre_check_and_sibling_queries() {
+        assert_eq!(pre_check_jql("CI", "PLAT", "New"), "project = CI AND labels = PLAT AND status = New ORDER BY rank ASC");
+        assert_eq!(pre_check_jql("CI", "Platform Team", "New"), "project = CI AND labels = \"Platform Team\" AND status = New ORDER BY rank ASC");
+        assert_eq!(
+            siblings_jql("CI", "Ready for Work", &["CI-79".into(), "CI-9".into()]),
+            "project = \"CI\" AND status = \"Ready for Work\" AND parent in (CI-79, CI-9) ORDER BY Rank ASC"
+        );
     }
 }

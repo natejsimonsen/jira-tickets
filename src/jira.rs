@@ -511,9 +511,9 @@ pub mod tests {
     pub static WRITE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     /// Sets READ_ONLY for the guard's lifetime and always restores false on drop.
-    struct ReadOnlyGuard;
+    pub(crate) struct ReadOnlyGuard;
     impl ReadOnlyGuard {
-        fn new() -> Self {
+        pub(crate) fn new() -> Self {
             READ_ONLY.store(true, Ordering::Relaxed);
             ReadOnlyGuard
         }

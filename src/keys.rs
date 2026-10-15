@@ -53,6 +53,14 @@ pub const BINDINGS: &[KeyBinding] = &[
     b(Group::Issues, "J/K", "Move down or up in rank"),
     b(Group::Issues, "c", "Copy the issue link"),
     b(Group::Issues, "⌘Enter", "Post the comment"),
+    b(Group::Grooming, "r", "Ready"),
+    b(Group::Grooming, "w/n/e", "Unclear what, unclear when, or empty"),
+    b(Group::Grooming, "u", "Undo the last verdict"),
+    b(Group::Grooming, "Enter", "Pre-check summary and Promote"),
+    b(Group::Grooming, "y", "Accept into Ready for Work"),
+    b(Group::Grooming, "b", "Bounce back to New"),
+    b(Group::Grooming, "p", "Park in Backlog"),
+    b(Group::Grooming, "]/[", "Next or previous epic"),
     b(Group::Grooming, "Tab", "Switch between Pre-check and Session"),
     b(Group::Pickers, "j/k, ↑/↓", "Move"),
     b(Group::Pickers, "Tab/⇧Tab", "Next or previous field"),
@@ -124,6 +132,10 @@ pub enum HintContext {
     BrowseSearch,
     /// The Grooming screen in Pre-check mode.
     GroomPreCheck,
+    /// The pre-check summary dialog: Enter promotes.
+    GroomSummary,
+    /// The "report for today exists" confirm.
+    GroomOverwrite,
     /// The Grooming screen in Session mode.
     GroomSession,
 }
@@ -141,6 +153,17 @@ pub enum Focus {
     Composer,
     /// Some other field: plain letters would type into it.
     OtherText,
+}
+
+/// What the Grooming screen is showing, for the hint bar.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum GroomHint {
+    PreCheck,
+    /// The pre-check summary dialog is open.
+    Summary,
+    /// The overwrite confirm is open.
+    Overwrite,
+    Session,
 }
 
 /// Which kind of picker is open.
@@ -165,8 +188,8 @@ pub struct HintState {
     pub read_only: bool,
     /// A screen that is not built yet (Team, Roadmap).
     pub placeholder: bool,
-    /// The Grooming screen is showing: `Some(true)` in Session mode, `Some(false)` in Pre-check.
-    pub grooming: Option<bool>,
+    /// The Grooming screen is showing, and what it shows.
+    pub grooming: Option<GroomHint>,
 }
 
 impl HintState {
@@ -190,12 +213,15 @@ pub fn hint_context(s: HintState) -> HintContext {
     match (help_open, goto_open, picker) {
         (true, _, _) => HintContext::Help,
         _ if placeholder => HintContext::Placeholder,
-        _ if grooming == Some(true) => HintContext::GroomSession,
-        _ if grooming == Some(false) => HintContext::GroomPreCheck,
+        // An open picker or go-to box owns the bar on every screen, Grooming included.
         (_, _, Some(PickerHint::Edit)) => HintContext::EditPicker,
         (_, _, Some(PickerHint::Assign)) => HintContext::AssignPicker,
         (_, _, Some(PickerHint::Other)) => HintContext::Picker,
         (_, true, None) => HintContext::GoTo,
+        _ if grooming == Some(GroomHint::PreCheck) => HintContext::GroomPreCheck,
+        _ if grooming == Some(GroomHint::Summary) => HintContext::GroomSummary,
+        _ if grooming == Some(GroomHint::Overwrite) => HintContext::GroomOverwrite,
+        _ if grooming == Some(GroomHint::Session) => HintContext::GroomSession,
         _ => match focus {
             Focus::Search { clear: true, plain: true } => HintContext::SearchText,
             Focus::Search { clear: true, plain: false } => HintContext::Search,
@@ -248,7 +274,17 @@ pub fn hints(c: HintContext) -> &'static [Hint] {
             &[K("?"), W("help")],
         ],
         HintContext::Placeholder => &[&[K("⌘1"), W("Issues")], &[K("?"), W("help")]],
-        HintContext::GroomPreCheck | HintContext::GroomSession => &[&[K("Tab"), W("switch mode")], &[K("⌘1"), W("Issues")], &[K("?"), W("help")]],
+        HintContext::GroomPreCheck => &[
+            &[K("j/k"), W("or"), K("↑/↓"), W("move")],
+            &[K("r"), W("ready")],
+            &[K("w/n/e"), W("code")],
+            &[K("u"), W("undo")],
+            &[K("Enter"), W("summary")],
+            &[K("Tab"), W("session")],
+        ],
+        HintContext::GroomSummary => &[&[K("Enter"), W("promote")], &[K("Esc"), W("cancel")]],
+        HintContext::GroomOverwrite => &[&[K("Enter"), W("overwrite")], &[K("Esc"), W("keep the old one")]],
+        HintContext::GroomSession => &[&[K("Tab"), W("switch mode")], &[K("⌘1"), W("Issues")], &[K("?"), W("help")]],
         HintContext::SignIn => &[&[K("Enter"), W("sign in")]],
         HintContext::Browse => &[&[K("j/k"), W("or"), K("↑/↓"), W("move")], &[K("⌘K"), W("go to")], &[K("⌘F"), W("search")], &[K("?"), W("help")]],
         HintContext::BrowseSearch => {
@@ -321,7 +357,8 @@ mod tests {
         assert!(t.contains("| `⌘Enter` | Post the comment |\n"));
         assert!(!t.contains("Close the go-to box"), "the go-to bar shows its own Esc");
         assert!(t.contains("| `j/k` or `↑/↓` | Next or previous issue |\n"));
-        assert!(t.contains("| **Grooming** | |\n| `Tab` | Switch between Pre-check and Session |\n"));
+        assert!(t.contains("| **Grooming** | |\n| `r` | Ready |\n"));
+        assert!(t.contains("| `Tab` | Switch between Pre-check and Session |\n| **Pickers and Edit** | |\n"));
         assert_eq!(t.matches("| **").count(), 4);
     }
 
@@ -365,11 +402,15 @@ mod tests {
         assert!(!bar.contains("⌘Enter") && !bar.contains("draft"), "read-only has no composer, so no composer keys: {bar}");
         assert_eq!(hint_text(hints(Help)), "? or Esc close");
         assert_eq!(hint_text(hints(SignIn)), "Enter sign in");
-        let groom = |session| HintState { grooming: Some(session), has_selection: true, ..HintState::new(Focus::None) };
-        assert_eq!(hint_context(groom(false)), GroomPreCheck, "the Issues selection does not leak onto Grooming");
-        assert_eq!(hint_context(groom(true)), GroomSession);
-        assert_eq!(hint_context(HintState { help_open: true, ..groom(true) }), Help, "help wins on Grooming too");
-        assert_eq!(hint_text(hints(GroomPreCheck)), "Tab switch mode · ⌘1 Issues · ? help");
+        let groom = |g| HintState { grooming: Some(g), has_selection: true, ..HintState::new(Focus::None) };
+        assert_eq!(hint_context(groom(GroomHint::PreCheck)), GroomPreCheck, "the Issues selection does not leak onto Grooming");
+        assert_eq!(hint_context(groom(GroomHint::Session)), GroomSession);
+        assert_eq!(hint_context(groom(GroomHint::Summary)), GroomSummary);
+        assert_eq!(hint_context(groom(GroomHint::Overwrite)), GroomOverwrite);
+        assert_eq!(hint_context(HintState { help_open: true, ..groom(GroomHint::Session) }), Help, "help wins on Grooming too");
+        assert_eq!(hint_text(hints(GroomPreCheck)), "j/k or ↑/↓ move · r ready · w/n/e code · u undo · Enter summary · Tab session");
+        assert_eq!(hint_text(hints(GroomSummary)), "Enter promote · Esc cancel");
+        assert_eq!(hint_text(hints(GroomOverwrite)), "Enter overwrite · Esc keep the old one");
         assert_eq!(hint_text(hints(GroomSession)), "Tab switch mode · ⌘1 Issues · ? help");
         assert_eq!(hint_text(hints(GoTo)), "Enter open · Esc close");
         assert_eq!(hint_text(hints(Search)), "Enter run as JQL · Esc clear", "one Enter wording for every search text");
@@ -380,6 +421,15 @@ mod tests {
             hint_text(hints(Selected)),
             "j/k or ↑/↓ move · t transition · a assign · s sprint · e edit · l label · J/K rank · c copy · ⌘O open · ? help"
         );
+    }
+
+    #[test]
+    fn an_open_picker_or_go_to_owns_the_bar_on_grooming() {
+        let on_grooming = |picker, goto_open| HintState { picker, goto_open, grooming: Some(GroomHint::PreCheck), ..HintState::new(Focus::None) };
+        assert_eq!(hint_context(on_grooming(Some(PickerHint::Other), false)), HintContext::Picker);
+        assert_eq!(hint_context(on_grooming(Some(PickerHint::Edit), false)), HintContext::EditPicker);
+        assert_eq!(hint_context(on_grooming(None, true)), HintContext::GoTo);
+        assert_eq!(hint_context(on_grooming(None, false)), HintContext::GroomPreCheck);
     }
 
     #[test]

@@ -267,7 +267,7 @@ pub fn hint_bar_fill(p: &Palette) -> egui::Color32 {
 pub fn hints_panel(app: &App, ui: &mut Ui, p: &Palette) {
     use crate::app::Screen;
     let placeholder = !matches!(app.screen, Screen::Issues | Screen::Grooming);
-    let grooming = (app.screen == Screen::Grooming).then_some(app.grooming.mode == crate::app::GroomMode::Session);
+    let grooming = (app.screen == Screen::Grooming).then(|| crate::views::grooming::hint(&app.grooming));
     let edit = app.picker.as_ref().map(|pk| match pk {
         crate::app::Picker::Edit { .. } => crate::keys::PickerHint::Edit,
         crate::app::Picker::Assign { .. } => crate::keys::PickerHint::Assign,

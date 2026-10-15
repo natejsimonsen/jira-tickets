@@ -17,10 +17,11 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
         app.actions.push(Action::ToggleHelp);
     }
     egui::Area::new(egui::Id::new("help")).order(egui::Order::Tooltip).anchor(egui::Align2::CENTER_CENTER, vec2(0.0, 0.0)).show(ctx, |ui| {
-        // Issues on the left; Pickers then Global on the right (the columns end closer). Each column is as wide as its widest key cell
-        // plus 16 plus its widest action, so the panel has 24 px on every side and no dead space.
-        let left = [Group::Issues];
-        let right = [Group::Pickers, Group::Global];
+        // Issues then Pickers on the left; Grooming then Global on the right (the closest balance of the four, 15 to
+        // 17 rows). Each column is as wide as its widest key cell plus 16 plus its widest action, so the panel has
+        // 24 px on every side and no dead space.
+        let left = [Group::Issues, Group::Pickers];
+        let right = [Group::Grooming, Group::Global];
         let measure = |groups: &[Group]| {
             let rows = BINDINGS.iter().filter(|k| groups.contains(&k.group));
             let keys: Vec<f32> = rows.clone().map(|k| keys_width(ui, k.keys, p)).collect();
@@ -50,10 +51,12 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                     ui.allocate_ui_with_layout(vec2(lw, 0.0), egui::Layout::top_down(egui::Align::Min), |ui| {
                         ui.set_width(lw);
                         group(ui, p, Group::Issues, lk);
+                        ui.add_space(section_gap(row, header));
+                        group(ui, p, Group::Pickers, lk);
                     });
                     ui.allocate_ui_with_layout(vec2(rw, 0.0), egui::Layout::top_down(egui::Align::Min), |ui| {
                         ui.set_width(rw);
-                        group(ui, p, Group::Pickers, rk);
+                        group(ui, p, Group::Grooming, rk);
                         ui.add_space(section_gap(row, header));
                         group(ui, p, Group::Global, rk);
                     });
@@ -366,20 +369,23 @@ mod tests {
             assert_eq!(block, super::ROW_PITCH, "header {header}");
         }
         assert_eq!(super::section_gap(18.0, 15.0), super::row_gap(18.0) + 11.0);
-        // Left: 11 Issues rows; right: 4 Pickers, a header block, 6 Global: last rows level.
+        // Left: 11 Issues rows, a header block, 3 Pickers; right: 9 Grooming, a header block, 7 Global. Both
+        // second sections stay on the 34 grid, so the right column ends exactly two rows lower.
         let (h, pitch) = (15.0, super::ROW_PITCH);
-        let left = h + 8.0 + 10.0 * pitch;
-        let right = h + 8.0 + 3.0 * pitch + pitch + (super::section_gap(18.0, h) - super::row_gap(18.0)) + h + 8.0 + 5.0 * pitch;
-        assert_eq!(left, right);
+        let block = super::section_gap(18.0, h) - super::row_gap(18.0) + h + 8.0;
+        let left = h + 8.0 + 10.0 * pitch + pitch + block + 2.0 * pitch;
+        let right = h + 8.0 + 8.0 * pitch + pitch + block + 6.0 * pitch;
+        assert_eq!(right - left, 2.0 * pitch);
     }
 
     #[test]
     fn help_columns_balance() {
         use crate::keys::{BINDINGS, Group};
         let n = |g: Group| BINDINGS.iter().filter(|k| k.group == g).count();
-        // Left: Issues; right: Pickers then Global (one more header). Within a row of each other.
-        let (left, right) = (n(Group::Issues), n(Group::Pickers) + n(Group::Global) + 1);
-        assert!(left.abs_diff(right) <= 1, "left {left} rows, right {right}");
+        // Left: Issues then Pickers; right: Grooming then Global (one header each). Every group shows, and the
+        // columns are within two rows of each other (15 and 17; no other split of the four comes closer).
+        let (left, right) = (n(Group::Issues) + n(Group::Pickers) + 1, n(Group::Grooming) + n(Group::Global) + 1);
+        assert!(left.abs_diff(right) <= 2, "left {left} rows, right {right}");
     }
 
     #[test]

@@ -3,6 +3,7 @@
 use super::actions::Action;
 use super::pickers::Picker;
 use super::{App, GroomMode, Screen};
+use crate::grooming::{Code, Verdict};
 use egui::{Key, KeyboardShortcut, Modifiers};
 
 impl App {
@@ -130,11 +131,61 @@ impl App {
 impl App {
     /// The Grooming screen's keys (`keys::Group::Grooming`).
     fn grooming_shortcuts(&mut self, ctx: &egui::Context) {
+        let key = |k: Key| ctx.input_mut(|i| i.consume_shortcut(&KeyboardShortcut::new(Modifiers::NONE, k)));
+        // The overwrite confirm, then the summary dialog, own the keyboard while open.
+        if self.grooming.pending_report.is_some() {
+            if key(Key::Enter) {
+                self.actions.push(Action::Overwrite(true));
+            } else if key(Key::Escape) {
+                self.actions.push(Action::Overwrite(false));
+            }
+            return;
+        }
+        if self.grooming.summary_open {
+            if key(Key::Enter) {
+                self.actions.push(Action::Promote);
+            } else if key(Key::Escape) {
+                self.actions.push(Action::CloseSummary);
+            }
+            return;
+        }
         if ctx.text_edit_focused() {
             return;
         }
-        if ctx.input_mut(|i| i.consume_shortcut(&KeyboardShortcut::new(Modifiers::NONE, Key::Tab))) {
+        if key(Key::Tab) {
             self.actions.push(Action::GroomMode(other_mode(self.grooming.mode)));
+        }
+        if key(Key::J) | key(Key::ArrowDown) {
+            self.actions.push(Action::GroomMove(1));
+        }
+        if key(Key::K) | key(Key::ArrowUp) {
+            self.actions.push(Action::GroomMove(-1));
+        }
+        match self.grooming.mode {
+            GroomMode::PreCheck => {
+                if key(Key::R) {
+                    self.actions.push(Action::Verdict(Verdict::Ready));
+                }
+                for (k, c) in [(Key::W, Code::UnclearWhat), (Key::N, Code::UnclearWhen), (Key::E, Code::Empty)] {
+                    if key(k) {
+                        self.actions.push(Action::ToggleCode(c));
+                    }
+                }
+                if key(Key::U) {
+                    self.actions.push(Action::UndoVerdict);
+                }
+                if key(Key::Enter) {
+                    self.actions.push(Action::OpenSummary);
+                }
+            }
+            GroomMode::Session => {
+                if key(Key::CloseBracket) {
+                    self.actions.push(Action::GroomEpic { delta: 1, skip_empty: true });
+                }
+                if key(Key::OpenBracket) {
+                    self.actions.push(Action::GroomEpic { delta: -1, skip_empty: true });
+                }
+            }
         }
     }
 }

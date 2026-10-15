@@ -88,12 +88,33 @@ pub struct GroomingState {
     pub bounce_text: Option<String>,
     /// When the focused ticket took focus, for the per-ticket timer.
     pub focused_since: Option<Instant>,
-    /// A Promote is in flight.
+    /// The pre-check summary dialog is open.
+    pub summary_open: bool,
+    /// The pre-check ticket whose detail was last asked for on focus.
+    pub detail_for: Option<String>,
+    /// A Promote is in flight: from its first transition until the report is written (or waits on the confirm).
     pub promoting: bool,
-    /// (key, step, error) for each transition Promote could not make.
+    /// Promote's transitions that have not answered yet.
+    pub promote_remaining: usize,
+    /// What the running Promote acts on, taken when it started.
+    pub promote_run: Option<PromoteRun>,
+    /// (key, summary, error) for each transition the last Promote could not make.
     pub promote_failures: Vec<(String, String, String)>,
-    /// The text of the last written report, for copy.
+    /// The text of the last report Promote rendered, for copy.
     pub last_summary: Option<String>,
+    /// A rendered report waiting on "Report for today exists. Overwrite?".
+    pub pending_report: Option<String>,
+}
+
+/// A Promote's inputs, frozen when it starts, so a refresh meanwhile cannot change the report.
+pub struct PromoteRun {
+    pub date: String,
+    /// Every candidate in rank order.
+    pub rows: Vec<crate::grooming::RunRow>,
+    /// The keys being transitioned, in rank order.
+    pub promoted: Vec<String>,
+    pub held_back: usize,
+    pub needs_detail: Vec<(String, Vec<crate::grooming::Code>)>,
 }
 
 pub struct Toast {

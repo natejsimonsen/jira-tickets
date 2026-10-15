@@ -52,12 +52,15 @@ pub enum Msg {
     BoardSprints(jira::Result<Vec<Sprint>>),
     /// The newest pre-check report in `report_dir` (None when there is none), read on every refresh.
     ReportLoaded(Option<(std::path::PathBuf, crate::report::Report)>),
+    /// Ready for Work tickets under the epics a Promote moved tickets into Planning for.
+    Siblings(jira::Result<Vec<Issue>>),
 }
 
 impl App {
     pub(crate) fn handle(&mut self, msg: Msg) {
         match msg {
             Msg::ReportLoaded(report) => self.report_loaded(report),
+            Msg::Siblings(result) => self.siblings_loaded(result),
             Msg::Login(Ok(login)) => {
                 self.token_error = None;
                 self.connect(login);
@@ -169,6 +172,8 @@ impl App {
                     Err(e) => self.toast(format!("Couldn't load {key}: {e}"), true),
                 }
             }
+            // Promote collects its own results and refreshes once after the batch, not once per ticket.
+            Msg::Done { key, what: "Promote", result } => self.promote_done(&key, result),
             Msg::Done { key, what, result } => {
                 if what == "Transition" {
                     // Only this issue's pending transition; another issue's stays for its own Done.
