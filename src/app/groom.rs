@@ -47,9 +47,14 @@ impl App {
         self.store.list(ListId::TeamOpen).iter().filter(|i| i.labels.iter().any(|l| l == label) && &i.status.name == ready).count()
     }
 
-    /// Keeps the report and pre-fills a verdict from it for every key that has none yet.
+    /// Keeps the newest report and, when it is a new one (another path than the one held), pre-fills a verdict
+    /// from it for every key that has none yet. Re-reading the same report on refresh never brings back a
+    /// verdict the user undid.
     pub(super) fn report_loaded(&mut self, report: Option<(PathBuf, crate::report::Report)>) {
-        if let Some((_, r)) = &report {
+        let held = self.grooming.report.as_ref().map(|(p, _)| p);
+        if let Some((path, r)) = &report
+            && held != Some(path)
+        {
             let keys = r.promoted.iter().map(|p| &p.key).chain(r.needs_detail.iter().map(|n| &n.key));
             for key in keys {
                 if !self.grooming.verdicts.contains_key(key)

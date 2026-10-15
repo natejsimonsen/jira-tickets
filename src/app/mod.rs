@@ -527,6 +527,21 @@ mod tests {
     }
 
     #[test]
+    fn same_report_again_does_not_bring_back_removed_verdicts() {
+        let mut app = App::for_test(cfg(), None);
+        let text = "# x — 2026-10-01\n\n## Planning — by epic\n\n### (no epic)\n\n- [CI-1](u) — a · rank 1 · older\n";
+        let at = |p: &str| Some((std::path::PathBuf::from(p), crate::report::parse(text)));
+        app.handle(Msg::ReportLoaded(at("/r/2026-10-01.md")));
+        assert!(app.grooming.verdicts.contains_key("CI-1"));
+        app.grooming.verdicts.remove("CI-1");
+        app.handle(Msg::ReportLoaded(at("/r/2026-10-01.md")));
+        assert!(!app.grooming.verdicts.contains_key("CI-1"), "a refresh re-reading the same report keeps the undo");
+        assert!(app.grooming.report.is_some(), "the report itself is still kept");
+        app.handle(Msg::ReportLoaded(at("/r/2026-10-02.md")));
+        assert_eq!(app.grooming.verdicts.get("CI-1"), Some(&crate::grooming::Verdict::Ready), "a new report prefills");
+    }
+
+    #[test]
     fn verdict_actions_set_and_undo() {
         let mut app = App::for_test(cfg(), None);
         app.screen = Screen::Grooming;
