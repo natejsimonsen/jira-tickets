@@ -1,6 +1,6 @@
 # Jira Tickets
 
-A fast native desktop app for working through Jira tickets, built with Rust and egui. It keeps a local cache so it opens instantly, searches and filters the team's issues from the keyboard, and shows each issue's description and comments with Jira's rich text rendered. Grooming, Team, and Roadmap screens are placeholders for now; plans 2 and 3 fill them in.
+A fast native desktop app for working through Jira tickets, built with Rust and egui. It keeps a local cache so it opens instantly, searches and filters the team's issues from the keyboard, and shows each issue's description and comments with Jira's rich text rendered. The Grooming screen walks the New column and runs grooming sessions; the Team and Roadmap screens are placeholders for now (plan 3).
 
 ## Install from source
 
@@ -19,7 +19,7 @@ The bundle is ad-hoc signed and has no icon yet.
 
 The config lives at `~/.config/jira-tickets/config.toml` (override with `JIRA_TICKETS_CONFIG`). On first run the app writes an example there and exits; edit it, then launch again. Set `site` and `email`, and adjust the scope (projects, team label, board or filter), team members, issue columns, and quick filters.
 
-The Issues view loads every the parent team sub-team listed under `[[scope.teams]]` (each with a `label`, `name`, and `board_id`; the defaults are PLAT · Platform and TOOLS · Developer Tools), plus `parent_board_id` for the parent board. `team_label` stays your own team and `board_id` the sprint board. A ticket counts as a team's when it carries the team's label or is assigned to one of the team's `members` (Jira display names or account ids, matched case-insensitively). Your own team's `members` default to `[team].members`; other teams have none unless you list them.
+The Issues view loads every the parent team sub-team listed under `[[scope.teams]]` (each with a `label`, `name`, and `board_id`; the defaults are PLAT · Platform and TOOLS · Developer Tools), plus `parent_board_id` for the parent board and `[scope] filter_id` for the saved filter the scope falls back on. `team_label` stays your own team and `board_id` the sprint board. A ticket counts as a team's when it carries the team's label or is assigned to one of the team's `members` (Jira display names or account ids, matched case-insensitively). Your own team's `members` default to `[team].members`; other teams have none unless you list them.
 
 Status pills are coloured by status name (falling back to the status category) and each epic gets a stable colour derived from its key, shown on its pills and as the left edge of each list row. Override either with `[issues.status_colors]` (status name, case-insensitive) or `[issues.epic_colors]` (epic key), mapping to `"#rrggbb"`.
 
@@ -87,6 +87,30 @@ The team picker offers All teams, each configured team, and No team label (ticke
 
 Known limitation: the TOOLS board also includes unlabelled tickets assigned to specific people. Those show under TOOLS only once the account ids are listed as TOOLS's `members` (the example config has them commented out); otherwise a label-based filter does not see them.
 
+## Grooming
+
+The Grooming screen (`⌘2`) has two modes, switched with `Tab`: Pre-check and Session.
+
+### Pre-check
+
+Pre-check walks the `New` column in rank order. Give each ticket a verdict: `r` ready, or `w` (unclear what), `n` (unclear when), `e` (empty), which toggle failure codes (a ticket may carry several). `u` undoes the last verdict. `Enter` opens the summary: the ready set in rank order, with tickets beyond `planning_cap` marked as held back, and a Promote button.
+
+Promote performs only `New → Planning` transitions. It sets no fields, no resolution, and posts no comment. Transitions that fail are collected and shown, and the rest continue.
+
+After promotion the app fetches the existing Ready for Work siblings of the promoted epics and then writes the report to `~/Documents/grooming-reports/YYYY-MM-DD.md` (change the directory with `[grooming] report_dir`). If a report for today already exists, the app asks before overwriting it.
+
+On launch and refresh the newest report in that directory is read. Its verdicts pre-fill Pre-check once per report file, and tickets show badges such as "needs detail: unclear-when (report 2026-10-07)" or "promoted by pre-check".
+
+### Session
+
+Session mode walks epics one at a time. The left rail lists epics with their Planning / Ready / New counts (P/R/N). `]` and `[` jump to the next or previous epic with something in Planning; with Shift they include the empty ones. The centre shows the epic's Ready for Work queue with its Planning candidates beneath. For the focused candidate:
+
+- `y` accepts it: `↑`/`↓` move a ghost row through the Ready queue and `Enter` commits the move to Ready for Work at that place. `Esc` cancels.
+- `b` bounces it back to `New`: type a one- or two-line comment and press `⌘Enter`. The comment is posted first, then the ticket moves to New. If the move fails, the comment stays posted and the box closes with a toast.
+- `p` parks it in Backlog.
+
+A timer runs per ticket and turns amber at 3 minutes and red at 5. The Ready ceiling pill in the header counts all Ready for Work tickets and turns amber past the soft ceiling (10) and red past the hard one (15). Both limits are configurable under `[grooming]`, and warnings never block anything.
+
 ## Developer switches
 
 - `JIRA_TICKETS_READONLY` blocks every write to Jira.
@@ -108,7 +132,7 @@ Screenshots need the `snapshot` feature:
 | File | Role |
 | --- | --- |
 | `src/main.rs` | Startup, config load, window options |
-| `src/app.rs` | App state, actions, keyboard shortcuts, background work |
+| `src/app/` | App state, actions, keyboard shortcuts, background work (module directory) |
 | `src/auth.rs` | Token lookup, saving, and sign-out |
 | `src/config.rs` | Config file, example, secret references |
 | `src/jira.rs` | Jira REST client, read-only guard |
@@ -124,4 +148,4 @@ Screenshots need the `snapshot` feature:
 | `src/views/pickers.rs` | Transition, assign, sprint, and edit pickers |
 | `src/snapshot.rs` | Offscreen screenshots (`snapshot` feature) |
 
-Grooming, Team, and Roadmap are placeholders until plans 2 and 3.
+Team and Roadmap are placeholders until plan 3. Grooming lives in `src/views/grooming.rs`, `src/app/groom.rs`, `src/grooming.rs`, and `src/report.rs`.

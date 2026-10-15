@@ -2,7 +2,7 @@
 
 Rust 2024 / eframe-egui 0.36 desktop Jira client for the Platform (PLAT) sub-team of the parent team.
 Spec (binding): `docs/superpowers/specs/2026-10-07-jira-tickets-design.md`. Plans: `docs/superpowers/plans/`.
-Plan 1 (foundation + Issues view) is done; plans 2 (Grooming) and 3 (Team, Roadmap) are written and waiting.
+Plans 1 (foundation + Issues view) and 2 (Grooming) are done; plan 3 (Team, Roadmap) is written and waiting.
 
 ## Build and test
 
@@ -24,6 +24,8 @@ Plan 1 (foundation + Issues view) is done; plans 2 (Grooming) and 3 (Team, Roadm
 - `App::spawn` silently no-ops without a client, so every action that spawns checks `client.is_some()` first,
   and loading flags are set only after `should_load(client_present, already_loading)` passes.
 - Every Jira write calls `jira::check_writable()` first; `JIRA_TICKETS_READONLY=1` blocks all writes.
+- `src/app/` is a directory module; `App::for_test` and `drain` build and pump an `App` headlessly in tests. Grooming writes go
+  through `spawn_write` with `check_writable` like every other write.
 - Search results carry a sequence number (`accept_search`); stale results are dropped.
 - Tokens from the config `api_token` reference (`op://` or `$(cmd)`) are resolved on every launch and never written
   to disk. Only a pasted token is saved. Do not change this.
@@ -42,5 +44,4 @@ Plan 1 (foundation + Issues view) is done; plans 2 (Grooming) and 3 (Team, Roadm
 
 ## Known follow-ups
 
-- Split `app.rs` (~1300 lines) into submodules and add a windowless `App` test constructor: plan 2, task 1.
 - Deferred minor findings from plan 1's reviews are listed in the plan files' "Hand-off" sections.

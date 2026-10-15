@@ -350,6 +350,13 @@ A per-ticket timer starts on focus, amber at 3 minutes, red at 5. The header
 shows total `Ready for Work` against the ceilings, amber past the soft
 ceiling and red past the hard one. Warnings never block.
 
+### Deviations (plan 2)
+
+- Prefill from a report happens once per report file, not on every refresh.
+- The session rail omits epics with 0 Planning, 0 Ready and 0 New.
+- Accept into an empty Ready queue makes one transition and no rank call.
+- A bounce whose transition fails keeps the posted comment and closes the box with a toast.
+
 ## 8. Team view
 
 One column per member in config order, plus "Unassigned" last. Each column
