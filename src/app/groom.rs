@@ -415,7 +415,8 @@ impl App {
     }
 
     /// Enter in placement: one transition to Ready for Work, then one rank call before (or after) the ghost's
-    /// neighbour. An empty Ready queue has nothing to rank against, so only the transition is made.
+    /// neighbour. An empty Ready queue has nothing to rank against, so only the transition is made. A rank that
+    /// fails after the move is its own answer ("Accept rank"): the ticket did move, so the store follows it.
     pub(super) fn accept(&mut self) {
         let Some(at) = self.grooming.placement else { return };
         let Some(key) = self.decidable() else { return };
@@ -424,11 +425,17 @@ impl App {
         self.grooming.deciding = Some(key.clone());
         let status = self.cfg.grooming.status_ready.clone();
         self.spawn_write(move |c, tx| {
-            let result = jira::check_writable().and_then(|_| transition_to(c, &key, &status)).and_then(|_| match (&before, &after) {
-                (None, None) => Ok(()),
-                _ => c.rank(&key, before.as_deref(), after.as_deref()),
-            });
-            let _ = tx.send(Msg::Done { key, what: "Accept", result });
+            let (what, result) = match jira::check_writable().and_then(|_| transition_to(c, &key, &status)) {
+                Err(e) => ("Accept", Err(e)),
+                Ok(()) => match (&before, &after) {
+                    (None, None) => ("Accept", Ok(())),
+                    _ => match c.rank(&key, before.as_deref(), after.as_deref()) {
+                        Ok(()) => ("Accept", Ok(())),
+                        Err(e) => ("Accept rank", Err(jira::Error::Other(accept_rank_failed(&key, &status, &e)))),
+                    },
+                },
+            };
+            let _ = tx.send(Msg::Done { key, what, result });
         });
     }
 
@@ -486,17 +493,18 @@ impl App {
             // The comment is on the ticket; only the move is left to retry.
             self.grooming.bounce_text = None;
         }
-        if result.is_err() {
+        // The move to Ready for Work happened even though its rank did not.
+        if result.is_err() && what != "Accept rank" {
             return;
         }
         let g = &self.cfg.grooming;
         let (status, category) = match what {
-            "Accept" => (g.status_ready.clone(), "indeterminate"),
+            "Accept" | "Accept rank" => (g.status_ready.clone(), "indeterminate"),
             "Bounce" => (g.status_new.clone(), "new"),
             _ => (g.status_backlog.clone(), "new"),
         };
         match what {
-            "Accept" => self.grooming.placement = None,
+            "Accept" | "Accept rank" => self.grooming.placement = None,
             "Bounce" => self.grooming.bounce_text = None,
             _ => {}
         }
@@ -538,6 +546,11 @@ impl App {
 /// The toast when a bounce's comment posted but its move failed.
 pub fn bounce_move_failed(key: &str, status: &str, e: &jira::Error) -> String {
     format!("Comment posted on {key}, but the move to {status} failed: {e}")
+}
+
+/// The toast when an accept's move to Ready for Work succeeded but its rank call failed.
+pub fn accept_rank_failed(key: &str, status: &str, e: &jira::Error) -> String {
+    format!("Moved {key} to {status}, but ranking failed: {e}")
 }
 
 /// "Promoted 9 to Planning", or "Promoted 8 of 10 to Planning, 2 failed".
@@ -884,6 +897,28 @@ mod tests {
         assert_eq!(w[1].2["rankBeforeIssue"], "CI-5", "before the first Ready ticket");
         assert!(app.grooming.placement.is_none());
         assert_eq!(app.store.get("CI-1").map(|i| i.status.name.as_str()), Some("Ready for Work"), "moved at once");
+    }
+
+    #[test]
+    fn an_accept_whose_rank_fails_still_moves_the_ticket() {
+        let _g = crate::jira::tests::WRITE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // The transition succeeds; the rank call has no route (404).
+        let (base, rx) = crate::jira::tests::stub_server(vec![
+            ("GET", "/rest/api/3/issue/CI-1/transitions", transitions_json()),
+            ("POST", "/rest/api/3/issue/CI-1/transitions", serde_json::json!({})),
+        ]);
+        let mut app = session_app(&base);
+        app.grooming.placement = Some(0);
+        app.actions.push(super::super::Action::Accept);
+        drain_until(&mut app, |a| a.grooming.deciding.is_none());
+        let w = writes(&rx);
+        assert_eq!(w.iter().filter(|(_, p, _)| p.ends_with("/transitions")).count(), 1, "{w:?}");
+        assert_eq!(app.store.get("CI-1").map(|i| i.status.name.as_str()), Some("Ready for Work"), "the move happened");
+        assert!(app.grooming.placement.is_none());
+        let (text, kind) = app.toast.as_ref().map(|t| (t.text.clone(), t.kind)).expect("a toast");
+        assert!(text.starts_with("Moved CI-1 to Ready for Work, but ranking failed: "), "{text}");
+        assert_eq!(kind, ToastKind::Error);
+        assert_ne!(app.session_focus().map(|i| i.key.as_str()), Some("CI-1"), "it left the Planning list");
     }
 
     #[test]

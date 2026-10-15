@@ -208,7 +208,7 @@ impl App {
                         undo_swap(rows, &a, &b);
                     }
                 }
-                if matches!(what, "Accept" | "Bounce" | "Bounce move" | "Park") {
+                if matches!(what, "Accept" | "Accept rank" | "Bounce" | "Bounce move" | "Park") {
                     self.session_done(&key, what, &result);
                 }
                 if what == "Comment" {
@@ -218,8 +218,8 @@ impl App {
                     }
                 }
                 let (text, kind) = match (&result, what) {
-                    // Its error already says what happened: comment posted, move failed.
-                    (Err(e), "Bounce move") => (e.to_string(), ToastKind::Error),
+                    // Their errors already say what happened: comment posted, move failed; moved, rank failed.
+                    (Err(e), "Bounce move" | "Accept rank") => (e.to_string(), ToastKind::Error),
                     _ => done_toast(what, &result),
                 };
                 self.toast_kind(text, kind);

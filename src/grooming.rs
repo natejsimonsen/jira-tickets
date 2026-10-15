@@ -153,7 +153,7 @@ pub fn siblings_jql(project: &str, status_ready: &str, parents: &[String]) -> St
 }
 
 /// The report's "Planning — by epic": the promoted rows grouped by epic, most promoted first, then epic key, with
-/// "(no epic)" last among equals. Each epic lists its Ready for Work `siblings` (in rank order) with their 1-based
+/// "(no epic)" always last. Each epic lists its Ready for Work `siblings` (in rank order) with their 1-based
 /// position among that epic's Ready tickets.
 pub fn promoted_epics(promoted: &[&RunRow], siblings: &[Issue]) -> Vec<PromotedEpic> {
     let mut by_epic: Vec<PromotedEpic> = Vec::new();
@@ -184,12 +184,12 @@ pub fn promoted_epics(promoted: &[&RunRow], siblings: &[Issue]) -> Vec<PromotedE
             epic: key.map(String::from),
         });
     }
-    by_epic.sort_by_key(|e| (Reverse(e.candidates.len()), e.epic.is_none(), e.epic.as_ref().map(|e| e.key.clone())));
+    by_epic.sort_by_key(|e| (e.epic.is_none(), Reverse(e.candidates.len()), e.epic.as_ref().map(|e| e.key.clone())));
     by_epic
 }
 
-/// The report's "Needs detail": the first `cap` rows in rank order, grouped by epic in the order their first row
-/// ranks, and the count before the cap.
+/// The report's "Needs detail": the first `cap` rows in rank order, grouped by epic (most rows first, then epic
+/// key, "(no epic)" always last; rows keep rank order), and the count before the cap.
 pub fn needs_detail_epics(rows: &[(&RunRow, Vec<Code>)], cap: usize) -> (Vec<NeedsDetailEpic>, usize) {
     let mut out: Vec<NeedsDetailEpic> = Vec::new();
     for (r, codes) in rows.iter().take(cap) {
@@ -207,6 +207,7 @@ pub fn needs_detail_epics(rows: &[(&RunRow, Vec<Code>)], cap: usize) -> (Vec<Nee
             None => out.push(NeedsDetailEpic { epic: r.epic.clone(), rows: vec![row] }),
         }
     }
+    out.sort_by_key(|e| (e.epic.is_none(), Reverse(e.rows.len()), e.epic.as_ref().map(|e| e.key.clone())));
     (out, rows.len())
 }
 
@@ -494,7 +495,7 @@ mod tests {
         let refs: Vec<&RunRow> = rows.iter().collect();
         let out = promoted_epics(&refs, &sib);
         let keys: Vec<Option<&str>> = out.iter().map(|e| e.epic.as_ref().map(|e| e.key.as_str())).collect();
-        assert_eq!(keys, [Some("E-2"), Some("E-1"), None], "most promoted first, then key, no epic last among equals");
+        assert_eq!(keys, [Some("E-2"), Some("E-1"), None], "most promoted first, then key, no epic last");
         assert_eq!(out[0].candidates.iter().map(|c| c.key.as_str()).collect::<Vec<_>>(), ["CI-1", "CI-3"]);
         assert_eq!(out[0].existing_ready, [("CI-50".to_string(), "R CI-50".to_string(), 1), ("CI-52".to_string(), "R CI-52".to_string(), 2)]);
         assert_eq!(out[1].existing_ready, [("CI-51".to_string(), "R CI-51".to_string(), 1)]);
@@ -508,9 +509,27 @@ mod tests {
         let (epics, total) = needs_detail_epics(&nd, 3);
         assert_eq!(total, 5);
         assert_eq!(epics.iter().map(|e| e.rows.len()).sum::<usize>(), 3);
-        assert_eq!(epics[0].epic, None, "groups in the order their first row ranks");
-        assert_eq!(epics[0].rows.iter().map(|r| r.key.as_str()).collect::<Vec<_>>(), ["CI-1", "CI-3"]);
-        assert_eq!(epics[1].rows[0].codes, ["unclear-when"]);
+        assert_eq!(epics[0].epic.as_ref().map(|e| e.key.as_str()), Some("E-1"), "\"(no epic)\" is last even with more rows");
+        assert_eq!(epics[0].rows[0].codes, ["unclear-when"]);
+        assert_eq!(epics[1].epic, None);
+        assert_eq!(epics[1].rows.iter().map(|r| r.key.as_str()).collect::<Vec<_>>(), ["CI-1", "CI-3"], "rows keep rank order");
+    }
+
+    #[test]
+    fn needs_detail_epics_order_by_count_then_key() {
+        let rows = [run_row("CI-1", Some("E-2"), 1), run_row("CI-2", Some("E-3"), 2), run_row("CI-3", Some("E-3"), 3), run_row("CI-4", Some("E-1"), 4)];
+        let nd: Vec<(&RunRow, Vec<Code>)> = rows.iter().map(|r| (r, vec![Code::Empty])).collect();
+        let (epics, _) = needs_detail_epics(&nd, 10);
+        let keys: Vec<Option<&str>> = epics.iter().map(|e| e.epic.as_ref().map(|e| e.key.as_str())).collect();
+        assert_eq!(keys, [Some("E-3"), Some("E-1"), Some("E-2")]);
+    }
+
+    #[test]
+    fn no_epic_is_last_in_planning_even_when_largest() {
+        let rows = [run_row("CI-1", None, 1), run_row("CI-2", None, 2), run_row("CI-3", Some("E-1"), 3)];
+        let refs: Vec<&RunRow> = rows.iter().collect();
+        let keys: Vec<Option<String>> = promoted_epics(&refs, &[]).iter().map(|e| e.epic.as_ref().map(|e| e.key.clone())).collect();
+        assert_eq!(keys, [Some("E-1".to_string()), None]);
     }
 
     #[test]
