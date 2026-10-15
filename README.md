@@ -19,7 +19,7 @@ The bundle is ad-hoc signed and has no icon yet.
 
 The config lives at `~/.config/jira-tickets/config.toml` (override with `JIRA_TICKETS_CONFIG`). On first run the app writes an example there and exits; edit it, then launch again. Set `site` and `email`, and adjust the scope (projects, team label, board or filter), team members, issue columns, and quick filters.
 
-The Issues view loads every the parent team sub-team listed under `[[scope.teams]]` (each with a `label`, `name`, and `board_id`; the defaults are PLAT · Platform and TOOLS · Developer Tools), plus `parent_board_id` for the parent board and `[scope] filter_id` for the saved filter the scope falls back on. `team_label` stays your own team and `board_id` the sprint board. A ticket counts as a team's when it carries the team's label or is assigned to one of the team's `members` (Jira display names or account ids, matched case-insensitively). Your own team's `members` default to `[team].members`; other teams have none unless you list them.
+The Issues view loads every the parent team sub-team listed under `[[scope.teams]]` (each with a `label`, `name`, and `board_id`; the defaults are PLAT · Platform and TOOLS · Developer Tools), plus `parent_board_id` for the parent board. In `[scope]`, `filter_id` is the PLAT board quick filter used for the report's board and epic links, and `parent_board_id` is the parent-team board linked in the report header. `team_label` stays your own team and `board_id` the sprint board. A ticket counts as a team's when it carries the team's label or is assigned to one of the team's `members` (Jira display names or account ids, matched case-insensitively). Your own team's `members` default to `[team].members`; other teams have none unless you list them.
 
 Status pills are coloured by status name (falling back to the status category) and each epic gets a stable colour derived from its key, shown on its pills and as the left edge of each list row. Override either with `[issues.status_colors]` (status name, case-insensitive) or `[issues.epic_colors]` (epic key), mapping to `"#rrggbb"`.
 
@@ -109,7 +109,7 @@ Session mode walks epics one at a time. The left rail lists epics with their Pla
 - `b` bounces it back to `New`: type a one- or two-line comment and press `⌘Enter`. The comment is posted first, then the ticket moves to New. If the move fails, the comment stays posted and the box closes with a toast.
 - `p` parks it in Backlog.
 
-A timer runs per ticket and turns amber at 3 minutes and red at 5. The Ready ceiling pill in the header counts all Ready for Work tickets and turns amber past the soft ceiling (10) and red past the hard one (15). Both limits are configurable under `[grooming]`, and warnings never block anything.
+A timer runs per ticket and turns amber at 3 minutes and red at 5. The Ready ceiling pill in the header reads "Ready for Work N · soft S · hard H", counts the team's (PLAT-labelled) Ready for Work tickets, and turns amber past the soft ceiling (10) and red past the hard one (15). Both limits are configurable under `[grooming]`, and warnings never block anything.
 
 ## Developer switches
 
