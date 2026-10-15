@@ -54,12 +54,14 @@ pub fn age_tag(created: &str, today: chrono::NaiveDate) -> String {
     }
 }
 
-/// Team tickets in `status_new`, keeping input order; `rank_pos` is 1-based over the whole input.
+/// Team tickets in `status_new`, keeping the input's rank order. `rank_pos` is the 1-based position within that
+/// team + `New` list (the pre-check query's `labels = TEAM AND status = New ORDER BY rank`), so other statuses and
+/// teams in the input do not count. Epics are numbered too; callers drop them afterwards (`filter::is_action_item`).
 pub fn new_candidates<'a>(issues: &[&'a Issue], team_label: &str, status_new: &str, today: chrono::NaiveDate) -> Vec<Candidate<'a>> {
     issues
         .iter()
+        .filter(|i| i.labels.iter().any(|l| l == team_label) && i.status.name == status_new)
         .enumerate()
-        .filter(|(_, i)| i.labels.iter().any(|l| l == team_label) && i.status.name == status_new)
         .map(|(n, i)| Candidate { issue: i, rank_pos: n as u32 + 1, age: age_tag(&i.created, today) })
         .collect()
 }
@@ -342,7 +344,8 @@ mod tests {
         let cands = new_candidates(&[&a, &b, &c, &d], "PLAT", "New", today());
         assert_eq!(
             cands.iter().map(|c| (c.issue.key.as_str(), c.rank_pos, c.age.as_str())).collect::<Vec<_>>(),
-            [("CI-1", 1, "new (1d)"), ("CI-4", 4, "older")]
+            [("CI-1", 1, "new (1d)"), ("CI-4", 2, "older")],
+            "positions count the team's New tickets only"
         );
     }
 

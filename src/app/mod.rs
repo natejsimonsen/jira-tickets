@@ -108,6 +108,9 @@ pub struct GroomingState {
     pub last_summary: Option<String>,
     /// A rendered report waiting on "Report for today exists. Overwrite?".
     pub pending_report: Option<String>,
+    /// Keys this run's Promote moved to Planning. They stay out of the pre-check and its report prefill until a
+    /// team list shows them out of `New`, so an eventually consistent search cannot offer them again.
+    pub retired: std::collections::HashSet<String>,
 }
 
 /// A Promote's inputs, frozen when it starts, so a refresh meanwhile cannot change the report.

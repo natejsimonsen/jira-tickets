@@ -114,6 +114,9 @@ impl App {
                         entry.fetched = Some(Instant::now());
                         self.offline = false;
                         let session = (id == ListId::TeamOpen).then(|| self.session_anchor());
+                        if id == ListId::TeamOpen {
+                            self.team_open_landed(&issues);
+                        }
                         self.store.absorb(id, issues);
                         if let Some((epic, focus)) = session {
                             self.session_keep(epic, focus);

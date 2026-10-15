@@ -45,7 +45,12 @@ pub struct IssueFilter {
 
 /// Issues that are action items: epics are containers and never listed.
 pub fn action_items<'a>(issues: &[&'a Issue]) -> Vec<&'a Issue> {
-    issues.iter().copied().filter(|i| !i.issue_type.eq_ignore_ascii_case("epic")).collect()
+    issues.iter().copied().filter(|i| is_action_item(i)).collect()
+}
+
+/// The issue is an action item, not an epic (`action_items`).
+pub fn is_action_item(issue: &Issue) -> bool {
+    !issue.issue_type.eq_ignore_ascii_case("epic")
 }
 
 /// Keys of the epics that carry `label` (exact, like team labels).

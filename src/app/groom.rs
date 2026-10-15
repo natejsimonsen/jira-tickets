@@ -33,21 +33,34 @@ pub fn step_epic(planning: &[usize], from: usize, delta: i32, skip_empty: bool) 
 }
 
 impl App {
-    /// The pre-check rows: the team's `New` tickets in rank order.
+    /// The pre-check rows: the team's `New` action items in rank order, numbered among the team's `New` tickets
+    /// before epics are dropped, less the tickets this run already promoted (`GroomingState::retired`).
     pub fn pre_check_candidates(&self) -> Vec<Candidate<'_>> {
         let g = &self.cfg.grooming;
         grooming::new_candidates(&self.store.list(ListId::TeamOpen), &self.cfg.scope.team_label, &g.status_new, chrono::Local::now().date_naive())
+            .into_iter()
+            .filter(|c| crate::filter::is_action_item(c.issue) && !self.grooming.retired.contains(&c.issue.key))
+            .collect()
     }
 
-    /// The session rail: the team's tickets grouped by epic.
+    /// The session rail: the team's action items (no epics) grouped by epic.
     pub fn session_queues(&self) -> Vec<EpicQueue<'_>> {
-        grooming::epic_queues(&self.store.list(ListId::TeamOpen), &self.cfg.scope.team_label, &self.cfg.grooming)
+        grooming::epic_queues(&crate::filter::action_items(&self.store.list(ListId::TeamOpen)), &self.cfg.scope.team_label, &self.cfg.grooming)
     }
 
-    /// The team's tickets in `Ready for Work`, for the ceiling pill.
+    /// The team's action items in `Ready for Work`, for the ceiling pill.
     pub fn ready_total(&self) -> usize {
         let (label, ready) = (&self.cfg.scope.team_label, &self.cfg.grooming.status_ready);
-        self.store.list(ListId::TeamOpen).iter().filter(|i| i.labels.iter().any(|l| l == label) && &i.status.name == ready).count()
+        crate::filter::action_items(&self.store.list(ListId::TeamOpen))
+            .iter()
+            .filter(|i| i.labels.iter().any(|l| l == label) && &i.status.name == ready)
+            .count()
+    }
+
+    /// A team list landed: the promoted keys it shows out of `New` (or not at all) leave `retired`.
+    pub(super) fn team_open_landed(&mut self, issues: &[Issue]) {
+        let new = &self.cfg.grooming.status_new;
+        self.grooming.retired.retain(|k| issues.iter().any(|i| &i.key == k && &i.status.name == new));
     }
 
     /// Keeps the newest report and, when it is a new one (another path than the one held), pre-fills a verdict
@@ -61,6 +74,7 @@ impl App {
             let keys = r.promoted.iter().map(|p| &p.key).chain(r.needs_detail.iter().map(|n| &n.key));
             for key in keys {
                 if !self.grooming.verdicts.contains_key(key)
+                    && !self.grooming.retired.contains(key)
                     && let Some(v) = grooming::prefill(Some(r), key)
                 {
                     self.grooming.verdicts.insert(key.clone(), v);
@@ -237,8 +251,8 @@ impl App {
     }
 
     /// The tickets this run moved to Planning leave the pre-check at once: their status is set to Planning in the
-    /// store (the refresh confirms it) and their verdicts go, so the plan cannot offer them again before the
-    /// refresh lands.
+    /// store (the refresh confirms it), their verdicts go, and they are held in `retired`, so neither the plan nor a
+    /// stale refresh or the report's prefill can offer them again before a team list shows them out of `New`.
     fn retire_promoted(&mut self) {
         let done: Vec<String> = self.promoted_rows().iter().map(|r| r.key.clone()).collect();
         let planning = self.cfg.grooming.status_planning.clone();
@@ -248,6 +262,7 @@ impl App {
                 i.status.category = "indeterminate".into();
             }
             self.grooming.verdicts.remove(key);
+            self.grooming.retired.insert(key.clone());
         }
         let n = self.pre_check_candidates().len();
         self.grooming.cursor = self.grooming.cursor.min(n);
@@ -653,6 +668,60 @@ mod tests {
         assert!(!app.grooming.verdicts.contains_key("CI-1") && !app.grooming.verdicts.contains_key("CI-2"));
         assert_eq!(app.pre_check_candidates().iter().map(|c| c.issue.key.as_str()).collect::<Vec<_>>(), ["CI-3"]);
         assert!(app.grooming.cursor <= 1);
+    }
+
+    #[test]
+    fn epics_are_never_groomed() {
+        let mut app = App::for_test(toml::from_str("site = \"https://x.atlassian.net\"\nemail = \"a@b.c\"\n").unwrap(), None);
+        let mut epic = team_new("CI-304", None);
+        epic.issue_type = "Epic".into();
+        let mut ready_epic = team_new("CI-768", None);
+        ready_epic.issue_type = "Epic".into();
+        ready_epic.status.name = "Ready for Work".into();
+        let mut ready = team_new("CI-9", None);
+        ready.status.name = "Ready for Work".into();
+        app.store.absorb(ListId::TeamOpen, vec![team_new("CI-1", None), epic, team_new("CI-2", None), ready_epic, ready]);
+        let cands: Vec<(String, u32)> = app.pre_check_candidates().iter().map(|c| (c.issue.key.clone(), c.rank_pos)).collect();
+        assert_eq!(cands, [("CI-1".to_string(), 1), ("CI-2".to_string(), 3)], "the epic is not a candidate, but it is numbered before it is dropped");
+        let queues = app.session_queues();
+        assert_eq!(queues.len(), 1);
+        assert_eq!(queues[0].new_count, 2, "the epic in New is in no session queue");
+        assert_eq!(queues[0].ready.iter().map(|i| i.key.as_str()).collect::<Vec<_>>(), ["CI-9"]);
+        assert_eq!(app.ready_total(), 1, "the epic in Ready for Work is not counted");
+    }
+
+    #[test]
+    fn a_stale_refresh_does_not_bring_promoted_tickets_back() {
+        let _g = crate::jira::tests::WRITE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // No search route: the refresh's own lists fail (404), so only the lists delivered below land.
+        let (base, _rx) = crate::jira::tests::stub_server(vec![
+            ("POST", "/rest/api/3/issue/CI-1/transitions", serde_json::json!({})),
+            ("POST", "/rest/api/3/issue/CI-2/transitions", serde_json::json!({})),
+        ]);
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = promote_app(&base, dir.path());
+        app.actions.push(super::super::Action::Promote);
+        drain_until(&mut app, |a| !a.grooming.promoting && a.grooming.report.is_some() && !a.lists.get(&ListId::TeamOpen).is_some_and(|l| l.loading));
+        let mut retired: Vec<&String> = app.grooming.retired.iter().collect();
+        retired.sort();
+        assert_eq!(retired, ["CI-1", "CI-2"]);
+        // An eventually consistent search still shows them in New, and the report just written loads under a new path.
+        let list = |status: &str| {
+            let mut v = vec![team_new("CI-1", Some("CI-79")), team_new("CI-2", None), team_new("CI-3", None)];
+            for i in v.iter_mut().take(2) {
+                i.status.name = status.into();
+            }
+            v
+        };
+        app.handle(Msg::List { id: ListId::TeamOpen, result: Ok(list("New")), stale: false, seq: None, with_members: false });
+        let text = app.grooming.last_summary.clone().unwrap();
+        app.handle(Msg::ReportLoaded(Some((dir.path().join("2099-01-01.md"), crate::report::parse(&text)))));
+        assert_eq!(app.pre_check_candidates().iter().map(|c| c.issue.key.as_str()).collect::<Vec<_>>(), ["CI-3"]);
+        assert!(!app.grooming.verdicts.contains_key("CI-1") && !app.grooming.verdicts.contains_key("CI-2"), "{:?}", app.grooming.verdicts);
+        assert_eq!(app.grooming.retired.len(), 2, "still held while the list shows them in New");
+        // The list catches up: they are in Planning, and the set lets go of them.
+        app.handle(Msg::List { id: ListId::TeamOpen, result: Ok(list("Planning")), stale: false, seq: None, with_members: false });
+        assert!(app.grooming.retired.is_empty(), "{:?}", app.grooming.retired);
     }
 
     #[test]
