@@ -383,7 +383,7 @@ mod tests {
         use crate::keys::{BINDINGS, Group};
         let n = |g: Group| BINDINGS.iter().filter(|k| k.group == g).count();
         // Left: Issues then Pickers; right: Grooming then Global (one header each). Every group shows, and the
-        // columns are within two rows of each other (15 and 17; no other split of the four comes closer).
+        // columns are within two rows of each other (17 and 16).
         let (left, right) = (n(Group::Issues) + n(Group::Pickers) + 1, n(Group::Grooming) + n(Group::Global) + 1);
         assert!(left.abs_diff(right) <= 2, "left {left} rows, right {right}");
     }

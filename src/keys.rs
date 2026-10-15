@@ -37,11 +37,12 @@ pub const BINDINGS: &[KeyBinding] = &[
     b(Group::Global, "⌘1 to ⌘4", "Issues, Grooming, Team, Roadmap"),
     b(Group::Global, "⌘R", "Refresh"),
     b(Group::Global, "⌘W", "Close the window"),
-    b(Group::Global, "⌘K", "Go to an issue by key, number, or link"),
-    b(Group::Global, "⌘O", "Open in Jira"),
     // Esc is global: it cancels a picker or the Edit bar and closes go-to (round 13 H3).
     b(Group::Global, "Esc", "Cancel or close"),
     b(Group::Global, "?, Esc", "Close this help"),
+    // ⌘K and ⌘O are bound on the Issues screen only (`App::shortcuts`).
+    b(Group::Issues, "⌘K", "Go to an issue by key, number, or link"),
+    b(Group::Issues, "⌘O", "Open in Jira"),
     b(Group::Issues, "⌘F, /", "Focus search"),
     b(Group::Issues, "j/k, ↑/↓", "Next or previous issue"),
     b(Group::Issues, "t", "Transition"),
@@ -53,6 +54,7 @@ pub const BINDINGS: &[KeyBinding] = &[
     b(Group::Issues, "J/K", "Move down or up in rank"),
     b(Group::Issues, "c", "Copy the issue link"),
     b(Group::Issues, "⌘Enter", "Post the comment"),
+    b(Group::Grooming, "j/k, ↑/↓", "Next or previous ticket"),
     b(Group::Grooming, "r", "Ready"),
     b(Group::Grooming, "w/n/e", "Unclear what, unclear when, or empty"),
     b(Group::Grooming, "u", "Undo the last verdict"),
@@ -371,14 +373,15 @@ mod tests {
         assert!(t.contains("| `⌘K` | Go to an issue by key, number, or link |\n"));
         assert!(t.contains("| `j/k` or `↑/↓` | Move |\n"), "one alternatives order, no keys in prose");
         let global = BINDINGS.iter().filter(|k| k.group == Group::Global).count();
-        assert_eq!(global, 7, "⌘K, ⌘O and Esc live in Global, balancing the help columns");
+        assert_eq!(global, 5, "only the keys that work on every screen live in Global; ⌘K and ⌘O are Issues keys");
+        assert!(t.contains("| **Issues** | |\n| `⌘K` | Go to an issue by key, number, or link |\n| `⌘O` | Open in Jira |\n"));
         assert!(t.contains("| `Esc` | Cancel or close |\n| `?` or `Esc` | Close this help |\n"), "Esc right above the help row");
         assert!(t.contains("| `?` or `Esc` | Close this help |\n| **Issues** | |\n"), "one help row, the last of Global");
         assert!(t.contains("| `J/K` | Move down or up in rank |\n"));
         assert!(t.contains("| `⌘Enter` | Post the comment |\n"));
         assert!(!t.contains("Close the go-to box"), "the go-to bar shows its own Esc");
         assert!(t.contains("| `j/k` or `↑/↓` | Next or previous issue |\n"));
-        assert!(t.contains("| **Grooming** | |\n| `r` | Ready |\n"));
+        assert!(t.contains("| **Grooming** | |\n| `j/k` or `↑/↓` | Next or previous ticket |\n| `r` | Ready |\n"));
         assert!(t.contains("| `Tab` | Switch between Pre-check and Session |\n| **Pickers and Edit** | |\n"));
         assert_eq!(t.matches("| **").count(), 4);
     }
