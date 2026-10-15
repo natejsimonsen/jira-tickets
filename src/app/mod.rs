@@ -14,9 +14,6 @@ pub use pickers::{
     ASSIGN_USERS, POINTS_HINT, PRIORITY_HINT, Picker, assign_current_row, assign_cursor_after_filter, assign_matches, assign_note, assign_rows,
     sprint_current_row, sprint_row_label, transition_row,
 };
-// Part of `crate::app`'s surface for the plan 2 views; nothing outside app/ calls them yet.
-#[allow(unused_imports)]
-pub use {actions::rank_target, pickers::filtered_users};
 
 use shortcuts::close_shortcut;
 
@@ -344,9 +341,13 @@ impl App {
         app
     }
 
-    /// A headless App for unit tests: no window, no theme, optional client.
+    /// A headless App for unit tests: no window, no theme, optional client. A config left on the default
+    /// `report_dir` reads reports from a path that does not exist, so no test sees the real ~/Documents folder.
     #[cfg(test)]
-    pub fn for_test(cfg: Config, client: Option<Arc<Client>>) -> App {
+    pub fn for_test(mut cfg: Config, client: Option<Arc<Client>>) -> App {
+        if cfg.grooming.report_dir == crate::config::Grooming::default().report_dir {
+            cfg.grooming.report_dir = std::env::temp_dir().join("jira-tickets-for-test").join("no-reports").to_string_lossy().into_owned();
+        }
         let (tx, rx) = channel();
         let mut app = App::empty(Arc::new(cfg), tx, rx, egui::Context::default());
         app.client = client;
@@ -519,7 +520,32 @@ mod tests {
     }
 
     #[test]
-    fn unauthorized_list_result_returns_to_sign_in() {
+    fn for_test_never_reads_the_real_report_dir() {
+        let app = App::for_test(cfg(), None);
+        let default = crate::config::Grooming::default().report_dir;
+        assert_ne!(app.cfg.grooming.report_dir, default, "the default ~/Documents/grooming-reports is swapped out");
+        assert!(!app.cfg.report_dir().exists(), "{:?}", app.cfg.report_dir());
+        let mut set = cfg();
+        set.grooming.report_dir = "/tmp/a-test-dir".into();
+        assert_eq!(App::for_test(set, None).cfg.grooming.report_dir, "/tmp/a-test-dir", "a test's own dir is kept");
+    }
+
+    #[test]
+    fn changing_screen_closes_go_to_and_the_summary() {
+        let mut app = App::for_test(cfg(), None);
+        let ctx = egui::Context::default();
+        app.goto = Some("CI-".into());
+        app.apply(Action::SetScreen(Screen::Grooming), &ctx);
+        assert!(app.goto.is_none(), "the go-to box is drawn on Issues only");
+        app.grooming.summary_open = true;
+        app.apply(Action::SetScreen(Screen::Grooming), &ctx);
+        assert!(app.grooming.summary_open, "staying on the screen keeps it");
+        app.apply(Action::SetScreen(Screen::Issues), &ctx);
+        assert!(!app.grooming.summary_open, "the summary is drawn on Grooming only");
+    }
+
+    #[test]
+    fn unauthorized_me_result_returns_to_sign_in() {
         let mut app = App::for_test(cfg(), None);
         app.handle(Msg::Me(Err(crate::jira::Error::Unauthorized("401".into()))));
         assert!(app.client.is_none());

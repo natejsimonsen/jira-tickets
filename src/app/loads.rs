@@ -101,7 +101,6 @@ impl App {
         }
     }
 
-    /// `force` refetches even a detail fetched within DETAIL_FRESH.
     /// Reads the newest report in `report_dir`. A local file read needs no client, so it runs on its own thread,
     /// not `spawn`.
     pub(super) fn load_report(&mut self) {
@@ -117,6 +116,7 @@ impl App {
         });
     }
 
+    /// `force` refetches even a detail fetched within DETAIL_FRESH.
     pub fn load_detail(&mut self, key: &str, force: bool) {
         if !should_load(self.client.is_some(), self.detail_loading.contains(key)) {
             return;

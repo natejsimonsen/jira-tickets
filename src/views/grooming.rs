@@ -841,10 +841,12 @@ mod tests {
             crate::testutil::inks(&shapes).into_iter().map(|(t, _)| t).collect::<Vec<_>>()
         };
         let pre = texts(&mut app);
+        // `for_test` swaps the default report dir for one that does not exist.
+        let no_report = format!("No report found in {}", app.cfg.grooming.report_dir);
         for want in [
             "Pre-check",
             "Session",
-            "No report found in ~/Documents/grooming-reports",
+            no_report.as_str(),
             "Ready for Work 1 · soft 10 · hard 15",
             "Summary · 0 ready · 0 need detail · 1 without a verdict",
             "rank 1",

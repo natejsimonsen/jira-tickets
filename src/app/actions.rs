@@ -156,9 +156,15 @@ impl App {
     pub(crate) fn apply(&mut self, a: Action, ctx: &egui::Context) {
         match a {
             Action::SetScreen(s) => {
-                // The per-ticket timer starts when the screen is entered, not only on the first move.
-                if s == Screen::Grooming && self.screen != Screen::Grooming {
-                    self.grooming.focused_since = Some(std::time::Instant::now());
+                if s != self.screen {
+                    // The per-ticket timer starts when the screen is entered, not only on the first move.
+                    if s == Screen::Grooming {
+                        self.grooming.focused_since = Some(std::time::Instant::now());
+                    }
+                    // Go-to is drawn on Issues and the summary on Grooming only: neither outlives its screen, so
+                    // the hint bar and Esc agree with what is drawn.
+                    self.goto = None;
+                    self.grooming.summary_open = false;
                 }
                 self.screen = s;
             }
