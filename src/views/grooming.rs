@@ -7,6 +7,7 @@ use crate::jira;
 use crate::keys::GroomHint;
 use crate::report::{self, Badge};
 use crate::theme::{self, Palette};
+use crate::views::grooming_guide as guide;
 use crate::views::{PILL_MARGIN, empty_state, outline_pill, pill_sized, primary_button, toggle_chip};
 use egui::{Color32, Frame, Margin, RichText, Stroke, Ui, vec2};
 
@@ -38,6 +39,7 @@ fn header(app: &mut App, ui: &mut Ui, p: &Palette) {
     let ready = app.ready_total();
     let level = grooming::ceiling_level(ready, g.ready_soft_ceiling, g.ready_hard_ceiling);
     let ceiling = ceiling_text(ready, g.ready_soft_ceiling, g.ready_hard_ceiling);
+    let purpose = guide::purpose(mode, &g.status_new, &g.status_planning, &g.status_ready);
     ui.horizontal(|ui| {
         ui.set_min_height(crate::views::BUTTON_H);
         ui.spacing_mut().item_spacing.x = CHIP_GAP;
@@ -53,6 +55,9 @@ fn header(app: &mut App, ui: &mut Ui, p: &Palette) {
             pill_sized(ui, &ceiling, Color32::TRANSPARENT, c, Stroke::new(1.0, c), PILL_MARGIN);
         });
     });
+    // Always present in both modes, so the body never jumps on a mode switch.
+    ui.add_space(8.0);
+    ui.add(egui::Label::new(RichText::new(purpose).color(p.muted).size(14.0)).wrap());
 }
 
 /// The list column's share of the body, between these widths.
@@ -252,6 +257,9 @@ fn focused_ticket(app: &mut App, ui: &mut Ui, p: &Palette, issue: jira::Issue) {
     if app.grooming.detail_for.as_deref() != Some(issue.key.as_str()) {
         app.actions.push(Action::GroomFocusDetail(issue.key.clone()));
     }
+    let g = &app.cfg.grooming;
+    rubric_card(ui, p, app.grooming.mode, &g.status_new, &g.status_ready);
+    ui.add_space(PANE_GAP - ui.spacing().item_spacing.y);
     card(ui, p, |ui| {
         egui::ScrollArea::vertical().id_salt("groom-detail").auto_shrink([false, false]).show(ui, |ui| {
             ui.horizontal(|ui| {
@@ -288,8 +296,13 @@ fn summary_pane(app: &mut App, ui: &mut Ui, p: &Palette) {
     let cap = app.cfg.grooming.planning_cap;
     let failures = app.grooming.promote_failures.clone();
     let promoting = app.grooming.promoting;
+    let cands = app.pre_check_candidates();
+    let judged = cands.iter().filter(|c| app.grooming.verdicts.contains_key(&c.issue.key)).count();
+    let cue = guide::all_judged(judged, cands.len());
     card(ui, p, |ui| {
         ui.label(RichText::new("Pre-check summary").font(theme::bold(15.0)).color(p.text));
+        ui.add_space(4.0);
+        ui.add(egui::Label::new(RichText::new(cue).color(p.muted).size(14.0)).wrap());
         ui.add_space(12.0);
         for line in plan_lines(&plan, unjudged, cap) {
             ui.label(RichText::new(line).color(p.text).size(14.0));
@@ -324,12 +337,40 @@ pub fn plan_lines(plan: &Promotion, unjudged: usize, cap: usize) -> Vec<String> 
     ]
 }
 
-/// A `surface` card with the shared border and radius.
+/// A `surface` card with the shared border and radius, filling the pane's height.
 fn card(ui: &mut Ui, p: &Palette, content: impl FnOnce(&mut Ui)) {
+    card_frame(ui, p, true, content);
+}
+
+/// The card's frame; `fill` stretches it to the pane's bottom, otherwise it hugs its content.
+fn card_frame(ui: &mut Ui, p: &Palette, fill: bool, content: impl FnOnce(&mut Ui)) {
     Frame::new().fill(p.surface).stroke(Stroke::new(1.0, p.border)).corner_radius(theme::RADIUS).inner_margin(Margin::same(PANE_GAP as i8)).show(ui, |ui| {
         ui.set_width(ui.available_width());
-        ui.set_min_height(ui.available_height() - 1.0);
+        if fill {
+            ui.set_min_height(ui.available_height() - 1.0);
+        }
         content(ui);
+    });
+}
+
+/// The mode's rubric over the focused ticket: the title, then each line with its key drawn as the hint bar draws keys.
+fn rubric_card(ui: &mut Ui, p: &Palette, mode: GroomMode, status_new: &str, status_ready: &str) {
+    card_frame(ui, p, false, |ui| {
+        ui.label(RichText::new(guide::rubric_title(mode)).font(theme::bold(13.5)).color(p.text));
+        ui.add_space(8.0);
+        ui.spacing_mut().item_spacing.y = 4.0;
+        for (key, text) in guide::rubric_lines(mode, status_new, status_ready) {
+            let text = RichText::new(text).color(p.muted).size(12.0);
+            if key.is_empty() {
+                ui.add(egui::Label::new(text).wrap());
+            } else {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 8.0;
+                    ui.label(super::issues::key_job(key, p.text));
+                    ui.add(egui::Label::new(text).wrap());
+                });
+            }
+        }
     });
 }
 
@@ -369,8 +410,13 @@ fn dialogs(app: &mut App, ctx: &egui::Context, p: &Palette) {
     let titles: std::collections::HashMap<String, String> = app.pre_check_candidates().iter().map(|c| (c.issue.key.clone(), c.issue.summary.clone())).collect();
     let can = promote_enabled(plan.promoted.len(), jira::check_writable().is_ok(), app.grooming.promoting);
     let max_h = (ctx.content_rect().height() * 0.5).max(160.0);
+    let g = &app.cfg.grooming;
+    let path = guide::report_path(&g.report_dir, chrono::Local::now().date_naive());
+    let explainer = guide::promote_explainer(plan.promoted.len(), plan.held_back.len(), cap, &g.status_planning, &path);
     dialog(ctx, p, "groom-summary", 520.0, |ui| {
         dialog_title(ui, p, "Promote to Planning");
+        ui.add(egui::Label::new(RichText::new(explainer).color(crate::views::dialog_muted(p)).size(12.0)).wrap());
+        ui.add_space(4.0);
         ui.label(RichText::new(format!("{unjudged} without a verdict stay in New untouched")).color(crate::views::dialog_muted(p)).size(12.0));
         ui.add_space(12.0);
         egui::ScrollArea::vertical().id_salt("groom-summary-rows").max_height(max_h).show(ui, |ui| {
@@ -499,7 +545,7 @@ fn session_body(app: &mut App, ui: &mut Ui, p: &Palette) {
             match planning.get(cursor) {
                 Some(issue) => focused_ticket(app, ui, p, issue.clone()),
                 None => card(ui, p, |ui| {
-                    ui.label(RichText::new(format!("Nothing in {} under this epic", app.cfg.grooming.status_planning)).color(p.muted).size(14.0));
+                    ui.add(egui::Label::new(RichText::new(guide::nothing_in_planning(&app.cfg.grooming.status_planning)).color(p.muted).size(14.0)).wrap());
                 }),
             }
         });
@@ -854,10 +900,22 @@ mod tests {
         ] {
             assert!(pre.iter().any(|t| t == want), "{want} in {pre:?}");
         }
+        let pre_purpose = guide::purpose(GroomMode::PreCheck, "New", "Planning", "Ready for Work");
+        for want in [pre_purpose.as_str(), "Readiness bar", "Can a stranger tell WHAT is being done and WHEN it is done?", "When in doubt, pass."] {
+            assert!(pre.iter().any(|t| t == want), "{want} in {pre:?}");
+        }
+        app.grooming.cursor = 1;
+        let past = texts(&mut app);
+        assert!(past.iter().any(|t| t == "0 of 1 judged. Enter opens the summary; j/k go back."), "{past:?}");
         app.grooming.verdicts.insert("CI-1".into(), Verdict::Ready);
+        let past = texts(&mut app);
+        assert!(past.iter().any(|t| t == "All 1 judged. Enter opens the summary."), "{past:?}");
+        app.grooming.cursor = 0;
         app.grooming.summary_open = true;
         let summary = texts(&mut app);
-        for want in ["ready", "Promote to Planning", "Promote (1)", "Promote 1", "Cancel"] {
+        let path = guide::report_path(&app.cfg.grooming.report_dir, chrono::Local::now().date_naive());
+        let explainer = guide::promote_explainer(1, 0, app.cfg.grooming.planning_cap, "Planning", &path);
+        for want in ["ready", "Promote to Planning", explainer.as_str(), "Promote (1)", "Promote 1", "Cancel"] {
             assert!(summary.iter().any(|t| t == want), "{want} in {summary:?}");
         }
         app.grooming.summary_open = false;
@@ -870,6 +928,10 @@ mod tests {
         app.grooming.mode = GroomMode::Session;
         let session = texts(&mut app);
         assert!(session.iter().any(|t| t == "(no epic) · P 0 · R 1 · N 1"), "{session:?}");
+        let session_purpose = guide::purpose(GroomMode::Session, "New", "Planning", "Ready for Work");
+        for want in [session_purpose.as_str(), "Nothing in Planning. Run a pre-check first, or pick another epic with ].", "Ready for Work · 1"] {
+            assert!(session.iter().any(|t| t == want), "{want} in {session:?}");
+        }
     }
 
     #[test]
@@ -896,6 +958,9 @@ mod tests {
             crate::testutil::inks(&shapes).into_iter().map(|(t, _)| t).collect::<Vec<_>>()
         };
         let t = texts(&mut app);
+        for want in ["Decide", "Ready for Work: accept and place it in rank.", "Three to five minutes per ticket. Past that, bounce."] {
+            assert!(t.iter().any(|x| x == want), "{want} in {t:?}");
+        }
         for want in
             ["CI-1860 Progressive Delivery · P 1 · R 1 · N 0", "(no epic) · P 0 · R 0 · N 1", "Ready for Work · 1", "Planning · 1", "0:00", "Unassigned", "CI-5"]
         {
