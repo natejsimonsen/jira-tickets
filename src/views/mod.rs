@@ -3,6 +3,7 @@
 pub mod adf_view;
 pub mod detail;
 pub mod grooming;
+pub mod grooming_guide;
 pub mod help;
 pub mod icons;
 pub mod issues;
