@@ -350,6 +350,16 @@ A per-ticket timer starts on focus, amber at 3 minutes, red at 5. The header
 shows total `Ready for Work` against the ceilings, amber past the soft
 ceiling and red past the hard one. Warnings never block.
 
+### Guidance
+
+Static text in the grooming runbook's words, from `views::grooming_guide`:
+
+- Purpose line: one `muted` line under the mode chips saying what the mode is for and when it happens.
+- Rubric card: over the focused ticket, the readiness bar (pre-check) or the three decisions (session), keys drawn as in the hint bar.
+- All-judged cue: on the summary row, "N of M judged" (or "All M judged") and that Enter opens the summary.
+- Promote explainer: at the top of the Promote dialog, what Promote moves, the cap when it holds tickets back, the report path, and "Paste the report into the team channel".
+- Empty Planning: an epic with nothing in Planning says to run a pre-check first or pick another epic with `]`.
+
 ### Deviations (plan 2)
 
 - Prefill from a report happens once per report file, not on every refresh.

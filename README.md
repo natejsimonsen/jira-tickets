@@ -112,6 +112,12 @@ Session mode walks epics one at a time. The left rail lists epics with their Pla
 
 A timer runs per ticket and turns amber at 3 minutes and red at 5. The Ready ceiling pill in the header reads "Ready for Work N · soft S · hard H", counts the team's (PLAT-labelled) Ready for Work tickets, and turns amber past the soft ceiling (10) and red past the hard one (15). Both limits are configurable under `[grooming]`, and warnings never block anything.
 
+### How to groom
+
+Pre-check: before the meeting. Judge each New ticket against the readiness bar, then promote the ready set to Planning and write the report. The bar is one question: can a stranger tell WHAT is being done and WHEN it is done? `r` yes, ready; `w` unclear what is being done; `n` unclear when it is done; `e` empty, nothing to judge. When in doubt, pass. Promote moves the ready set to Planning (the top `planning_cap` by rank) and writes today's report; paste the report into the team channel.
+
+Session: in the meeting. Walk Planning epic by epic and place each accepted ticket in rank beside the epic's Ready for Work queue. Decide each ticket: `y` Ready for Work, accept and place it in rank; `b` bounce to New with a one-line comment on what's missing; `p` Backlog, real work, lower priority. Three to five minutes per ticket. Past that, bounce.
+
 ## Developer switches
 
 - `JIRA_TICKETS_READONLY` blocks every write to Jira.
