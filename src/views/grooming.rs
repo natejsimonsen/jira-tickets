@@ -55,8 +55,9 @@ fn header(app: &mut App, ui: &mut Ui, p: &Palette) {
             pill_sized(ui, &ceiling, Color32::TRANSPARENT, c, Stroke::new(1.0, c), PILL_MARGIN);
         });
     });
-    // Always present in both modes, so the body never jumps on a mode switch.
-    ui.add_space(8.0);
+    // Always present in both modes, so the body never jumps on a mode switch. The 8 is measured to the ink, so the
+    // layout's own item spacing comes off it.
+    ui.add_space(8.0 - ui.spacing().item_spacing.y);
     ui.add(egui::Label::new(RichText::new(purpose).color(p.muted).size(14.0)).wrap());
 }
 

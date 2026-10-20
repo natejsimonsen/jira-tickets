@@ -55,7 +55,8 @@ pub fn all_judged(judged: usize, total: usize) -> String {
 /// The explanation at the top of the Promote dialog, before the lists.
 pub fn promote_explainer(promoted: usize, held_back: usize, cap: usize, status_planning: &str, report_path: &str) -> String {
     let held = if held_back == 0 { String::new() } else { format!(" (top {cap} by rank, {held_back} held back)") };
-    format!("Promote moves these {promoted} to {status_planning}{held} and writes {report_path}. Paste the report into the team channel.")
+    let tickets = if promoted == 1 { "ticket" } else { "tickets" };
+    format!("Promote moves {promoted} {tickets} to {status_planning}{held} and writes {report_path}. Paste the report into the team channel.")
 }
 
 /// Today's report path as the user wrote the dir (`~` kept): "~/Documents/grooming-reports/2026-10-16.md".
@@ -120,12 +121,16 @@ mod tests {
     fn promote_explainer_both_branches() {
         let path = "~/Documents/grooming-reports/2026-10-16.md";
         assert_eq!(
+            promote_explainer(1, 0, 10, "Planning", path),
+            "Promote moves 1 ticket to Planning and writes ~/Documents/grooming-reports/2026-10-16.md. Paste the report into the team channel."
+        );
+        assert_eq!(
             promote_explainer(3, 0, 10, "Planning", path),
-            "Promote moves these 3 to Planning and writes ~/Documents/grooming-reports/2026-10-16.md. Paste the report into the team channel."
+            "Promote moves 3 tickets to Planning and writes ~/Documents/grooming-reports/2026-10-16.md. Paste the report into the team channel."
         );
         assert_eq!(
             promote_explainer(10, 2, 10, "Planning", path),
-            "Promote moves these 10 to Planning (top 10 by rank, 2 held back) and writes ~/Documents/grooming-reports/2026-10-16.md. Paste the report into the team channel."
+            "Promote moves 10 tickets to Planning (top 10 by rank, 2 held back) and writes ~/Documents/grooming-reports/2026-10-16.md. Paste the report into the team channel."
         );
     }
 
