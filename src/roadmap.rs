@@ -251,6 +251,20 @@ pub fn timeline(items: &[Initiative], year: i32) -> (Vec<(String, Vec<&Initiativ
     (lanes, tray)
 }
 
+/// A timeline bar's 1-based inclusive quarter columns in `year`: start (defaulting to, and never after, the target)
+/// through target, clamped to 1..=4 when the range runs past either end of the year. None with no target or when the
+/// range misses `year`, matching `timeline`'s overlap rule.
+pub fn bar_span(start: Option<Quarter>, target: Option<Quarter>, year: i32) -> Option<(u8, u8)> {
+    let t = target?;
+    let s = start.unwrap_or(t).min(t);
+    if s.year > year || t.year < year {
+        return None;
+    }
+    let lo = if s.year < year { 1 } else { s.q };
+    let hi = if t.year > year { 4 } else { t.q };
+    Some((lo, hi))
+}
+
 /// Now items, worst health first.
 pub fn status_rows(items: &[Initiative]) -> Vec<&Initiative> {
     let mut v: Vec<&Initiative> = items.iter().filter(|i| i.horizon == Horizon::Now).collect();
@@ -445,5 +459,19 @@ mod tests {
         assert_eq!(keys(2026), ["L"]);
         assert_eq!(keys(2027), ["L", "M"]);
         assert!(keys(2025).is_empty());
+    }
+
+    #[test]
+    fn bar_span_clamps_to_the_year() {
+        let q = |year: i32, q: u8| Some(Quarter { year, q });
+        assert_eq!(bar_span(None, q(2026, 4), 2026), Some((4, 4)), "start defaults to target");
+        assert_eq!(bar_span(q(2026, 2), q(2026, 4), 2026), Some((2, 4)));
+        assert_eq!(bar_span(q(2026, 4), q(2026, 2), 2026), Some((2, 2)), "a start after the target collapses to the target");
+        assert_eq!(bar_span(q(2026, 2), q(2026, 4), 2027), None, "other year");
+        assert_eq!(bar_span(None, q(2025, 4), 2026), None, "other year");
+        assert_eq!(bar_span(q(2026, 3), q(2027, 1), 2026), Some((3, 4)), "runs past the year: clamped to Q4");
+        assert_eq!(bar_span(q(2026, 3), q(2027, 1), 2027), Some((1, 1)), "began last year: clamped to Q1");
+        assert_eq!(bar_span(q(2026, 3), None, 2026), None, "no target");
+        assert_eq!(bar_span(None, q(2027, 1), 2026), None);
     }
 }

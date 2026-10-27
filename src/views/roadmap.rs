@@ -1,5 +1,9 @@
 //! The Roadmap screen: a tab strip over four views of the initiatives `roadmap::derive` builds from the epics.
-//! Tab 1 is Now / Next / Later with the shipped list, tab 3 the status review table; tabs 2 and 4 come next.
+//! Tab 1 is Now / Next / Later with the shipped list, tab 3 the status review table; tab 2 (the timeline) and tab 4
+//! (outcomes) live in the child modules.
+
+mod outcomes;
+mod timeline;
 
 use crate::app::{Action, App};
 use crate::roadmap::{self, Health, Initiative, Progress};
@@ -100,7 +104,7 @@ pub fn show(app: &mut App, ui: &mut Ui) {
     show_at(app, ui, chrono::Local::now().date_naive());
 }
 
-/// `show` as of `today` (the shipped list's year).
+/// `show` as of `today` (the shipped list's and the timeline's year, and the today line).
 pub fn show_at(app: &mut App, ui: &mut Ui, today: NaiveDate) {
     let p = theme::palette(ui.ctx());
     let mut acts = Vec::new();
@@ -130,8 +134,8 @@ pub fn show_at(app: &mut App, ui: &mut Ui, today: NaiveDate) {
                 match tab {
                     1 => now_next_later(ui, p, &items, &ongoing, today.year(), focus, &mut acts),
                     3 => status_review(ui, p, &items, focus, &mut acts),
-                    2 => crate::views::empty_state(ui, p, "Timeline (coming in the next task)"),
-                    _ => crate::views::empty_state(ui, p, "Outcomes (coming in the next task)"),
+                    2 => timeline::show(ui, p, &items, today),
+                    _ => outcomes::show(ui, p, &items),
                 }
             });
         });
@@ -642,7 +646,39 @@ mod tests {
             has(&drawn, want);
         }
         assert!(!drawn.iter().any(|t| t == "Autoscaling everywhere"), "Next items stay off the status review");
+    }
+
+    #[test]
+    fn timeline_draws_headless() {
+        let mut app = app();
+        let mut all = app.store.list(crate::store::ListId::Epics).into_iter().cloned().collect::<Vec<_>>();
+        all.push(epic("CI-9", "Pilot Rollout", "indeterminate", &["roadmap", "PLAT", "P0", "start:2026-Q2", "target:2026-Q4"]));
+        app.store.absorb(crate::store::ListId::Epics, all);
         app.roadmap.tab = 2;
-        has(&texts(&mut app), "Timeline (coming in the next task)");
+        let drawn = texts(&mut app);
+        for want in ["Subteam", "Q1 2026", "Q4 2026", "Platform", "Pilot Rollout", "No lane", "✓ Cost Insights", "Oct 27", "Unscheduled"] {
+            has(&drawn, want);
+        }
+        has(&drawn, "Canary Deployments · No lane");
+        assert!(!drawn.iter().any(|t| t == "Cost Insights · No lane"), "Done items with no target stay out of the tray");
+    }
+
+    #[test]
+    fn outcomes_draws_headless() {
+        let mut app = app();
+        let mut all = app.store.list(crate::store::ListId::Epics).into_iter().cloned().collect::<Vec<_>>();
+        all.push(epic("CI-9", "Toil Burner", "new", &["roadmap", "horizon:next", "metric:Toil"]));
+        app.store.absorb(crate::store::ListId::Epics, all.clone());
+        app.roadmap.tab = 4;
+        let drawn = texts(&mut app);
+        for want in ["Lead Time", "1 active", "Canary Deployments", "Toil", "0 active", "Toil Burner", "(next)", "Nothing in progress moves this metric."] {
+            has(&drawn, want);
+        }
+        assert_eq!(drawn.iter().filter(|t| *t == "Nothing in progress moves this metric.").count(), 1, "Lead Time has an active item");
+        for e in &mut all {
+            e.labels.retain(|l| !l.starts_with("metric:"));
+        }
+        app.store.absorb(crate::store::ListId::Epics, all);
+        has(&texts(&mut app), "No metric: labels on epics yet; add them to see outcomes.");
     }
 }
