@@ -120,7 +120,7 @@ pub fn show_at(app: &mut App, ui: &mut Ui, today: NaiveDate) {
             let last_id = egui::Id::new("roadmap-last-cursor");
             let moved = ui.data(|d| d.get_temp::<(u8, usize)>(last_id)) != Some((tab, cursor));
             ui.data_mut(|d| d.insert_temp(last_id, (tab, cursor)));
-            let loading = app.lists.get(&crate::store::ListId::Epics).is_some_and(|l| l.loading);
+            let loading = roadmap_loading(app.client.is_some(), app.lists.get(&crate::store::ListId::TeamOpen), app.lists.get(&crate::store::ListId::Epics));
             let focus = Focus { cursor, moved, count: rows.len() };
             egui::ScrollArea::vertical().id_salt(("roadmap-tab", tab)).auto_shrink([false, false]).show(ui, |ui| {
                 if items.is_empty() {
@@ -140,6 +140,16 @@ pub fn show_at(app: &mut App, ui: &mut Ui, today: NaiveDate) {
             });
         });
     app.actions.extend(acts);
+}
+
+/// Whether an empty Roadmap is still waiting on its data rather than truly empty: Epics load after TeamOpen lands,
+/// so either in flight counts, and so does a cold start (with a client) before Epics has ever landed, unless one
+/// of them failed.
+fn roadmap_loading(client_present: bool, team_open: Option<&crate::app::Loaded>, epics: Option<&crate::app::Loaded>) -> bool {
+    let busy = |l: Option<&crate::app::Loaded>| l.is_some_and(|l| l.loading);
+    let failed = |l: Option<&crate::app::Loaded>| l.is_some_and(|l| l.error.is_some());
+    let never_fetched = epics.is_none_or(|l| l.fetched.is_none());
+    busy(team_open) || busy(epics) || (client_present && never_fetched && !failed(team_open) && !failed(epics))
 }
 
 /// Where the cursor is on the tab being drawn, and whether it moved since the last frame (so it scrolls into view).
@@ -552,6 +562,32 @@ mod tests {
 
     fn has(drawn: &[String], want: &str) {
         assert!(drawn.iter().any(|t| t == want), "{want:?} in {drawn:?}");
+    }
+
+    #[test]
+    fn cold_start_shows_the_spinner_not_the_empty_state() {
+        let cfg: crate::config::Config = toml::from_str("site = \"https://x.atlassian.net\"\nemail = \"a@b.c\"\n").unwrap();
+        let mut app = App::for_test(cfg, None);
+        app.screen = crate::app::Screen::Roadmap;
+        app.lists.entry(crate::store::ListId::TeamOpen).or_default().loading = true;
+        let drawn = texts(&mut app);
+        assert!(!drawn.iter().any(|t| t == "No roadmap initiatives yet"), "TeamOpen in flight: {drawn:?}");
+        app.lists.entry(crate::store::ListId::TeamOpen).or_default().loading = false;
+        has(&texts(&mut app), "No roadmap initiatives yet");
+    }
+
+    #[test]
+    fn roadmap_loading_waits_for_team_open_and_the_first_epics() {
+        use crate::app::Loaded;
+        let busy = Loaded { loading: true, ..Default::default() };
+        let landed = Loaded { fetched: Some(std::time::Instant::now()), ..Default::default() };
+        let failed = Loaded { error: Some("down".into()), ..Default::default() };
+        assert!(roadmap_loading(false, Some(&busy), None), "TeamOpen in flight");
+        assert!(roadmap_loading(false, Some(&landed), Some(&busy)), "Epics in flight");
+        assert!(roadmap_loading(true, None, None), "cold start with a client: Epics never landed");
+        assert!(!roadmap_loading(false, None, None), "no client: nothing will land");
+        assert!(!roadmap_loading(true, Some(&failed), None), "TeamOpen failed: Epics never loads");
+        assert!(!roadmap_loading(true, Some(&landed), Some(&landed)), "both landed: truly empty");
     }
 
     #[test]

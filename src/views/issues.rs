@@ -283,7 +283,7 @@ pub fn hints_panel(app: &App, ui: &mut Ui, p: &Palette) {
         read_only: super::detail::composer_read_only(),
         grooming,
         team: app.screen == Screen::Team,
-        roadmap: app.screen == Screen::Roadmap,
+        roadmap: (app.screen == Screen::Roadmap).then_some(app.roadmap.tab),
     });
     hint_strip(ui, crate::keys::hints(c), p);
 }

@@ -229,17 +229,17 @@ pub fn run(out: Option<&str>, cfg: Config) {
         .build_eframe(move |cc| App::new(cc, cfg));
     // JIRA_TICKETS_NO_WAIT: start the script at once (with an empty cache, the first-load states show).
     let no_wait = std::env::var_os("JIRA_TICKETS_NO_WAIT").is_some();
-    let start = Instant::now();
-    while !no_wait && !harness.state().shot_ready() && start.elapsed() < Duration::from_secs(20) {
-        frames(&mut harness, 1);
-    }
-    eprintln!("snapshot: data {} after {:.1}s", if harness.state().shot_ready() { "ready" } else { "not ready" }, start.elapsed().as_secs_f32());
     let screen = match std::env::var("JIRA_TICKETS_VIEW").as_deref() {
         Ok("grooming") => Screen::Grooming,
         Ok("team") => Screen::Team,
         Ok("roadmap") => Screen::Roadmap,
         _ => Screen::Issues,
     };
+    let start = Instant::now();
+    while !no_wait && !harness.state().shot_ready(screen) && start.elapsed() < Duration::from_secs(20) {
+        frames(&mut harness, 1);
+    }
+    eprintln!("snapshot: data {} after {:.1}s", if harness.state().shot_ready(screen) { "ready" } else { "not ready" }, start.elapsed().as_secs_f32());
     harness.state_mut().actions.push(Action::SetScreen(screen));
     if let Ok(n) = std::env::var("JIRA_TICKETS_ROW").map(|v| v.parse::<i32>().unwrap_or(0)) {
         harness.state_mut().actions.push(Action::Move(n));

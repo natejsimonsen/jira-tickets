@@ -29,6 +29,19 @@ impl App {
         self.spawn(move |c, tx| {
             let _ = tx.send(Msg::BoardSprints(c.board_sprints(board, "active,future")));
         });
+        self.refresh_done_recent();
+    }
+
+    /// The Team footers' done lists go stale like any other list: a closed footer's cached list is dropped (it
+    /// reloads when reopened) and every open footer reloads, keeping its last list on screen until the new one lands.
+    fn refresh_done_recent(&mut self) {
+        let open = self.team.done_open.clone();
+        self.team.done.retain(|member, _| open.contains(member));
+        let mut members: Vec<String> = open.into_iter().collect();
+        members.sort();
+        for m in members {
+            self.load_done_recent(&m);
+        }
     }
 
     /// Epics depend on TeamOpen's parents, so they load after it lands.

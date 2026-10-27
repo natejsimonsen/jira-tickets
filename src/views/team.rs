@@ -42,6 +42,13 @@ pub fn days_text(days: i64) -> String {
     format!("{days} d")
 }
 
+/// The days label's tooltip. The count runs from Jira's `statuscategorychangedate`, so it says what that measures:
+/// a move between two statuses of the same category does not reset it.
+pub fn days_tip(days: i64) -> String {
+    let unit = if days == 1 { "day" } else { "days" };
+    format!("{days} {unit} since the status category changed")
+}
+
 /// The epic chip's text width on the chip row: what is left after its own padding and, when a days label follows,
 /// that label's width and the gap before it, so the chip truncates and the label stays on the row.
 pub fn epic_text_width(avail: f32, days_w: Option<f32>) -> f32 {
@@ -177,7 +184,7 @@ fn header(ui: &mut Ui, p: &Palette, col: &Column, known: bool) {
     ui.label(line.size(12.0));
 }
 
-/// A card: key (mono), summary (bold, wrapped), then status and epic pills and the days in status.
+/// A card: key (mono), summary (bold, wrapped), then status and epic pills and the days since the status category changed.
 fn card(app: &App, ui: &mut Ui, p: &Palette, id: (usize, usize), c: &Card, sel: bool) -> egui::Response {
     let i = c.issue;
     let bg = ui.painter().add(egui::Shape::Noop);
@@ -212,7 +219,7 @@ fn card(app: &App, ui: &mut Ui, p: &Palette, id: (usize, usize), c: &Card, sel: 
             // One galley, never wrapped: its width was kept free on the chip row above.
             if let (Some(d), Some(g)) = (c.days_in_status, days) {
                 let r = ui.add(egui::Label::new(g));
-                crate::views::tooltip(r, format!("{d} days in {}", i.status.name));
+                crate::views::tooltip(r, days_tip(d));
             }
         });
     });
@@ -323,6 +330,8 @@ mod tests {
         assert_eq!(footer_label(false), "Done in the last 7 days ▸");
         assert_eq!(footer_label(true), "Done in the last 7 days ▾");
         assert_eq!(days_text(4), "4 d");
+        assert_eq!(days_tip(4), "4 days since the status category changed");
+        assert_eq!(days_tip(1), "1 day since the status category changed");
     }
 
     #[test]

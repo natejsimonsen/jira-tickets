@@ -119,7 +119,8 @@ pub struct TeamState {
     pub row: usize,
     /// Member ids whose "Done in the last 7 days" footer is open.
     pub done_open: HashSet<String>,
-    /// Each member's recently done tickets, by member id, loaded when the footer first opens.
+    /// Each member's recently done tickets, by member id, loaded when the footer opens and reloaded by every
+    /// refresh while it stays open (a refresh drops a closed footer's list).
     pub done: HashMap<String, Vec<jira::Issue>>,
     /// Member ids with a done load in flight.
     pub done_loading: HashSet<String>,
@@ -263,10 +264,24 @@ pub struct App {
 }
 
 impl App {
-    /// True once the first team list has loaded; snapshots wait for it.
+    /// True once the lists `screen` draws have loaded; snapshots wait for it. Every screen needs the first team
+    /// list; the Roadmap also needs the epics and, when any epic is an initiative, their children (the progress).
     #[cfg(feature = "snapshot")]
-    pub fn shot_ready(&self) -> bool {
-        self.lists.get(&crate::store::ListId::TeamOpen).is_some_and(|l| l.fetched.is_some())
+    pub fn shot_ready(&self, screen: Screen) -> bool {
+        use crate::store::ListId;
+        let fetched = |id: ListId| self.lists.get(&id).is_some_and(|l| l.fetched.is_some());
+        if !fetched(ListId::TeamOpen) {
+            return false;
+        }
+        if screen != Screen::Roadmap {
+            return true;
+        }
+        if !fetched(ListId::Epics) {
+            return false;
+        }
+        let epics = self.store.list(ListId::Epics);
+        let (inits, _) = crate::roadmap::select(&epics, &self.cfg.roadmap.initiative_label);
+        inits.is_empty() || fetched(ListId::EpicChildren)
     }
 
     /// Every field at its starting value, with no window behind it: no theme, no cache read, no token search,
@@ -733,6 +748,24 @@ mod tests {
         assert!(app.team.done_loading.is_empty());
         assert!(app.team.done.contains_key("abc"), "a failed reload keeps the last list");
         assert!(app.toast.is_some());
+    }
+
+    #[test]
+    fn refresh_reloads_open_done_footers_and_drops_closed_ones() {
+        let (base, _rx) = crate::jira::tests::stub_server(vec![]);
+        let login = crate::auth::Login { email: "a@b.c".into(), token: "t".into(), source: crate::auth::Source::Env };
+        let client = std::sync::Arc::new(crate::jira::Client::new(&base, &login));
+        let mut app = team_app();
+        app.client = Some(client);
+        let done = |key: &str| vec![crate::jira::Issue { key: key.into(), ..Default::default() }];
+        app.team.done_open.insert("abc".into());
+        app.team.done.insert("abc".into(), done("CI-7"));
+        app.team.done.insert("def".into(), done("CI-8"));
+        app.apply(Action::Refresh, &egui::Context::default());
+        assert!(app.team.done_loading.contains("abc"), "the open footer reloads");
+        assert!(!app.team.done_loading.contains("def"), "a closed footer does not");
+        assert!(app.team.done.contains_key("abc"), "the open footer keeps its list until the reload lands");
+        assert!(!app.team.done.contains_key("def"), "a closed footer's list is dropped, so reopening reloads it");
     }
 
     fn roadmap_app() -> App {

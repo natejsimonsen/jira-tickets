@@ -234,10 +234,10 @@ pub fn shipped(items: &[Initiative]) -> Vec<&Initiative> {
 
 /// Lanes (alphabetical by lane name because no config is passed, "No lane" last, empty lanes omitted) holding items targeted in `year`, ordered by
 /// start quarter (target when no start); plus the tray of non-Done items with no target. An item sits in a lane when its
-/// start..=target quarter range (start defaults to target) overlaps `year`.
+/// start..=target quarter range (start defaults to, and never falls after, the target; as `bar_span`) overlaps `year`.
 pub fn timeline(items: &[Initiative], year: i32) -> (Vec<(String, Vec<&Initiative>)>, Vec<&Initiative>) {
     let mut by_lane: BTreeMap<(bool, &str), Vec<&Initiative>> = BTreeMap::new();
-    for i in items.iter().filter(|i| i.target.is_some_and(|t| i.start.unwrap_or(t).year <= year && year <= t.year)) {
+    for i in items.iter().filter(|i| i.target.is_some_and(|t| i.start.unwrap_or(t).min(t).year <= year && year <= t.year)) {
         by_lane.entry((i.lane == NO_LANE, i.lane.as_str())).or_default().push(i);
     }
     let lanes = by_lane
@@ -459,6 +459,17 @@ mod tests {
         assert_eq!(keys(2026), ["L"]);
         assert_eq!(keys(2027), ["L", "M"]);
         assert!(keys(2025).is_empty());
+    }
+
+    #[test]
+    fn timeline_places_a_start_after_target_item_in_its_target_year_only() {
+        let odd = derive(&epic("S", "New", "new", &["start:2028-Q1", "target:2027-Q4"]), &[], &cfg());
+        let items = vec![odd];
+        let keys = |y: i32| timeline(&items, y).0.iter().flat_map(|(_, v)| v.iter().map(|i| i.key.clone())).collect::<Vec<_>>();
+        assert_eq!(keys(2027), ["S"]);
+        assert!(keys(2026).is_empty());
+        assert!(keys(2028).is_empty());
+        assert_eq!(bar_span(items[0].start, items[0].target, 2027), Some((4, 4)));
     }
 
     #[test]

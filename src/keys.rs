@@ -158,8 +158,10 @@ pub enum HintContext {
     GroomBounce,
     /// The Team screen.
     Team,
-    /// The Roadmap screen.
+    /// The Roadmap screen on a tab with a cursor (Now / Next / Later, Status review).
     Roadmap,
+    /// The Roadmap screen on a tab with nothing to move through or open (Timeline, Outcomes).
+    RoadmapView,
 }
 
 /// Which text field has keyboard focus, if any.
@@ -216,8 +218,8 @@ pub struct HintState {
     pub grooming: Option<GroomHint>,
     /// The Team screen is showing.
     pub team: bool,
-    /// The Roadmap screen is showing.
-    pub roadmap: bool,
+    /// The Roadmap screen is showing, on this tab (1 to 4).
+    pub roadmap: Option<u8>,
 }
 
 impl HintState {
@@ -233,7 +235,7 @@ impl HintState {
             read_only: false,
             grooming: None,
             team: false,
-            roadmap: false,
+            roadmap: None,
         }
     }
 }
@@ -254,7 +256,9 @@ pub fn hint_context(s: HintState) -> HintContext {
         _ if grooming == Some(GroomHint::Placement) => HintContext::GroomPlacement,
         _ if grooming == Some(GroomHint::Bounce) => HintContext::GroomBounce,
         _ if team => HintContext::Team,
-        _ if roadmap => HintContext::Roadmap,
+        // Timeline and Outcomes have no cursor (`views::roadmap::tab_rows` is empty), so no move or open hint.
+        _ if matches!(roadmap, Some(2 | 4)) => HintContext::RoadmapView,
+        _ if roadmap.is_some() => HintContext::Roadmap,
         _ => match focus {
             Focus::Search { clear: true, plain: true } => HintContext::SearchText,
             Focus::Search { clear: true, plain: false } => HintContext::Search,
@@ -337,6 +341,7 @@ pub fn hints(c: HintContext) -> &'static [Hint] {
         HintContext::Roadmap => {
             &[&[K("1"), W("to"), K("4"), W("tab")], &[K("j/k"), W("or"), K("↑/↓"), W("move")], &[K("Enter"), W("open")], &[K("?"), W("help")]]
         }
+        HintContext::RoadmapView => &[&[K("1"), W("to"), K("4"), W("tab")], &[K("?"), W("help")]],
         HintContext::SignIn => &[&[K("Enter"), W("sign in")]],
         HintContext::Browse => &[&[K("j/k"), W("or"), K("↑/↓"), W("move")], &[K("⌘K"), W("go to")], &[K("⌘F"), W("search")], &[K("?"), W("help")]],
         HintContext::BrowseSearch => {
@@ -477,10 +482,15 @@ mod tests {
         assert_eq!(hint_context(team), Team, "the Issues selection does not leak onto Team");
         assert_eq!(hint_context(HintState { help_open: true, ..team }), Help);
         assert_eq!(hint_text(hints(Team)), "h/l or ←/→ member · j/k or ↑/↓ move · Enter open · d done · ? help");
-        let roadmap = HintState { roadmap: true, has_selection: true, ..HintState::new(Focus::None) };
-        assert_eq!(hint_context(roadmap), Roadmap, "the Issues selection does not leak onto Roadmap");
-        assert_eq!(hint_context(HintState { help_open: true, ..roadmap }), Help);
+        let roadmap = |tab| HintState { roadmap: Some(tab), has_selection: true, ..HintState::new(Focus::None) };
+        assert_eq!(hint_context(roadmap(1)), Roadmap, "the Issues selection does not leak onto Roadmap");
+        assert_eq!(hint_context(roadmap(3)), Roadmap, "Status review has a cursor");
+        assert_eq!(hint_context(HintState { help_open: true, ..roadmap(1) }), Help);
         assert_eq!(hint_text(hints(Roadmap)), "1 to 4 tab · j/k or ↑/↓ move · Enter open · ? help");
+        assert_eq!(hint_context(roadmap(2)), RoadmapView, "Timeline has no cursor");
+        assert_eq!(hint_context(roadmap(4)), RoadmapView, "Outcomes has no cursor");
+        assert_eq!(hint_context(HintState { help_open: true, ..roadmap(2) }), Help);
+        assert_eq!(hint_text(hints(RoadmapView)), "1 to 4 tab · ? help");
         assert_eq!(hint_text(hints(GoTo)), "Enter open · Esc close");
         assert_eq!(hint_text(hints(Search)), "Enter run as JQL · Esc clear", "one Enter wording for every search text");
         assert_eq!(hint_text(hints(EditPicker)), "Tab/⇧Tab next or previous field · Enter confirm · Esc cancel");
