@@ -17,7 +17,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
         app.actions.push(Action::ToggleHelp);
     }
     egui::Area::new(egui::Id::new("help")).order(egui::Order::Tooltip).anchor(egui::Align2::CENTER_CENTER, vec2(0.0, 0.0)).show(ctx, |ui| {
-        // Issues then Team on the left; Grooming, Pickers then Global on the right (`COLUMNS`). Each column is as
+        // Issues, Roadmap then Pickers on the left; Grooming, Team then Global on the right (`COLUMNS`). Each column is as
         // wide as its widest key cell plus 16 plus its widest action, so the panel has 24 px on every side and no
         // dead space.
         let [left, right] = COLUMNS;
@@ -61,8 +61,8 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
     });
 }
 
-/// The help's two columns, top to bottom: the closest balance of the groups (19 and 21 rows with headers).
-pub const COLUMNS: [&[Group]; 2] = [&[Group::Issues, Group::Team], &[Group::Grooming, Group::Pickers, Group::Global]];
+/// The help's two columns, top to bottom: the closest balance of the groups (22 and 22 rows with headers).
+pub const COLUMNS: [&[Group]; 2] = [&[Group::Issues, Group::Roadmap, Group::Pickers], &[Group::Grooming, Group::Team, Group::Global]];
 
 /// A column's groups, each a section gap under the last.
 fn groups(ui: &mut egui::Ui, p: &Palette, gs: &[Group], key_w: f32, row: f32, header: f32) {
@@ -395,7 +395,7 @@ mod tests {
         let [l, r] = super::COLUMNS;
         let (left, right) = (rows(l), rows(r));
         assert!(left.abs_diff(right) <= 2, "left {left} rows, right {right}");
-        for g in [Group::Global, Group::Issues, Group::Grooming, Group::Team, Group::Pickers] {
+        for g in [Group::Global, Group::Issues, Group::Grooming, Group::Team, Group::Roadmap, Group::Pickers] {
             assert_eq!(l.iter().chain(r).filter(|x| **x == g).count(), 1, "{}", g.name());
         }
     }

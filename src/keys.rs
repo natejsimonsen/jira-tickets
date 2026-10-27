@@ -7,6 +7,7 @@ pub enum Group {
     Issues,
     Grooming,
     Team,
+    Roadmap,
     Pickers,
 }
 
@@ -17,6 +18,7 @@ impl Group {
             Group::Issues => "Issues",
             Group::Grooming => "Grooming",
             Group::Team => "Team",
+            Group::Roadmap => "Roadmap",
             Group::Pickers => "Pickers and Edit",
         }
     }
@@ -71,6 +73,10 @@ pub const BINDINGS: &[KeyBinding] = &[
     b(Group::Team, "j/k, ↑/↓", "Next or previous ticket"),
     b(Group::Team, "Enter", "Open in Issues"),
     b(Group::Team, "d", "Show or hide done in the last 7 days"),
+    // Plain digits on Roadmap only; ⌘1 to ⌘4 stay the screen switches.
+    b(Group::Roadmap, "1 to 4", "Now / Next / Later, Timeline, Status review, Outcomes"),
+    b(Group::Roadmap, "j/k, ↑/↓", "Next or previous initiative"),
+    b(Group::Roadmap, "Enter", "Open in Issues"),
     b(Group::Pickers, "j/k, ↑/↓", "Move"),
     b(Group::Pickers, "Tab/⇧Tab", "Next or previous field"),
     b(Group::Pickers, "Enter", "Confirm"),
@@ -153,6 +159,8 @@ pub enum HintContext {
     GroomBounce,
     /// The Team screen.
     Team,
+    /// The Roadmap screen.
+    Roadmap,
 }
 
 /// Which text field has keyboard focus, if any.
@@ -211,6 +219,8 @@ pub struct HintState {
     pub grooming: Option<GroomHint>,
     /// The Team screen is showing.
     pub team: bool,
+    /// The Roadmap screen is showing.
+    pub roadmap: bool,
 }
 
 impl HintState {
@@ -226,12 +236,13 @@ impl HintState {
             placeholder: false,
             grooming: None,
             team: false,
+            roadmap: false,
         }
     }
 }
 
 pub fn hint_context(s: HintState) -> HintContext {
-    let HintState { help_open, goto_open, picker, has_selection, focus, search_shown, read_only, placeholder, grooming, team } = s;
+    let HintState { help_open, goto_open, picker, has_selection, focus, search_shown, read_only, placeholder, grooming, team, roadmap } = s;
     match (help_open, goto_open, picker) {
         (true, _, _) => HintContext::Help,
         _ if placeholder => HintContext::Placeholder,
@@ -247,6 +258,7 @@ pub fn hint_context(s: HintState) -> HintContext {
         _ if grooming == Some(GroomHint::Placement) => HintContext::GroomPlacement,
         _ if grooming == Some(GroomHint::Bounce) => HintContext::GroomBounce,
         _ if team => HintContext::Team,
+        _ if roadmap => HintContext::Roadmap,
         _ => match focus {
             Focus::Search { clear: true, plain: true } => HintContext::SearchText,
             Focus::Search { clear: true, plain: false } => HintContext::Search,
@@ -327,6 +339,9 @@ pub fn hints(c: HintContext) -> &'static [Hint] {
             &[K("d"), W("done")],
             &[K("?"), W("help")],
         ],
+        HintContext::Roadmap => {
+            &[&[K("1"), W("to"), K("4"), W("tab")], &[K("j/k"), W("or"), K("↑/↓"), W("move")], &[K("Enter"), W("open")], &[K("?"), W("help")]]
+        }
         HintContext::SignIn => &[&[K("Enter"), W("sign in")]],
         HintContext::Browse => &[&[K("j/k"), W("or"), K("↑/↓"), W("move")], &[K("⌘K"), W("go to")], &[K("⌘F"), W("search")], &[K("?"), W("help")]],
         HintContext::BrowseSearch => {
@@ -402,8 +417,11 @@ mod tests {
         assert!(t.contains("| `j/k` or `↑/↓` | Next or previous issue |\n"));
         assert!(t.contains("| **Grooming** | |\n| `j/k` or `↑/↓` | Next or previous ticket |\n| `r` | Ready |\n"));
         assert!(t.contains("| `Tab` | Switch between Pre-check and Session |\n| **Team** | |\n| `h/l` or `←/→` | Previous or next member |\n"));
-        assert!(t.contains("| `d` | Show or hide done in the last 7 days |\n| **Pickers and Edit** | |\n"));
-        assert_eq!(t.matches("| **").count(), 5);
+        assert!(t.contains(
+            "| `d` | Show or hide done in the last 7 days |\n| **Roadmap** | |\n| `1` to `4` | Now / Next / Later, Timeline, Status review, Outcomes |\n"
+        ));
+        assert!(t.contains("| `Enter` | Open in Issues |\n| **Pickers and Edit** | |\n"));
+        assert_eq!(t.matches("| **").count(), 6);
     }
 
     fn st(help_open: bool, goto_open: bool, picker: Option<PickerHint>, has_selection: bool, focus: Focus) -> HintState {
@@ -464,6 +482,10 @@ mod tests {
         assert_eq!(hint_context(team), Team, "the Issues selection does not leak onto Team");
         assert_eq!(hint_context(HintState { help_open: true, ..team }), Help);
         assert_eq!(hint_text(hints(Team)), "h/l or ←/→ member · j/k or ↑/↓ move · Enter open · d done · ? help");
+        let roadmap = HintState { roadmap: true, has_selection: true, ..HintState::new(Focus::None) };
+        assert_eq!(hint_context(roadmap), Roadmap, "the Issues selection does not leak onto Roadmap");
+        assert_eq!(hint_context(HintState { help_open: true, ..roadmap }), Help);
+        assert_eq!(hint_text(hints(Roadmap)), "1 to 4 tab · j/k or ↑/↓ move · Enter open · ? help");
         assert_eq!(hint_text(hints(GoTo)), "Enter open · Esc close");
         assert_eq!(hint_text(hints(Search)), "Enter run as JQL · Esc clear", "one Enter wording for every search text");
         assert_eq!(hint_text(hints(EditPicker)), "Tab/⇧Tab next or previous field · Enter confirm · Esc cancel");

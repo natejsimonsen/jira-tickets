@@ -266,7 +266,7 @@ pub fn hint_bar_fill(p: &Palette) -> egui::Color32 {
 /// width under them.
 pub fn hints_panel(app: &App, ui: &mut Ui, p: &Palette) {
     use crate::app::Screen;
-    let placeholder = !matches!(app.screen, Screen::Issues | Screen::Grooming | Screen::Team);
+    let placeholder = !matches!(app.screen, Screen::Issues | Screen::Grooming | Screen::Team | Screen::Roadmap);
     let grooming = (app.screen == Screen::Grooming).then(|| crate::views::grooming::hint(&app.grooming));
     let edit = app.picker.as_ref().map(|pk| match pk {
         crate::app::Picker::Edit { .. } => crate::keys::PickerHint::Edit,
@@ -285,6 +285,7 @@ pub fn hints_panel(app: &App, ui: &mut Ui, p: &Palette) {
         placeholder,
         grooming,
         team: app.screen == Screen::Team,
+        roadmap: app.screen == Screen::Roadmap,
     });
     hint_strip(ui, crate::keys::hints(c), p);
 }

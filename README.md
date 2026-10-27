@@ -77,6 +77,10 @@ Only a token you paste is saved. Signing out deletes that file.
 | `j/k` or `↑/↓` | Next or previous ticket |
 | `Enter` | Open in Issues |
 | `d` | Show or hide done in the last 7 days |
+| **Roadmap** | |
+| `1` to `4` | Now / Next / Later, Timeline, Status review, Outcomes |
+| `j/k` or `↑/↓` | Next or previous initiative |
+| `Enter` | Open in Issues |
 | **Pickers and Edit** | |
 | `j/k` or `↑/↓` | Move |
 | `Tab/⇧Tab` | Next or previous field |

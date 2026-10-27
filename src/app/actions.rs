@@ -97,6 +97,12 @@ pub enum Action {
     TeamOpen,
     /// Opens or closes the focused column's "Done in the last 7 days" footer, loading it on first open.
     TeamToggleDone,
+    /// Shows Roadmap tab 1 to 4 (any other number is ignored), its cursor on the first row.
+    RoadmapTab(u8),
+    /// Moves the Roadmap cursor down (or up) the current tab's rows.
+    RoadmapMove(i32),
+    /// Opens the focused Roadmap initiative's epic on the Issues screen.
+    RoadmapOpen,
 }
 
 impl App {
@@ -179,11 +185,41 @@ impl App {
             let Some(card) = cols.get(col).and_then(|c| crate::teamview::card_at(c, row)) else { return };
             card.issue.key.clone()
         };
+        self.open_in_issues(key, ctx);
+    }
+
+    /// Switches to Issues with `key` selected, its row under the cursor when listed there.
+    fn open_in_issues(&mut self, key: String, ctx: &egui::Context) {
         self.apply(Action::SetScreen(Screen::Issues), ctx);
         if let Some(i) = views::issues::current_rows(self).iter().position(|i| i.key == key) {
             self.cursor = i;
         }
         self.apply(Action::Select(key), ctx);
+    }
+
+    /// The jira keys of the current Roadmap tab's rows, in cursor order.
+    fn roadmap_keys(&self) -> Vec<String> {
+        let (items, _) = self.roadmap_items();
+        views::roadmap::tab_rows(self.roadmap.tab, &items).iter().map(|i| i.jira_key.clone()).collect()
+    }
+
+    fn roadmap_tab(&mut self, tab: u8) {
+        if (1..=4).contains(&tab) && tab != self.roadmap.tab {
+            self.roadmap.tab = tab;
+            self.roadmap.cursor = 0;
+        }
+    }
+
+    fn roadmap_move(&mut self, d: i32) {
+        let last = self.roadmap_keys().len().saturating_sub(1);
+        self.roadmap.cursor = self.roadmap.cursor.min(last).saturating_add_signed(d as isize).min(last);
+    }
+
+    fn roadmap_open(&mut self, ctx: &egui::Context) {
+        let keys = self.roadmap_keys();
+        if let Some(key) = keys.get(self.roadmap.cursor.min(keys.len().saturating_sub(1))) {
+            self.open_in_issues(key.clone(), ctx);
+        }
     }
 
     /// The Unassigned column has no footer.
@@ -230,6 +266,9 @@ impl App {
             Action::TeamCol(d) => self.team_move(d, 0),
             Action::TeamOpen => self.team_open(ctx),
             Action::TeamToggleDone => self.team_toggle_done(),
+            Action::RoadmapTab(t) => self.roadmap_tab(t),
+            Action::RoadmapMove(d) => self.roadmap_move(d),
+            Action::RoadmapOpen => self.roadmap_open(ctx),
             Action::GroomMode(m) => self.groom_mode(m),
             Action::GroomMove(d) => self.groom_move(d),
             Action::GroomEpic { delta, skip_empty } => self.groom_epic(delta, skip_empty),

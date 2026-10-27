@@ -66,6 +66,11 @@ impl App {
             self.team_shortcuts(ctx);
             return;
         }
+        // Roadmap's plain 1 to 4 are its tabs; ⌘1 to ⌘4 were taken above.
+        if self.screen == Screen::Roadmap {
+            self.roadmap_shortcuts(ctx);
+            return;
+        }
         if self.screen != Screen::Issues {
             return;
         }
@@ -257,6 +262,37 @@ impl App {
             self.actions.push(Action::TeamToggleDone);
         }
     }
+}
+
+impl App {
+    /// The Roadmap screen's keys (`keys::Group::Roadmap`).
+    fn roadmap_shortcuts(&mut self, ctx: &egui::Context) {
+        if ctx.text_edit_focused() {
+            return;
+        }
+        let key = |k: Key| ctx.input_mut(|i| i.consume_shortcut(&KeyboardShortcut::new(Modifiers::NONE, k)));
+        for (k, tab) in [(Key::Num1, 1), (Key::Num2, 2), (Key::Num3, 3), (Key::Num4, 4)] {
+            if ctx.input_mut(|i| bare_key(i, k)) {
+                self.actions.push(Action::RoadmapTab(tab));
+            }
+        }
+        if key(Key::J) | key(Key::ArrowDown) {
+            self.actions.push(Action::RoadmapMove(1));
+        }
+        if key(Key::K) | key(Key::ArrowUp) {
+            self.actions.push(Action::RoadmapMove(-1));
+        }
+        if key(Key::Enter) {
+            self.actions.push(Action::RoadmapOpen);
+        }
+    }
+}
+
+/// Consumes a press of `k` with no modifier at all: `consume_key` ignores extra Shift and Alt, so ⌥1 or ⇧1 would
+/// otherwise read as a plain 1.
+fn bare_key(i: &mut egui::InputState, k: Key) -> bool {
+    let bare = i.events.iter().any(|e| matches!(e, egui::Event::Key { key, pressed: true, modifiers, .. } if *key == k && modifiers.is_none()));
+    bare && i.consume_key(Modifiers::NONE, k)
 }
 
 /// The mode Tab switches to.

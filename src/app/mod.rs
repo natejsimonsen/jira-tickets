@@ -125,6 +125,20 @@ pub struct TeamState {
     pub done_loading: HashSet<String>,
 }
 
+/// Everything the Roadmap screen keeps between frames.
+pub struct RoadmapState {
+    /// The tab, 1 to 4: Now / Next / Later, Timeline, Status review, Outcomes.
+    pub tab: u8,
+    /// The focused row of the tab (`views::roadmap::tab_rows`).
+    pub cursor: usize,
+}
+
+impl Default for RoadmapState {
+    fn default() -> Self {
+        RoadmapState { tab: 1, cursor: 0 }
+    }
+}
+
 /// A Promote's inputs, frozen when it starts, so a refresh meanwhile cannot change the report.
 pub struct PromoteRun {
     pub date: String,
@@ -230,6 +244,7 @@ pub struct App {
     pending_ranks: Vec<(ListId, String, String)>,
     pub grooming: GroomingState,
     pub team: TeamState,
+    pub roadmap: RoadmapState,
     /// How many report reads were started, for tests.
     #[cfg(test)]
     pub(crate) report_reads: usize,
@@ -313,6 +328,7 @@ impl App {
             pending_ranks: Vec::new(),
             grooming: GroomingState::default(),
             team: TeamState::default(),
+            roadmap: RoadmapState::default(),
             #[cfg(test)]
             report_reads: 0,
             client: None,
@@ -389,6 +405,15 @@ impl App {
         let in_progress = self.store.list(ListId::TeamInProgress);
         let team_open = self.store.list(ListId::TeamOpen);
         crate::teamview::columns(&self.cfg.team.members, &in_progress, &team_open, &self.cfg.grooming.status_ready, chrono::Utc::now())
+    }
+
+    /// The roadmap's initiatives, derived from the epics in the store and their children, and the summaries of the
+    /// ongoing (KTLO) epics.
+    pub fn roadmap_items(&self) -> (Vec<crate::roadmap::Initiative>, Vec<String>) {
+        let epics = self.store.list(ListId::Epics);
+        let (inits, ongoing) = crate::roadmap::select(&epics, &self.cfg.roadmap.initiative_label);
+        let items = inits.iter().map(|e| crate::roadmap::derive(e, &self.store.children_of(&e.key), &self.cfg.roadmap)).collect();
+        (items, ongoing.iter().map(|e| e.summary.clone()).collect())
     }
 
     pub fn spawn(&self, f: impl FnOnce(&Client, &Sender<Msg>) + Send + 'static) {
@@ -707,6 +732,71 @@ mod tests {
         assert!(app.team.done_loading.is_empty());
         assert!(app.team.done.contains_key("abc"), "a failed reload keeps the last list");
         assert!(app.toast.is_some());
+    }
+
+    fn roadmap_app() -> App {
+        let mut app = App::for_test(cfg(), None);
+        app.screen = Screen::Roadmap;
+        let now = |key: &str| crate::jira::Issue {
+            key: key.into(),
+            summary: format!("Initiative {key}"),
+            status: crate::jira::Status { name: "In Progress".into(), category: "indeterminate".into() },
+            ..Default::default()
+        };
+        app.store.absorb(ListId::Epics, vec![now("CI-10"), now("CI-11")]);
+        app
+    }
+
+    #[test]
+    fn roadmap_tab_and_move_clamp() {
+        let mut app = roadmap_app();
+        let ctx = egui::Context::default();
+        assert_eq!(app.roadmap.tab, 1, "Now / Next / Later first");
+        app.apply(Action::RoadmapTab(3), &ctx);
+        assert_eq!(app.roadmap.tab, 3);
+        app.apply(Action::RoadmapMove(5), &ctx);
+        assert_eq!(app.roadmap.cursor, 1, "two Now epics: clamped to the last row");
+        app.apply(Action::RoadmapMove(-9), &ctx);
+        assert_eq!(app.roadmap.cursor, 0);
+        app.apply(Action::RoadmapMove(1), &ctx);
+        app.apply(Action::RoadmapOpen, &ctx);
+        app.drain();
+        assert_eq!(app.selected.as_deref(), Some("CI-11"));
+        assert_eq!(app.screen, Screen::Issues);
+        app.screen = Screen::Roadmap;
+        app.apply(Action::RoadmapTab(1), &ctx);
+        assert_eq!((app.roadmap.tab, app.roadmap.cursor), (1, 0), "a new tab starts at its first row");
+        app.apply(Action::RoadmapTab(9), &ctx);
+        assert_eq!(app.roadmap.tab, 1, "no such tab: unchanged");
+        app.apply(Action::RoadmapTab(2), &ctx);
+        app.apply(Action::RoadmapMove(1), &ctx);
+        assert_eq!(app.roadmap.cursor, 0, "a tab without rows keeps the cursor at 0");
+        app.apply(Action::RoadmapOpen, &ctx);
+        assert_eq!(app.screen, Screen::Roadmap, "nothing to open");
+    }
+
+    /// Runs the shortcuts over one pass that presses `key` with `mods`.
+    fn press(app: &mut App, key: egui::Key, mods: egui::Modifiers) {
+        let ctx = egui::Context::default();
+        let ev = egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: mods };
+        let input = egui::RawInput { events: vec![ev], ..Default::default() };
+        ctx.run_ui(input, |_| app.shortcuts(&ctx)).textures_delta.clear();
+    }
+
+    #[test]
+    fn plain_digits_switch_roadmap_tabs_and_command_digits_switch_screens() {
+        let mut app = roadmap_app();
+        press(&mut app, egui::Key::Num3, egui::Modifiers::NONE);
+        assert!(matches!(app.actions.as_slice(), [Action::RoadmapTab(3)]), "plain 3 on Roadmap");
+        app.actions.clear();
+        press(&mut app, egui::Key::Num3, egui::Modifiers::COMMAND);
+        assert!(matches!(app.actions.as_slice(), [Action::SetScreen(Screen::Team)]), "⌘3 stays the screen switch");
+        app.actions.clear();
+        press(&mut app, egui::Key::Num2, egui::Modifiers::ALT);
+        assert!(app.actions.is_empty(), "a modified digit is not a tab key");
+        app.screen = Screen::Team;
+        press(&mut app, egui::Key::Num3, egui::Modifiers::NONE);
+        assert!(!app.actions.iter().any(|a| matches!(a, Action::RoadmapTab(_))), "only on Roadmap");
     }
 
     #[test]

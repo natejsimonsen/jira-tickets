@@ -8,6 +8,7 @@ pub mod help;
 pub mod icons;
 pub mod issues;
 pub mod pickers;
+pub mod roadmap;
 pub mod team;
 
 use crate::app::{Action, App, Screen};
@@ -26,7 +27,7 @@ pub fn main(app: &mut App, ui: &mut Ui) {
         Screen::Issues => issues::show(app, ui),
         Screen::Grooming => grooming::show(app, ui),
         Screen::Team => team::show(app, ui),
-        Screen::Roadmap => placeholder(ui, p, "Roadmap"),
+        Screen::Roadmap => roadmap::show(app, ui),
     }
     // One 1 px rule, the header panel's own last point under its 48 px bar (egui's separator line is off, so
     // nothing stacks on it), then the active tab's 2 px accent bar over the rule's y-range. Painted after the
