@@ -17,7 +17,6 @@ pub enum Msg {
     List {
         id: ListId,
         result: jira::Result<Vec<Issue>>,
-        stale: bool,
         /// The query carried the members' assignee clause, so an unresolved
         /// member may retry it without them (once; the retry carries none).
         with_members: bool,
@@ -107,7 +106,7 @@ impl App {
                 self.token_error = Some(m);
             }
             Msg::Me(Err(e)) => self.toast(e.to_string(), true),
-            Msg::List { id, result, stale: _, seq, with_members } => {
+            Msg::List { id, result, seq, with_members } => {
                 if id == ListId::Search {
                     if !accept_search(self.search_seq, seq, self.search_active) {
                         // A pending seq older than the current run can never land.

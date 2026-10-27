@@ -86,7 +86,7 @@ impl App {
         entry.loading = true;
         self.spawn(move |c, tx| {
             let fields: Vec<&str> = fields.iter().map(String::as_str).collect();
-            let _ = tx.send(Msg::List { id, result: c.search(&jql, &fields), stale: false, seq, with_members });
+            let _ = tx.send(Msg::List { id, result: c.search(&jql, &fields), seq, with_members });
         });
     }
 

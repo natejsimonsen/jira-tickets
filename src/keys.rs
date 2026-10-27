@@ -93,6 +93,7 @@ pub fn range(alt: &str) -> Vec<&str> {
 }
 
 /// The README keyboard table, in `BINDINGS` order, with a bold row per group.
+#[cfg(test)]
 pub fn readme_table() -> String {
     let mut out = String::from("| Keys | Action |\n| --- | --- |\n");
     let mut group = None;
@@ -137,8 +138,6 @@ pub enum HintContext {
     Picker,
     Selected,
     Browse,
-    /// A screen still to come: the way back and help.
-    Placeholder,
     /// The sign-in screen: Enter signs in.
     SignIn,
     /// Selected, with a server search (text or JQL) on screen: Esc clears it.
@@ -213,8 +212,6 @@ pub struct HintState {
     pub search_shown: bool,
     /// Writes are blocked and no composer is drawn (`detail::composer_read_only`): no composer keys.
     pub read_only: bool,
-    /// A screen that is not built yet (Team, Roadmap).
-    pub placeholder: bool,
     /// The Grooming screen is showing, and what it shows.
     pub grooming: Option<GroomHint>,
     /// The Team screen is showing.
@@ -224,6 +221,7 @@ pub struct HintState {
 }
 
 impl HintState {
+    #[cfg(test)]
     pub fn new(focus: Focus) -> Self {
         HintState {
             help_open: false,
@@ -233,7 +231,6 @@ impl HintState {
             focus,
             search_shown: false,
             read_only: false,
-            placeholder: false,
             grooming: None,
             team: false,
             roadmap: false,
@@ -242,10 +239,9 @@ impl HintState {
 }
 
 pub fn hint_context(s: HintState) -> HintContext {
-    let HintState { help_open, goto_open, picker, has_selection, focus, search_shown, read_only, placeholder, grooming, team, roadmap } = s;
+    let HintState { help_open, goto_open, picker, has_selection, focus, search_shown, read_only, grooming, team, roadmap } = s;
     match (help_open, goto_open, picker) {
         (true, _, _) => HintContext::Help,
-        _ if placeholder => HintContext::Placeholder,
         // An open picker or go-to box owns the bar on every screen, Grooming included.
         (_, _, Some(PickerHint::Edit)) => HintContext::EditPicker,
         (_, _, Some(PickerHint::Assign)) => HintContext::AssignPicker,
@@ -310,7 +306,6 @@ pub fn hints(c: HintContext) -> &'static [Hint] {
             &[K("⌘O"), W("open")],
             &[K("?"), W("help")],
         ],
-        HintContext::Placeholder => &[&[K("⌘1"), W("Issues")], &[K("?"), W("help")]],
         HintContext::GroomPreCheck => &[
             &[K("j/k"), W("or"), K("↑/↓"), W("move")],
             &[K("r"), W("ready")],
@@ -350,7 +345,8 @@ pub fn hints(c: HintContext) -> &'static [Hint] {
     }
 }
 
-/// Plain text of a hint line, for tests and tooltips.
+/// Plain text of a hint line, for tests.
+#[cfg(test)]
 pub fn hint_text(hs: &[Hint]) -> String {
     hs.iter()
         .map(|h| {
@@ -434,9 +430,8 @@ mod tests {
         let search = |sel| HintState { has_selection: sel, search_shown: true, ..HintState::new(Focus::None) };
         assert_eq!(hint_context(search(true)), SelectedSearch, "a search on screen keeps Esc clear after the box blurs");
         assert_eq!(hint_context(search(false)), BrowseSearch);
-        let soon = HintState { placeholder: true, ..HintState::new(Focus::None) };
-        assert_eq!(hint_text(hints(hint_context(soon))), "⌘1 Issues · ? help");
-        assert_eq!(hint_context(HintState { help_open: true, ..soon }), Help, "help still wins");
+        let groom = HintState { grooming: Some(GroomHint::PreCheck), ..HintState::new(Focus::None) };
+        assert_eq!(hint_context(HintState { help_open: true, ..groom }), Help, "help still wins");
         assert_eq!(hint_text(hints(BrowseSearch)), "j/k or ↑/↓ move · Esc clear · ⌘K go to · ⌘F search · ? help");
         assert!(hint_text(hints(SelectedSearch)).starts_with("j/k or ↑/↓ move · Esc clear · t transition"));
         assert_eq!(hint_context(st(true, true, Some(PickerHint::Other), true, Focus::OtherText)), Help, "help wins");

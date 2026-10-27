@@ -321,6 +321,7 @@ fn header_galleys(ui: &Ui, p: &Palette, author: &str, date: &str) -> HeaderGalle
 
 /// A comment card's header: the author in bold, COMMENT_META_GAP to the ink, the date muted on its baseline.
 /// Returns both labels' rects.
+#[cfg(test)]
 pub fn comment_header(ui: &mut Ui, p: &Palette, author: &str, date: &str) -> (egui::Rect, egui::Rect) {
     let header = header_galleys(ui, p, author, date);
     comment_header_row(ui, header)

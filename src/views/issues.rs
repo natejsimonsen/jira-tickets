@@ -266,7 +266,6 @@ pub fn hint_bar_fill(p: &Palette) -> egui::Color32 {
 /// width under them.
 pub fn hints_panel(app: &App, ui: &mut Ui, p: &Palette) {
     use crate::app::Screen;
-    let placeholder = !matches!(app.screen, Screen::Issues | Screen::Grooming | Screen::Team | Screen::Roadmap);
     let grooming = (app.screen == Screen::Grooming).then(|| crate::views::grooming::hint(&app.grooming));
     let edit = app.picker.as_ref().map(|pk| match pk {
         crate::app::Picker::Edit { .. } => crate::keys::PickerHint::Edit,
@@ -282,7 +281,6 @@ pub fn hints_panel(app: &App, ui: &mut Ui, p: &Palette) {
         focus,
         search_shown: esc_clears_search(app.search_active, app.typed_search, app.text_search.is_some()),
         read_only: super::detail::composer_read_only(),
-        placeholder,
         grooming,
         team: app.screen == Screen::Team,
         roadmap: app.screen == Screen::Roadmap,
@@ -809,6 +807,7 @@ fn filters(app: &mut App, ui: &mut Ui, p: &Palette) {
 /// The count row's text: a plain count, "3 of 20 issues" under a local text filter (`total` is the
 /// count before it), "· JQL" for a typed search's rows, "· text" for a text search's, or (nothing to show
 /// yet) a loading line.
+#[cfg(test)]
 pub fn count_label(shown: usize, total: Option<usize>, loading_first: bool, suffix: CountSuffix) -> String {
     let (count, mode) = count_parts(shown, total, loading_first, suffix);
     format!("{count}{mode}")
@@ -1436,6 +1435,7 @@ pub fn pill_line_y(row_top: f32, ppp: f32) -> f32 {
     ((row_top + PILL_LINE_TOP) * ppp).round() / ppp
 }
 /// One row's pitch (rows overlap by ROW_GAP's 1 px), for the density check: 44 − 2 from round 8's padding.
+#[cfg(test)]
 pub const ROW_PITCH: f32 = 42.0;
 
 /// The 3 px epic stripe over a row card's left edge, snapped to whole physical pixels.
@@ -2334,23 +2334,8 @@ mod tests {
     #[test]
     fn every_hint_key_is_drawn_mono() {
         use crate::keys::{HintContext::*, Tok, hints};
-        let all = [
-            Help,
-            GoTo,
-            Search,
-            SearchText,
-            SearchEmpty,
-            Composer,
-            EditPicker,
-            AssignPicker,
-            Picker,
-            Selected,
-            Browse,
-            Placeholder,
-            SignIn,
-            SelectedSearch,
-            BrowseSearch,
-        ];
+        let all =
+            [Help, GoTo, Search, SearchText, SearchEmpty, Composer, EditPicker, AssignPicker, Picker, Selected, Browse, SignIn, SelectedSearch, BrowseSearch];
         crate::testutil::with_ui(|ui| {
             ui.fonts_mut(|f| {
                 let mut adv = |c: char| f.glyph_width(&theme::key_font(), c);

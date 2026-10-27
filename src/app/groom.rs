@@ -726,14 +726,14 @@ mod tests {
             }
             v
         };
-        app.handle(Msg::List { id: ListId::TeamOpen, result: Ok(list("New")), stale: false, seq: None, with_members: false });
+        app.handle(Msg::List { id: ListId::TeamOpen, result: Ok(list("New")), seq: None, with_members: false });
         let text = app.grooming.last_summary.clone().unwrap();
         app.handle(Msg::ReportLoaded(Some((dir.path().join("2099-01-01.md"), crate::report::parse(&text)))));
         assert_eq!(app.pre_check_candidates().iter().map(|c| c.issue.key.as_str()).collect::<Vec<_>>(), ["CI-3"]);
         assert!(!app.grooming.verdicts.contains_key("CI-1") && !app.grooming.verdicts.contains_key("CI-2"), "{:?}", app.grooming.verdicts);
         assert_eq!(app.grooming.retired.len(), 2, "still held while the list shows them in New");
         // The list catches up: they are in Planning, and the set lets go of them.
-        app.handle(Msg::List { id: ListId::TeamOpen, result: Ok(list("Planning")), stale: false, seq: None, with_members: false });
+        app.handle(Msg::List { id: ListId::TeamOpen, result: Ok(list("Planning")), seq: None, with_members: false });
         assert!(app.grooming.retired.is_empty(), "{:?}", app.grooming.retired);
     }
 

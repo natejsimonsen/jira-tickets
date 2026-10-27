@@ -155,6 +155,7 @@ const DIALOG_LIFT: f32 = 13.0;
 /// The dialog's margin: 16 at the sides and bottom; the top is the title's (`title`), set to its ink.
 const DIALOG_MARGIN: Margin = Margin { left: 16, right: 16, top: 0, bottom: 16 };
 /// The dialog edge's stroke: egui starts the frame's content inside it, and the title's ink is measured from it.
+#[cfg(test)]
 const DIALOG_EDGE: f32 = 1.0;
 /// The dialog's inner edge → the title's ink (round 13 G1: 19.5 with a 16 margin to its line box).
 const TITLE_INK_TOP: f32 = 16.0;

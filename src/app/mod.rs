@@ -264,6 +264,7 @@ pub struct App {
 
 impl App {
     /// True once the first team list has loaded; snapshots wait for it.
+    #[cfg(feature = "snapshot")]
     pub fn shot_ready(&self) -> bool {
         self.lists.get(&crate::store::ListId::TeamOpen).is_some_and(|l| l.fetched.is_some())
     }
@@ -608,7 +609,7 @@ mod tests {
         let client = std::sync::Arc::new(crate::jira::Client::new(&base, &login));
         let mut app = App::for_test(cfg(), Some(client));
         let issue = crate::jira::Issue { key: "CI-1".into(), parent_key: Some("CI-9".into()), ..Default::default() };
-        app.handle(Msg::List { id: ListId::TeamOpen, result: Ok(vec![issue]), stale: false, seq: None, with_members: false });
+        app.handle(Msg::List { id: ListId::TeamOpen, result: Ok(vec![issue]), seq: None, with_members: false });
         assert_eq!(app.store.list(ListId::TeamOpen).len(), 1);
         assert!(app.lists.get(&ListId::Epics).is_some_and(|l| l.loading), "epics load was started");
     }
@@ -619,7 +620,7 @@ mod tests {
         app.search_active = true;
         app.search_seq = 5;
         let issue = crate::jira::Issue { key: "CI-2".into(), ..Default::default() };
-        app.handle(Msg::List { id: ListId::Search, result: Ok(vec![issue]), stale: false, seq: Some(4), with_members: false });
+        app.handle(Msg::List { id: ListId::Search, result: Ok(vec![issue]), seq: Some(4), with_members: false });
         assert!(app.store.list(ListId::Search).is_empty());
     }
 
@@ -752,7 +753,7 @@ mod tests {
         let mut app = App::for_test(cfg(), None);
         let st = |cat: &str| crate::jira::Status { name: "x".into(), category: cat.into() };
         let child = |key: &str, cat: &str| crate::jira::Issue { key: key.into(), status: st(cat), parent_key: Some("CI-10".into()), ..Default::default() };
-        let list = |id, issues| Msg::List { id, result: Ok(issues), stale: false, seq: None, with_members: false };
+        let list = |id, issues| Msg::List { id, result: Ok(issues), seq: None, with_members: false };
         app.store.absorb(ListId::TeamOpen, vec![child("CI-21", "new"), child("CI-22", "indeterminate")]);
         let epic = crate::jira::Issue { key: "CI-10".into(), summary: "Initiative".into(), status: st("indeterminate"), ..Default::default() };
         app.handle(list(ListId::Epics, vec![epic]));
@@ -766,7 +767,7 @@ mod tests {
     fn epic_children_do_not_load_without_a_client() {
         let mut app = App::for_test(cfg(), None);
         let epic = crate::jira::Issue { key: "CI-10".into(), status: crate::jira::Status { name: "x".into(), category: "new".into() }, ..Default::default() };
-        app.handle(Msg::List { id: ListId::Epics, result: Ok(vec![epic]), stale: false, seq: None, with_members: false });
+        app.handle(Msg::List { id: ListId::Epics, result: Ok(vec![epic]), seq: None, with_members: false });
         app.load_epic_children();
         assert!(!app.lists.get(&ListId::EpicChildren).is_some_and(|l| l.loading), "no client: nothing would clear the flag");
     }

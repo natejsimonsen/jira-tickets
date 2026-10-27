@@ -639,10 +639,6 @@ impl Ink {
     pub fn pad_top(&self, target: f32) -> f32 {
         target - self.top
     }
-    /// The margin below a line box for `target` to the baseline (a line without descenders).
-    pub fn pad_base(&self, target: f32) -> f32 {
-        target - (self.line - self.base)
-    }
     /// The margin below a line box for `target` to the descender ink.
     pub fn pad_deep(&self, target: f32) -> f32 {
         target - (self.line - self.base - self.descent)

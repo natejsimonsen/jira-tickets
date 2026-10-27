@@ -44,16 +44,7 @@ pub const HEADER_H: f32 = 49.0;
 /// The bar above the rule.
 const BAR_H: f32 = HEADER_H - 1.0;
 
-/// "<Tab> is coming soon", named as the tab is.
-pub fn placeholder_text(tab: &str) -> String {
-    format!("{tab} is coming soon")
-}
-
-fn placeholder(ui: &mut Ui, p: &Palette, tab: &str) {
-    centred(ui, "placeholder", |ui| empty_state(ui, p, &placeholder_text(tab)));
-}
-
-/// The one empty-state line (placeholders, "Select an issue"): body 14, muted, a label without a period.
+/// The one empty-state line ("Select an issue", "Nothing in Now"): body 14, muted, a label without a period.
 pub fn empty_state(ui: &mut Ui, p: &Palette, text: &str) {
     ui.label(RichText::new(text).color(p.muted).size(EMPTY_STATE_SIZE));
 }
@@ -66,7 +57,7 @@ pub fn centre_top(avail_h: f32, content_h: f32) -> f32 {
     ((avail_h - content_h) / 2.0).max(0.0).round()
 }
 
-/// The one centring rule (placeholders, sign-in): `content` centred horizontally and vertically in the
+/// The one centring rule (sign-in, finding the token): `content` centred horizontally and vertically in the
 /// space left, using its height from the previous frame.
 fn centred(ui: &mut Ui, id: &str, content: impl FnOnce(&mut Ui)) {
     let id = egui::Id::new(("centred", id));
@@ -825,13 +816,7 @@ pub fn dialog_button_fill(p: &Palette) -> Color32 {
 /// The dark dialog's raised button fill (Cancel): a step past `selected_row` (#3d3d3a read 1.08:1 off the dialog).
 const DARK_CANCEL: Color32 = Color32::from_rgb(0x42, 0x42, 0x40);
 
-/// Placeholder text for a field, in the `placeholder` token, starting exactly where typed text does (the first
-/// keystroke moves nothing; round 8 measured it 2 pt right).
-pub fn field_hint(text: &str, font: egui::FontId, p: &Palette) -> egui::text::LayoutJob {
-    field_hint_at(text, font, p, 0.0)
-}
-
-/// `field_hint` moved `lead` right.
+/// Placeholder text for a field, in the `placeholder` token, `lead` right of the text origin.
 pub fn field_hint_at(text: &str, font: egui::FontId, p: &Palette, lead: f32) -> egui::text::LayoutJob {
     let mut job = egui::text::LayoutJob::default();
     job.append(text, lead, egui::TextFormat { font_id: font, color: theme::placeholder(p), ..Default::default() });
@@ -1060,12 +1045,7 @@ pub fn primary_colors(p: &Palette) -> (Color32, Color32) {
     (p.accent, p.on_accent)
 }
 
-/// A 12 px accent text link (no frame), underlined while hovered: "Clear filters", "Clear search".
-pub fn small_link(ui: &mut Ui, text: &str, p: &Palette) -> egui::Response {
-    text_link(ui, text, theme::body(12.0), p.accent)
-}
-
-/// `small_link` whose slot ends at its last glyph's ink, not its advance, so links right-aligned in one place end
+/// A 12 px accent text link (no frame), underlined while hovered ("Clear filters", "Clear search"), whose slot ends at its last glyph's ink, not its advance, so links right-aligned in one place end
 /// on one ink edge whatever their last letter.
 pub fn small_link_ink_right(ui: &mut Ui, text: &str, p: &Palette) -> egui::Response {
     let galley = ui.painter().layout_no_wrap(text.to_string(), theme::body(12.0), p.accent);
@@ -1690,11 +1670,6 @@ mod widget_tests {
     #[test]
     fn one_empty_state_size() {
         assert_eq!(EMPTY_STATE_SIZE, 14.0);
-    }
-
-    #[test]
-    fn placeholders_name_the_tab() {
-        assert_eq!(placeholder_text("Team"), "Team is coming soon");
     }
 
     #[test]

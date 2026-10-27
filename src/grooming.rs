@@ -211,14 +211,6 @@ pub fn needs_detail_epics(rows: &[(&RunRow, Vec<Code>)], cap: usize) -> (Vec<Nee
     (out, rows.len())
 }
 
-/// A live-session decision on a ticket.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Decision {
-    Accept,
-    Bounce,
-    Park,
-}
-
 /// One epic's tickets for the session rail.
 pub struct EpicQueue<'a> {
     pub epic: Option<String>,

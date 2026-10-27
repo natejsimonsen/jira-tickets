@@ -17,7 +17,6 @@ pub enum Action {
     SubmitToken,
     FindToken,
     SignOut,
-    Toast(String, bool),
     SetEpic(Option<String>),
     SetSprint(crate::filter::SprintScope),
     SetTeam(crate::filter::TeamScope),
@@ -329,7 +328,6 @@ impl App {
                 self.login = None;
                 self.me = None;
             }
-            Action::Toast(t, e) => self.toast(t, e),
             Action::SetEpic(e) => {
                 self.filter.epic = e;
                 self.cursor = 0;

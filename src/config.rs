@@ -1,8 +1,6 @@
 //! The TOML config at ~/.config/jira-tickets/config.toml: site, scope,
 //! grooming statuses, team roster, columns, roadmap field mapping.
 
-#![allow(dead_code)]
-
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -125,11 +123,6 @@ impl Scope {
     /// Every configured team's label, or just `team_label` when no teams are listed.
     pub fn team_labels(&self) -> Vec<String> {
         if self.teams.is_empty() { vec![self.team_label.clone()] } else { self.teams.iter().map(|t| t.label.clone()).collect() }
-    }
-
-    /// The entry for the user's own team (`team_label`), if listed.
-    pub fn own_team(&self) -> Option<&TeamEntry> {
-        self.teams.iter().find(|t| t.label == self.team_label)
     }
 
     /// A team's members; the own team falls back to `own_members` (`[team].members`) when it lists none.
@@ -404,7 +397,7 @@ email = "me@example.com"
         assert_eq!(c.scope.parent_board_id, 100);
         assert_eq!(c.scope.team_labels(), ["PLAT", "TOOLS"]);
         assert_eq!(c.scope.teams[1], TeamEntry { label: "TOOLS".into(), name: "Developer Tools".into(), board_id: 102, members: vec![] });
-        assert_eq!(c.scope.own_team().map(|t| t.name.as_str()), Some("Platform"));
+        assert_eq!(c.scope.teams[0].name, "Platform");
         assert_eq!(c.grooming.planning_transition_id, "11");
         assert_eq!(c.grooming.planning_cap, 10);
         assert_eq!(c.issues.columns, vec!["status", "labels", "parent.summary", "assignee"]);
@@ -502,7 +495,6 @@ email = "me@example.com"
         assert_eq!(m.get("TOOLS").unwrap(), &["acct-1"]);
         sc.teams.clear();
         assert_eq!(sc.team_labels(), ["PLAT"]);
-        assert!(sc.own_team().is_none());
         assert_eq!(sc.members_of("PLAT", &own), own);
     }
 
