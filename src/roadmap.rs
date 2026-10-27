@@ -60,9 +60,7 @@ fn has_label(e: &Issue, label: &str) -> bool {
 }
 
 pub fn is_initiative(epic: &Issue, label: &str, any_labelled: bool) -> bool {
-    // The brief's test puts "(ongoing)" in the status name while the summary is generated, so check both.
-    let ongoing = |t: &str| t.to_lowercase().contains("(ongoing)");
-    if any_labelled { has_label(epic, label) } else { !(ongoing(&epic.summary) || ongoing(&epic.status.name)) }
+    if any_labelled { has_label(epic, label) } else { !epic.summary.to_lowercase().contains("(ongoing)") }
 }
 
 /// (initiatives, ongoing). Ongoing is everything that is not an initiative.
@@ -234,7 +232,7 @@ pub fn shipped(items: &[Initiative]) -> Vec<&Initiative> {
     items.iter().filter(|i| i.horizon == Horizon::Done).collect()
 }
 
-/// Lanes (alphabetical, "No lane" last, empty lanes omitted) holding items targeted in `year`, ordered by
+/// Lanes (alphabetical by lane name because no config is passed, "No lane" last, empty lanes omitted) holding items targeted in `year`, ordered by
 /// start quarter (target when no start); plus the tray of non-Done items with no target.
 pub fn timeline(items: &[Initiative], year: i32) -> (Vec<(String, Vec<&Initiative>)>, Vec<&Initiative>) {
     let mut by_lane: BTreeMap<(bool, &str), Vec<&Initiative>> = BTreeMap::new();
@@ -268,11 +266,9 @@ pub fn health_counts(rows: &[&Initiative]) -> [usize; 4] {
     c
 }
 
-/// (distinct owners, rows with an owner).
+/// (rows with an owner, total rows), for the "owners set n / total" tile.
 pub fn owners_set(rows: &[&Initiative]) -> (usize, usize) {
-    let owners: Vec<&str> = rows.iter().filter_map(|r| r.owner.as_deref()).collect();
-    let distinct: std::collections::BTreeSet<&str> = owners.iter().copied().collect();
-    (distinct.len(), owners.len())
+    (rows.iter().filter(|r| r.owner.is_some()).count(), rows.len())
 }
 
 /// metric -> (active Now items, other non-Done items), sorted by metric name.
@@ -318,7 +314,8 @@ mod tests {
     #[test]
     fn selects_initiatives_by_label_or_ongoing_rule() {
         let a = epic("CI-1", "Canary Deployments", "indeterminate", &["roadmap"]);
-        let b = epic("CI-2", "Deployer (ongoing)", "indeterminate", &[]);
+        let mut b = epic("CI-2", "In Progress", "indeterminate", &[]);
+        b.summary = "Deployer (ongoing)".into();
         let c = epic("CI-3", "Cluster Migration", "new", &[]);
         let (inits, ongoing) = select(&[&a, &b, &c], "roadmap");
         assert_eq!(inits.iter().map(|e| e.key.as_str()).collect::<Vec<_>>(), ["CI-1"], "label present on some epic: only labelled ones count");
@@ -424,6 +421,10 @@ mod tests {
         let rows = status_rows(&items);
         assert_eq!(rows.iter().map(|i| i.key.as_str()).collect::<Vec<_>>(), ["B", "A"]);
         assert_eq!(health_counts(&rows), [1, 0, 1, 0]);
+        assert_eq!(owners_set(&rows), (0, 2));
+        let mut owned = items[0].clone();
+        owned.owner = Some("Ada".into());
+        assert_eq!(owners_set(&[&owned, &items[1]]), (1, 2));
         let out = outcomes(&items);
         assert_eq!(out[0].0, "Cost");
         assert_eq!(out[0].1.len(), 2);
