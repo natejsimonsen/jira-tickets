@@ -435,6 +435,8 @@ Tabs:
 - The Shipped list also includes Done initiatives with no target, flagged "target not set".
 - Progress counts every child of an initiative, Done ones included, via the `EpicChildren` list.
 - The KTLO footnote lists only non-initiative epics whose summary contains "(ongoing)".
+- A `health:` label beats `health_field`; the field is read only when no label is set.
+- Horizon precedence: a `horizon:` label first, then `horizon_by_status`, then the Done status category. So `horizon_by_status` is consulted before the Done category, and a `horizon:` label overrides even a Done-category epic.
 
 ## 10. Error handling
 
@@ -480,18 +482,21 @@ Snapshot runs block every write.
 | File | Role |
 |---|---|
 | `src/main.rs` | Opens the window |
-| `src/app.rs` | App state, `Msg` enum, background loading, keyboard |
+| `src/app/` | App state and screen state (`mod.rs`), `Action`s (`actions.rs`), `Msg` handling (`msg.rs`), background loading (`loads.rs`), Grooming writes (`groom.rs`), pickers (`pickers.rs`), keyboard (`shortcuts.rs`) |
 | `src/config.rs` | TOML config, defaults, example generation, secret resolution |
 | `src/auth.rs` | Token lookup and saving |
 | `src/jira.rs` | REST v3 and Agile 1.0 client, data types |
 | `src/adf.rs` | ADF to egui rich text and plain text |
 | `src/store.rs` | Issue store, list ids, projections, disk cache |
 | `src/report.rs` | Pre-check report writer and parser |
-| `src/roadmap.rs` | Epic → initiative derivation (horizon, health, quarters, metrics) |
+| `src/teamview.rs` | Team columns, cursor clamping, days since the status category changed, done-recent JQL |
+| `src/roadmap.rs` | Epic → initiative derivation (horizon, health, quarters, metrics), timeline lanes and bar spans |
 | `src/theme.rs` | Colours (light and dark) and fonts |
 | `src/views/mod.rs` | View switcher, panels, toasts |
 | `src/views/issues.rs` | List and detail |
 | `src/views/grooming.rs` | Pre-check and session modes |
 | `src/views/team.rs` | Member columns |
-| `src/views/roadmap.rs` | Four roadmap tabs |
+| `src/views/roadmap.rs` | Roadmap tab strip, Now / Next / Later and Status review tabs |
+| `src/views/roadmap/timeline.rs` | Timeline tab |
+| `src/views/roadmap/outcomes.rs` | Outcomes tab |
 | `src/snapshot.rs` | Offscreen screenshots (feature `snapshot`) |
