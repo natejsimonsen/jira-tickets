@@ -42,6 +42,19 @@ pub fn days_text(days: i64) -> String {
     format!("{days} d")
 }
 
+/// The epic chip's text width on the chip row: what is left after its own padding and, when a days label follows,
+/// that label's width and the gap before it, so the chip truncates and the label stays on the row.
+pub fn epic_text_width(avail: f32, days_w: Option<f32>) -> f32 {
+    (avail - 2.0 * PILL_MARGIN.x - days_w.map_or(0.0, |w| w + PILL_GAP)).max(0.0)
+}
+
+/// Where the epic chip goes and how wide its text may be: `(next_row, text width)`. It stays on the status pill's
+/// row (`rest` left there) when its whole text and the days label both fit, else it starts the next row (`full`
+/// wide) and is cut to leave the label room (`epic_text_width`).
+pub fn epic_place(rest: f32, full: f32, natural: f32, days_w: Option<f32>) -> (bool, f32) {
+    if natural <= epic_text_width(rest, days_w) { (false, natural) } else { (true, epic_text_width(full, days_w)) }
+}
+
 /// What one column's footer shows.
 struct Footer<'a> {
     open: bool,
@@ -177,19 +190,28 @@ fn card(app: &App, ui: &mut Ui, p: &Palette, id: (usize, usize), c: &Card, sel: 
             ui.spacing_mut().item_spacing = vec2(PILL_GAP, LINE_GAP);
             let st = theme::status_tint(&i.status.name, &i.status.category, p, &app.cfg.issues.status_colors);
             crate::views::pill(ui, &i.status.name, crate::views::issues::status_fill(&st, p, sel), st.fg);
+            let muted = if sel { crate::views::selected_pill_text(p) } else { p.muted };
+            let days = c.days_in_status.map(|d| ui.painter().layout_no_wrap(days_text(d), theme::body(12.0), muted));
             if let Some(k) = &i.parent_key {
                 let t = theme::epic_tint_in(k, &app.epic_slots, p, &app.cfg.issues.epic_colors);
                 let name = i.parent_summary.as_ref().map_or_else(|| k.clone(), |s| format!("{k} {s}"));
                 let painter = ui.painter().clone();
                 let measure = |s: &str| painter.layout_no_wrap(s.to_string(), theme::body(12.0), t.fg).size().x;
-                let text = crate::views::issues::fit_epic(&name, ui.available_width() - 2.0 * PILL_MARGIN.x, measure);
+                // The chip and the days label go together: on the status pill's row when both fit there, else
+                // starting the next row, the chip cut to leave the label room either way.
+                let rest = ui.max_rect().right() - ui.cursor().min.x - PILL_GAP;
+                let (next_row, max_w) = epic_place(rest, ui.max_rect().width(), measure(&name), days.as_ref().map(|g| g.size().x));
+                if next_row {
+                    ui.end_row();
+                }
+                let text = crate::views::issues::fit_epic(&name, max_w, measure);
                 let edge = crate::views::issues::row_stripe(&t, p, sel);
                 let r = pill_sized(ui, &text, Color32::TRANSPARENT, t.fg, Stroke::new(1.0, edge), PILL_MARGIN);
                 crate::views::tooltip(r, crate::views::issues::epic_tip(k, i.parent_summary.as_deref().unwrap_or_default()));
             }
-            if let Some(d) = c.days_in_status {
-                let muted = if sel { crate::views::selected_pill_text(p) } else { p.muted };
-                let r = ui.label(RichText::new(days_text(d)).color(muted).size(12.0));
+            // One galley, never wrapped: its width was kept free on the chip row above.
+            if let (Some(d), Some(g)) = (c.days_in_status, days) {
+                let r = ui.add(egui::Label::new(g));
                 crate::views::tooltip(r, format!("{d} days in {}", i.status.name));
             }
         });
@@ -248,6 +270,51 @@ mod tests {
         assert_eq!(column_width(1200.0, 3), 389.0);
         assert_eq!(column_width(1200.0, 7), COL_MIN);
         assert_eq!(column_width(500.0, 0), 500.0);
+    }
+
+    #[test]
+    fn the_epic_chip_leaves_room_for_the_days_label() {
+        assert_eq!(epic_text_width(200.0, None), 200.0 - 2.0 * PILL_MARGIN.x);
+        assert_eq!(epic_text_width(200.0, Some(30.0)), 200.0 - 2.0 * PILL_MARGIN.x - 30.0 - PILL_GAP);
+        assert_eq!(epic_text_width(10.0, Some(30.0)), 0.0);
+        let m = 2.0 * PILL_MARGIN.x;
+        assert_eq!(epic_place(150.0, 234.0, 80.0, Some(30.0)), (false, 80.0), "chip and label fit beside the status pill");
+        assert_eq!(epic_place(100.0, 234.0, 80.0, Some(30.0)), (true, 234.0 - m - 30.0 - PILL_GAP), "the chip alone would fit: both move down");
+        assert_eq!(epic_place(100.0, 234.0, 400.0, None), (true, 234.0 - m), "no label: the chip takes the next row");
+    }
+
+    #[test]
+    fn a_long_epic_keeps_the_days_label_on_the_chip_row() {
+        let mut cfg: crate::config::Config = toml::from_str("site = \"https://x.atlassian.net\"\nemail = \"a@b.c\"\n").unwrap();
+        cfg.team.members = vec!["abc".into(); 4];
+        let mut app = App::for_test(cfg, None);
+        let who = Some(crate::jira::User { account_id: "abc".into(), display_name: "Grace Hopper".into() });
+        let changed = (chrono::Utc::now() - chrono::Duration::days(277)).format("%Y-%m-%dT%H:%M:%S%.3f+0000").to_string();
+        app.store.absorb(crate::store::ListId::TeamInProgress, vec![]);
+        app.store.absorb(
+            crate::store::ListId::TeamOpen,
+            vec![Issue {
+                key: "CI-3219".into(),
+                summary: "Long epic".into(),
+                status: crate::jira::Status { name: "Ready for Work".into(), category: "new".into() },
+                assignee: who,
+                parent_key: Some("CI-1989".into()),
+                parent_summary: Some("Cost Insights & Automation for every cluster in every region".into()),
+                status_changed: Some(changed),
+                ..Default::default()
+            }],
+        );
+        // Five columns at 1200 wide: each at the 260 minimum, the tightest card.
+        let shapes = crate::testutil::paint_at2(egui::vec2(1200.0, 800.0), |ui| show(&mut app, ui));
+        let inks = crate::testutil::inks(&shapes);
+        let days = inks.iter().find(|(t, _)| t == "277 d").unwrap_or_else(|| panic!("one unwrapped days label in {inks:?}")).1;
+        let chip = inks.iter().find(|(t, _)| t.starts_with("CI-1989")).expect("epic chip").1;
+        let status = inks.iter().find(|(t, _)| t == "Ready for Work").expect("status pill").1;
+        assert!(days.top() < chip.bottom() && chip.top() < days.bottom(), "days {days:?} on the chip row {chip:?}");
+        assert!(days.left() > chip.right(), "after the chip");
+        assert!(chip.top() > status.bottom(), "a long chip starts the next row: {status:?} {chip:?}");
+        let card_right = 16.0 + column_width(1200.0 - 32.0, 5) - 12.0;
+        assert!(days.right() <= card_right, "the label ends inside the card: {days:?} past {card_right}");
     }
 
     #[test]
