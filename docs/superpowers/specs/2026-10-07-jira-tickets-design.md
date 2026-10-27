@@ -427,6 +427,15 @@ Tabs:
    initiatives and shows "Nothing in progress moves this metric" when
    applicable. With no metric labels anywhere, the tab says so.
 
+### Deviations (plan 3)
+
+- Timeline lanes are alphabetical by lane name, with "No lane" last.
+- An initiative is on the timeline when its start..=target quarter range overlaps the year; its bar is clipped to the year's columns.
+- Done bars show "✓" instead of a health dot.
+- The Shipped list also includes Done initiatives with no target, flagged "target not set".
+- Progress counts every child of an initiative, Done ones included, via the `EpicChildren` list.
+- The KTLO footnote lists only non-initiative epics whose summary contains "(ongoing)".
+
 ## 10. Error handling
 
 - Network failure: cached data stays on screen under an "offline, data from

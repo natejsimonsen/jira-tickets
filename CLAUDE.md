@@ -2,7 +2,7 @@
 
 Rust 2024 / eframe-egui 0.36 desktop Jira client for the Platform (PLAT) sub-team of the parent team.
 Spec (binding): `docs/superpowers/specs/2026-10-07-jira-tickets-design.md`. Plans: `docs/superpowers/plans/`.
-Plans 1 (foundation + Issues view) and 2 (Grooming) are done; plan 3 (Team, Roadmap) is written and waiting.
+Plans 1 (foundation + Issues view), 2 (Grooming) and 3 (Team, Roadmap) are done.
 
 ## Build and test
 
@@ -39,7 +39,7 @@ Plans 1 (foundation + Issues view) and 2 (Grooming) are done; plan 3 (Team, Road
 
 - Conventional commits, no co-author or attribution trailers. If `git commit` fails on 1Password signing, stop and
   report BLOCKED; never change signing config.
-- 4-space indentation, rustfmt `max_width = 160`. `#![allow(dead_code)]` in main.rs is temporary until plan 3 lands.
+- 4-space indentation, rustfmt `max_width = 160`.
 - Config lives at `~/.config/jira-tickets/config.toml`; the example is `config::EXAMPLE` (an `r##"…"##` string).
 
 ## Known follow-ups

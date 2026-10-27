@@ -372,7 +372,7 @@ lanes = { PLAT = "Platform" }
 initiative_label = "roadmap"     # epics with this label are roadmap initiatives
 horizon_by_status = { "In Progress" = "now", "Work in Progress" = "now", "Ready for Work" = "next", "Planning" = "next", "New" = "later", "Backlog" = "later" }
 # health_field = "customfield_XXXXX"
-# target_field = "customfield_XXXXX"   # default: duedate
+# target_field = "customfield_XXXXX"   # or "duedate"; default: the target:YYYY-Qn label
 # start_field = "customfield_XXXXX"
 # confidence_field = "customfield_XXXXX"
 # next_milestone_field = "customfield_XXXXX"
