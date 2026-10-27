@@ -11,6 +11,7 @@ mod grooming;
 mod jira;
 mod keys;
 mod report;
+mod roadmap;
 #[cfg(feature = "snapshot")]
 mod snapshot;
 mod store;

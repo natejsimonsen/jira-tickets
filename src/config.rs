@@ -188,6 +188,7 @@ impl Default for Roadmap {
             lanes: BTreeMap::from([(s("PLAT"), s("Platform"))]),
             horizon_by_status: BTreeMap::from([
                 (s("In Progress"), s("now")),
+                (s("Work in Progress"), s("now")),
                 (s("Ready for Work"), s("next")),
                 (s("Planning"), s("next")),
                 (s("New"), s("later")),
@@ -376,7 +377,7 @@ jql = 'statusCategory = "To Do"'
 # epics = ["CI-1860"]            # optional allowlist
 lanes = { PLAT = "Platform" }
 initiative_label = "roadmap"     # epics with this label are roadmap initiatives
-horizon_by_status = { "In Progress" = "now", "Ready for Work" = "next", "Planning" = "next", "New" = "later", "Backlog" = "later" }
+horizon_by_status = { "In Progress" = "now", "Work in Progress" = "now", "Ready for Work" = "next", "Planning" = "next", "New" = "later", "Backlog" = "later" }
 # health_field = "customfield_XXXXX"
 # target_field = "customfield_XXXXX"   # default: duedate
 # start_field = "customfield_XXXXX"
