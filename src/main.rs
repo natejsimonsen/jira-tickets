@@ -14,6 +14,7 @@ mod report;
 #[cfg(feature = "snapshot")]
 mod snapshot;
 mod store;
+mod teamview;
 mod theme;
 mod views;
 
