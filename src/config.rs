@@ -410,6 +410,7 @@ email = "me@example.com"
         assert_eq!(c.issues.columns, vec!["status", "labels", "parent.summary", "assignee"]);
         assert_eq!(c.roadmap.lanes.get("PLAT").map(String::as_str), Some("Platform"));
         assert_eq!(c.roadmap.horizon_by_status.get("In Progress").map(String::as_str), Some("now"));
+        assert_eq!(c.roadmap.horizon_by_status.get("Work in Progress").map(String::as_str), Some("now"));
         assert_eq!(c.roadmap.initiative_label, "roadmap");
         assert!(c.validate().is_ok());
     }

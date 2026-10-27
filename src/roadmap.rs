@@ -63,11 +63,11 @@ pub fn is_initiative(epic: &Issue, label: &str, any_labelled: bool) -> bool {
     if any_labelled { has_label(epic, label) } else { !epic.summary.to_lowercase().contains("(ongoing)") }
 }
 
-/// (initiatives, ongoing). Ongoing is everything that is not an initiative.
+/// (initiatives, ongoing). Ongoing epics are non-initiatives whose summary contains "(ongoing)" (case-insensitive).
 pub fn select<'a>(epics: &[&'a Issue], label: &str) -> (Vec<&'a Issue>, Vec<&'a Issue>) {
     let any = epics.iter().any(|e| has_label(e, label));
     let inits = epics.iter().copied().filter(|e| is_initiative(e, label, any)).collect();
-    let ongoing = epics.iter().copied().filter(|e| !is_initiative(e, label, any)).collect();
+    let ongoing = epics.iter().copied().filter(|e| !is_initiative(e, label, any) && e.summary.to_lowercase().contains("(ongoing)")).collect();
     (inits, ongoing)
 }
 
@@ -233,10 +233,11 @@ pub fn shipped(items: &[Initiative]) -> Vec<&Initiative> {
 }
 
 /// Lanes (alphabetical by lane name because no config is passed, "No lane" last, empty lanes omitted) holding items targeted in `year`, ordered by
-/// start quarter (target when no start); plus the tray of non-Done items with no target.
+/// start quarter (target when no start); plus the tray of non-Done items with no target. An item sits in a lane when its
+/// start..=target quarter range (start defaults to target) overlaps `year`.
 pub fn timeline(items: &[Initiative], year: i32) -> (Vec<(String, Vec<&Initiative>)>, Vec<&Initiative>) {
     let mut by_lane: BTreeMap<(bool, &str), Vec<&Initiative>> = BTreeMap::new();
-    for i in items.iter().filter(|i| i.target.is_some_and(|t| t.year == year)) {
+    for i in items.iter().filter(|i| i.target.is_some_and(|t| i.start.unwrap_or(t).year <= year && year <= t.year)) {
         by_lane.entry((i.lane == NO_LANE, i.lane.as_str())).or_default().push(i);
     }
     let lanes = by_lane
@@ -319,7 +320,7 @@ mod tests {
         let c = epic("CI-3", "Cluster Migration", "new", &[]);
         let (inits, ongoing) = select(&[&a, &b, &c], "roadmap");
         assert_eq!(inits.iter().map(|e| e.key.as_str()).collect::<Vec<_>>(), ["CI-1"], "label present on some epic: only labelled ones count");
-        assert!(ongoing.iter().any(|e| e.key == "CI-2"));
+        assert_eq!(ongoing.iter().map(|e| e.key.as_str()).collect::<Vec<_>>(), ["CI-2"], "CI-3 is neither initiative nor ongoing");
         let (inits2, ongoing2) = select(&[&b, &c], "roadmap");
         assert_eq!(inits2.iter().map(|e| e.key.as_str()).collect::<Vec<_>>(), ["CI-3"], "no label anywhere: everything not (ongoing)");
         assert_eq!(ongoing2.iter().map(|e| e.key.as_str()).collect::<Vec<_>>(), ["CI-2"]);
@@ -418,6 +419,8 @@ mod tests {
         assert_eq!(lanes[0].0, "Platform");
         assert_eq!(lanes[0].1.iter().map(|i| i.key.as_str()).collect::<Vec<_>>(), ["D", "B", "A"]);
         assert_eq!(tray.iter().map(|i| i.key.as_str()).collect::<Vec<_>>(), ["C"]);
+        let (l26, _) = timeline(&items, 2027);
+        assert!(l26.is_empty());
         let rows = status_rows(&items);
         assert_eq!(rows.iter().map(|i| i.key.as_str()).collect::<Vec<_>>(), ["B", "A"]);
         assert_eq!(health_counts(&rows), [1, 0, 1, 0]);
@@ -431,5 +434,16 @@ mod tests {
         assert_eq!(out[1].0, "Toil");
         assert_eq!(out[1].1.len(), 1);
         assert_eq!(out[1].2.len(), 1);
+    }
+
+    #[test]
+    fn timeline_includes_items_whose_range_overlaps_the_year() {
+        let long = derive(&epic("L", "New", "new", &["start:2026-Q3", "target:2027-Q1"]), &[], &cfg());
+        let later = derive(&epic("M", "New", "new", &["target:2027-Q1"]), &[], &cfg());
+        let items = vec![long, later];
+        let keys = |y: i32| timeline(&items, y).0.iter().flat_map(|(_, v)| v.iter().map(|i| i.key.clone())).collect::<Vec<_>>();
+        assert_eq!(keys(2026), ["L"]);
+        assert_eq!(keys(2027), ["L", "M"]);
+        assert!(keys(2025).is_empty());
     }
 }
