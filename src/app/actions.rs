@@ -89,6 +89,14 @@ pub enum Action {
     CancelBounce,
     /// Session `p`: transitions the focused candidate to Backlog.
     Park,
+    /// Moves the Team cursor down (or up) the focused column's cards.
+    TeamMove(i32),
+    /// Moves the Team cursor to the next (or previous) column.
+    TeamCol(i32),
+    /// Opens the focused Team card on the Issues screen.
+    TeamOpen,
+    /// Opens or closes the focused column's "Done in the last 7 days" footer, loading it on first open.
+    TeamToggleDone,
 }
 
 impl App {
@@ -153,6 +161,48 @@ impl App {
         self.load_list_seq(ListId::Search, full, fields, Some(self.search_seq), with_members);
     }
 
+    /// Steps the Team cursor `dc` columns and `dr` cards, kept on a card (`teamview::clamp_cursor`).
+    fn team_move(&mut self, dc: i32, dr: i32) {
+        let cols = self.team_columns();
+        let (col, row) = crate::teamview::clamp_cursor(self.team.col, self.team.row, &cols);
+        let step = |v: usize, d: i32| v.saturating_add_signed(d as isize);
+        let (col, row) = crate::teamview::clamp_cursor(step(col, dc), step(row, dr), &cols);
+        self.team.col = col;
+        self.team.row = row;
+    }
+
+    /// The focused Team card: selected on the Issues screen, its row under the Issues cursor when listed there.
+    fn team_open(&mut self, ctx: &egui::Context) {
+        let key = {
+            let cols = self.team_columns();
+            let (col, row) = crate::teamview::clamp_cursor(self.team.col, self.team.row, &cols);
+            let Some(card) = cols.get(col).and_then(|c| crate::teamview::card_at(c, row)) else { return };
+            card.issue.key.clone()
+        };
+        self.apply(Action::SetScreen(Screen::Issues), ctx);
+        if let Some(i) = views::issues::current_rows(self).iter().position(|i| i.key == key) {
+            self.cursor = i;
+        }
+        self.apply(Action::Select(key), ctx);
+    }
+
+    /// The Unassigned column has no footer.
+    fn team_toggle_done(&mut self) {
+        let member = {
+            let cols = self.team_columns();
+            let (col, _) = crate::teamview::clamp_cursor(self.team.col, self.team.row, &cols);
+            let Some(m) = cols.get(col).and_then(|c| c.member.clone()) else { return };
+            m.id
+        };
+        if self.team.done_open.remove(&member) {
+            return;
+        }
+        self.team.done_open.insert(member.clone());
+        if !self.team.done.contains_key(&member) {
+            self.load_done_recent(&member);
+        }
+    }
+
     pub(crate) fn apply(&mut self, a: Action, ctx: &egui::Context) {
         match a {
             Action::SetScreen(s) => {
@@ -176,6 +226,10 @@ impl App {
             Action::Bounce => self.bounce(),
             Action::CancelBounce => self.grooming.bounce_text = None,
             Action::Park => self.park(),
+            Action::TeamMove(d) => self.team_move(0, d),
+            Action::TeamCol(d) => self.team_move(d, 0),
+            Action::TeamOpen => self.team_open(ctx),
+            Action::TeamToggleDone => self.team_toggle_done(),
             Action::GroomMode(m) => self.groom_mode(m),
             Action::GroomMove(d) => self.groom_move(d),
             Action::GroomEpic { delta, skip_empty } => self.groom_epic(delta, skip_empty),

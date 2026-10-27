@@ -63,6 +63,20 @@ pub fn columns<'a>(members: &[String], in_progress: &[&'a Issue], team_open: &[&
     cols
 }
 
+/// The cursor moved onto a card: the column within `cols`, the row within that column's in-progress then ready
+/// cards (0 when it has none, or there are no columns).
+pub fn clamp_cursor(col: usize, row: usize, cols: &[Column]) -> (usize, usize) {
+    let Some(last) = cols.len().checked_sub(1) else { return (0, 0) };
+    let col = col.min(last);
+    let n = cols[col].in_progress.len() + cols[col].ready.len();
+    (col, row.min(n.saturating_sub(1)))
+}
+
+/// The card at `row` of a column: in-progress cards first, then ready.
+pub fn card_at<'c, 'a>(col: &'c Column<'a>, row: usize) -> Option<&'c Card<'a>> {
+    col.in_progress.iter().chain(&col.ready).nth(row)
+}
+
 pub fn jql_done_recent(projects: &[String], member_id: &str) -> String {
     let projects: Vec<String> = projects.iter().map(|p| jql_quote(p)).collect();
     format!("project in ({}) AND assignee = {} AND statusCategory = Done AND resolved >= -7d ORDER BY resolved DESC", projects.join(", "), jql_quote(member_id))
@@ -117,6 +131,18 @@ mod tests {
         assert!(cols[1].none_found && cols[1].member.as_ref().unwrap().display == "zzz");
         assert!(cols[2].member.is_none());
         assert_eq!(cols[2].ready.iter().map(|c| c.issue.key.as_str()).collect::<Vec<_>>(), ["CI-3"]);
+    }
+
+    #[test]
+    fn clamp_cursor_keeps_the_cursor_on_a_card() {
+        let a = issue("CI-1", "Work in Progress", "indeterminate", Some(("abc", "Grace")), None);
+        let b = issue("CI-2", "Ready for Work", "new", Some(("abc", "Grace")), None);
+        let cols = columns(&["abc".into(), "zzz".into()], &[&a], &[&b], "Ready for Work", today());
+        assert_eq!(clamp_cursor(0, 1, &cols), (0, 1), "in progress then ready");
+        assert_eq!(clamp_cursor(0, 7, &cols), (0, 1));
+        assert_eq!(clamp_cursor(1, 3, &cols), (1, 0), "an empty column holds row 0");
+        assert_eq!(clamp_cursor(9, 0, &cols), (2, 0), "past the Unassigned column");
+        assert_eq!(clamp_cursor(3, 4, &[]), (0, 0));
     }
 
     #[test]

@@ -22,7 +22,7 @@ use crate::config::Config;
 use crate::jira::{self, Client, Sprint, User};
 use crate::store::{ListId, Store};
 use crate::{theme, views};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender, channel};
@@ -108,6 +108,21 @@ pub struct GroomingState {
     /// Keys this run's Promote moved to Planning. They stay out of the pre-check and its report prefill until a
     /// team list shows them out of `New`, so an eventually consistent search cannot offer them again.
     pub retired: std::collections::HashSet<String>,
+}
+
+/// Everything the Team screen keeps between frames.
+#[derive(Default)]
+pub struct TeamState {
+    /// The focused column (`teamview::columns` order, Unassigned last).
+    pub col: usize,
+    /// The focused card in that column: its in-progress cards, then its ready ones.
+    pub row: usize,
+    /// Member ids whose "Done in the last 7 days" footer is open.
+    pub done_open: HashSet<String>,
+    /// Each member's recently done tickets, by member id, loaded when the footer first opens.
+    pub done: HashMap<String, Vec<jira::Issue>>,
+    /// Member ids with a done load in flight.
+    pub done_loading: HashSet<String>,
 }
 
 /// A Promote's inputs, frozen when it starts, so a refresh meanwhile cannot change the report.
@@ -214,6 +229,7 @@ pub struct App {
     /// Optimistic rank swaps awaiting their Done: (list, issue, neighbour), oldest first.
     pending_ranks: Vec<(ListId, String, String)>,
     pub grooming: GroomingState,
+    pub team: TeamState,
     /// How many report reads were started, for tests.
     #[cfg(test)]
     pub(crate) report_reads: usize,
@@ -296,6 +312,7 @@ impl App {
             pending_transition: None,
             pending_ranks: Vec::new(),
             grooming: GroomingState::default(),
+            team: TeamState::default(),
             #[cfg(test)]
             report_reads: 0,
             client: None,
@@ -365,6 +382,13 @@ impl App {
         for a in std::mem::take(&mut self.actions) {
             self.apply(a, &ctx);
         }
+    }
+
+    /// The Team screen's columns, from the team lists in the store.
+    pub fn team_columns(&self) -> Vec<crate::teamview::Column<'_>> {
+        let in_progress = self.store.list(ListId::TeamInProgress);
+        let team_open = self.store.list(ListId::TeamOpen);
+        crate::teamview::columns(&self.cfg.team.members, &in_progress, &team_open, &self.cfg.grooming.status_ready, chrono::Utc::now())
     }
 
     pub fn spawn(&self, f: impl FnOnce(&Client, &Sender<Msg>) + Send + 'static) {
@@ -618,6 +642,71 @@ mod tests {
         assert_eq!(app.grooming.verdicts.get("CI-1"), Some(&crate::grooming::Verdict::Ready));
         app.apply(Action::UndoVerdict, &ctx);
         assert!(!app.grooming.verdicts.contains_key("CI-1"));
+    }
+
+    fn team_app() -> App {
+        let mut c = cfg();
+        c.team.members = vec!["abc".into()];
+        let mut app = App::for_test(c, None);
+        app.screen = Screen::Team;
+        let who = Some(crate::jira::User { account_id: "abc".into(), display_name: "Grace Hopper".into() });
+        let status = |n: &str, cat: &str| crate::jira::Status { name: n.into(), category: cat.into() };
+        app.store.absorb(
+            ListId::TeamInProgress,
+            vec![crate::jira::Issue { key: "CI-1".into(), status: status("Work in Progress", "indeterminate"), assignee: who.clone(), ..Default::default() }],
+        );
+        app.store.absorb(
+            ListId::TeamOpen,
+            vec![crate::jira::Issue { key: "CI-2".into(), status: status("Ready for Work", "new"), assignee: who, ..Default::default() }],
+        );
+        app
+    }
+
+    #[test]
+    fn team_move_clamps_and_open_selects() {
+        let mut app = team_app();
+        let ctx = egui::Context::default();
+        app.apply(Action::TeamMove(1), &ctx);
+        app.apply(Action::TeamMove(5), &ctx);
+        assert_eq!((app.team.col, app.team.row), (0, 1), "in progress then ready; clamped to the last card");
+        app.apply(Action::TeamMove(-9), &ctx);
+        assert_eq!(app.team.row, 0);
+        app.apply(Action::TeamMove(1), &ctx);
+        app.apply(Action::TeamOpen, &ctx);
+        app.drain();
+        assert_eq!(app.selected.as_deref(), Some("CI-2"));
+        assert_eq!(app.screen, Screen::Issues);
+        app.screen = Screen::Team;
+        app.apply(Action::TeamCol(9), &ctx);
+        assert_eq!((app.team.col, app.team.row), (1, 0), "the Unassigned column is last; its row clamps to 0");
+        app.apply(Action::TeamCol(-9), &ctx);
+        assert_eq!(app.team.col, 0);
+    }
+
+    #[test]
+    fn toggle_done_without_a_client_opens_but_does_not_load() {
+        let mut app = team_app();
+        let ctx = egui::Context::default();
+        app.apply(Action::TeamToggleDone, &ctx);
+        assert!(app.team.done_open.contains("abc"));
+        assert!(app.team.done_loading.is_empty(), "no client: nothing would clear the flag");
+        app.apply(Action::TeamToggleDone, &ctx);
+        assert!(!app.team.done_open.contains("abc"));
+    }
+
+    #[test]
+    fn done_recent_result_is_stored() {
+        let mut app = team_app();
+        app.team.done_loading.insert("abc".into());
+        let done = crate::jira::Issue { key: "CI-7".into(), summary: "Shipped".into(), ..Default::default() };
+        app.handle(Msg::DoneRecent { member: "abc".into(), result: Ok(vec![done]) });
+        assert!(app.team.done_loading.is_empty());
+        assert_eq!(app.team.done.get("abc").map(|v| v.iter().map(|i| i.key.as_str()).collect::<Vec<_>>()), Some(vec!["CI-7"]));
+        app.team.done_loading.insert("abc".into());
+        app.handle(Msg::DoneRecent { member: "abc".into(), result: Err(crate::jira::Error::Network("down".into())) });
+        assert!(app.team.done_loading.is_empty());
+        assert!(app.team.done.contains_key("abc"), "a failed reload keeps the last list");
+        assert!(app.toast.is_some());
     }
 
     #[test]

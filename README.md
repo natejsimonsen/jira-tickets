@@ -72,6 +72,11 @@ Only a token you paste is saved. Signing out deletes that file.
 | `p` | Park in Backlog |
 | `]/[` or `⇧]/⇧[` | Next or previous epic (with Shift, empty ones too) |
 | `Tab` | Switch between Pre-check and Session |
+| **Team** | |
+| `h/l` or `←/→` | Previous or next member |
+| `j/k` or `↑/↓` | Next or previous ticket |
+| `Enter` | Open in Issues |
+| `d` | Show or hide done in the last 7 days |
 | **Pickers and Edit** | |
 | `j/k` or `↑/↓` | Move |
 | `Tab/⇧Tab` | Next or previous field |

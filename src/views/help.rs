@@ -17,19 +17,18 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
         app.actions.push(Action::ToggleHelp);
     }
     egui::Area::new(egui::Id::new("help")).order(egui::Order::Tooltip).anchor(egui::Align2::CENTER_CENTER, vec2(0.0, 0.0)).show(ctx, |ui| {
-        // Issues then Pickers on the left; Grooming then Global on the right (the closest balance of the four, 15 to
-        // 17 rows). Each column is as wide as its widest key cell plus 16 plus its widest action, so the panel has
-        // 24 px on every side and no dead space.
-        let left = [Group::Issues, Group::Pickers];
-        let right = [Group::Grooming, Group::Global];
+        // Issues then Team on the left; Grooming, Pickers then Global on the right (`COLUMNS`). Each column is as
+        // wide as its widest key cell plus 16 plus its widest action, so the panel has 24 px on every side and no
+        // dead space.
+        let [left, right] = COLUMNS;
         let measure = |groups: &[Group]| {
             let rows = BINDINGS.iter().filter(|k| groups.contains(&k.group));
             let keys: Vec<f32> = rows.clone().map(|k| keys_width(ui, k.keys, p)).collect();
             let actions: Vec<f32> = rows.map(|k| ui.painter().layout_no_wrap(k.what.to_string(), theme::body(14.0), p.text).size().x).collect();
             (keys.iter().copied().fold(0.0, f32::max), column_width(&keys, &actions))
         };
-        let (lk, lw) = measure(&left);
-        let (rk, rw) = measure(&right);
+        let (lk, lw) = measure(left);
+        let (rk, rw) = measure(right);
         Frame::new()
             .fill(crate::views::dialog_fill(p))
             .stroke(crate::views::dialog_stroke(p))
@@ -50,20 +49,29 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                     ui.spacing_mut().item_spacing.x = COL_GAP;
                     ui.allocate_ui_with_layout(vec2(lw, 0.0), egui::Layout::top_down(egui::Align::Min), |ui| {
                         ui.set_width(lw);
-                        group(ui, p, Group::Issues, lk);
-                        ui.add_space(section_gap(row, header));
-                        group(ui, p, Group::Pickers, lk);
+                        groups(ui, p, left, lk, row, header);
                     });
                     ui.allocate_ui_with_layout(vec2(rw, 0.0), egui::Layout::top_down(egui::Align::Min), |ui| {
                         ui.set_width(rw);
-                        group(ui, p, Group::Grooming, rk);
-                        ui.add_space(section_gap(row, header));
-                        group(ui, p, Group::Global, rk);
+                        groups(ui, p, right, rk, row, header);
                     });
                 });
                 ui.add_space(1.0 - HALF_PX);
             });
     });
+}
+
+/// The help's two columns, top to bottom: the closest balance of the groups (19 and 21 rows with headers).
+pub const COLUMNS: [&[Group]; 2] = [&[Group::Issues, Group::Team], &[Group::Grooming, Group::Pickers, Group::Global]];
+
+/// A column's groups, each a section gap under the last.
+fn groups(ui: &mut egui::Ui, p: &Palette, gs: &[Group], key_w: f32, row: f32, header: f32) {
+    for (i, g) in gs.iter().enumerate() {
+        if i > 0 {
+            ui.add_space(section_gap(row, header));
+        }
+        group(ui, p, *g, key_w);
+    }
 }
 
 /// The panel's padding on every side, and the gap between its columns.
@@ -382,10 +390,14 @@ mod tests {
     fn help_columns_balance() {
         use crate::keys::{BINDINGS, Group};
         let n = |g: Group| BINDINGS.iter().filter(|k| k.group == g).count();
-        // Left: Issues then Pickers; right: Grooming then Global (one header each). Every group shows, and the
-        // columns are within two rows of each other (17 and 16).
-        let (left, right) = (n(Group::Issues) + n(Group::Pickers) + 1, n(Group::Grooming) + n(Group::Global) + 1);
+        // One header row per group. Every group shows once, and the columns are within two rows of each other.
+        let rows = |gs: &[Group]| gs.iter().map(|g| n(*g) + 1).sum::<usize>();
+        let [l, r] = super::COLUMNS;
+        let (left, right) = (rows(l), rows(r));
         assert!(left.abs_diff(right) <= 2, "left {left} rows, right {right}");
+        for g in [Group::Global, Group::Issues, Group::Grooming, Group::Team, Group::Pickers] {
+            assert_eq!(l.iter().chain(r).filter(|x| **x == g).count(), 1, "{}", g.name());
+        }
     }
 
     #[test]

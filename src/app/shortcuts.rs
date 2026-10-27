@@ -61,6 +61,11 @@ impl App {
             self.grooming_shortcuts(ctx);
             return;
         }
+        // Team's `l` is the next column, never the Issues screen's team label.
+        if self.screen == Screen::Team {
+            self.team_shortcuts(ctx);
+            return;
+        }
         if self.screen != Screen::Issues {
             return;
         }
@@ -222,6 +227,34 @@ impl App {
                     }
                 }
             }
+        }
+    }
+}
+
+impl App {
+    /// The Team screen's keys (`keys::Group::Team`).
+    fn team_shortcuts(&mut self, ctx: &egui::Context) {
+        if ctx.text_edit_focused() {
+            return;
+        }
+        let key = |k: Key| ctx.input_mut(|i| i.consume_shortcut(&KeyboardShortcut::new(Modifiers::NONE, k)));
+        if key(Key::H) | key(Key::ArrowLeft) {
+            self.actions.push(Action::TeamCol(-1));
+        }
+        if key(Key::L) | key(Key::ArrowRight) {
+            self.actions.push(Action::TeamCol(1));
+        }
+        if key(Key::J) | key(Key::ArrowDown) {
+            self.actions.push(Action::TeamMove(1));
+        }
+        if key(Key::K) | key(Key::ArrowUp) {
+            self.actions.push(Action::TeamMove(-1));
+        }
+        if key(Key::Enter) {
+            self.actions.push(Action::TeamOpen);
+        }
+        if key(Key::D) {
+            self.actions.push(Action::TeamToggleDone);
         }
     }
 }

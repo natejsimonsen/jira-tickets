@@ -54,6 +54,11 @@ pub enum Msg {
     ReportLoaded(Option<(std::path::PathBuf, crate::report::Report)>),
     /// Ready for Work tickets under the epics a Promote moved tickets into Planning for.
     Siblings(jira::Result<Vec<Issue>>),
+    /// A Team member's tickets done in the last 7 days.
+    DoneRecent {
+        member: String,
+        result: jira::Result<Vec<Issue>>,
+    },
 }
 
 impl App {
@@ -61,6 +66,20 @@ impl App {
         match msg {
             Msg::ReportLoaded(report) => self.report_loaded(report),
             Msg::Siblings(result) => self.siblings_loaded(result),
+            Msg::DoneRecent { member, result } => {
+                self.team.done_loading.remove(&member);
+                match result {
+                    Ok(issues) => {
+                        self.team.done.insert(member, issues);
+                    }
+                    Err(jira::Error::Unauthorized(m)) => {
+                        self.client = None;
+                        self.token_error = Some(m);
+                    }
+                    // The last good list stays; the footer shows it (or nothing) and the toast says why.
+                    Err(e) => self.toast(format!("Couldn't load done tickets: {e}"), true),
+                }
+            }
             Msg::Login(Ok(login)) => {
                 self.token_error = None;
                 self.connect(login);

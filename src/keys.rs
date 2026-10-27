@@ -6,6 +6,7 @@ pub enum Group {
     Global,
     Issues,
     Grooming,
+    Team,
     Pickers,
 }
 
@@ -15,6 +16,7 @@ impl Group {
             Group::Global => "Global",
             Group::Issues => "Issues",
             Group::Grooming => "Grooming",
+            Group::Team => "Team",
             Group::Pickers => "Pickers and Edit",
         }
     }
@@ -65,6 +67,10 @@ pub const BINDINGS: &[KeyBinding] = &[
     // Shift lands on epics with nothing in Planning too; plain ]/[ steps over them.
     b(Group::Grooming, "]/[, ⇧]/⇧[", "Next or previous epic (with Shift, empty ones too)"),
     b(Group::Grooming, "Tab", "Switch between Pre-check and Session"),
+    b(Group::Team, "h/l, ←/→", "Previous or next member"),
+    b(Group::Team, "j/k, ↑/↓", "Next or previous ticket"),
+    b(Group::Team, "Enter", "Open in Issues"),
+    b(Group::Team, "d", "Show or hide done in the last 7 days"),
     b(Group::Pickers, "j/k, ↑/↓", "Move"),
     b(Group::Pickers, "Tab/⇧Tab", "Next or previous field"),
     b(Group::Pickers, "Enter", "Confirm"),
@@ -145,6 +151,8 @@ pub enum HintContext {
     GroomPlacement,
     /// Session: the bounce comment box is open.
     GroomBounce,
+    /// The Team screen.
+    Team,
 }
 
 /// Which text field has keyboard focus, if any.
@@ -201,6 +209,8 @@ pub struct HintState {
     pub placeholder: bool,
     /// The Grooming screen is showing, and what it shows.
     pub grooming: Option<GroomHint>,
+    /// The Team screen is showing.
+    pub team: bool,
 }
 
 impl HintState {
@@ -215,12 +225,13 @@ impl HintState {
             read_only: false,
             placeholder: false,
             grooming: None,
+            team: false,
         }
     }
 }
 
 pub fn hint_context(s: HintState) -> HintContext {
-    let HintState { help_open, goto_open, picker, has_selection, focus, search_shown, read_only, placeholder, grooming } = s;
+    let HintState { help_open, goto_open, picker, has_selection, focus, search_shown, read_only, placeholder, grooming, team } = s;
     match (help_open, goto_open, picker) {
         (true, _, _) => HintContext::Help,
         _ if placeholder => HintContext::Placeholder,
@@ -235,6 +246,7 @@ pub fn hint_context(s: HintState) -> HintContext {
         _ if grooming == Some(GroomHint::Session) => HintContext::GroomSession,
         _ if grooming == Some(GroomHint::Placement) => HintContext::GroomPlacement,
         _ if grooming == Some(GroomHint::Bounce) => HintContext::GroomBounce,
+        _ if team => HintContext::Team,
         _ => match focus {
             Focus::Search { clear: true, plain: true } => HintContext::SearchText,
             Focus::Search { clear: true, plain: false } => HintContext::Search,
@@ -308,6 +320,13 @@ pub fn hints(c: HintContext) -> &'static [Hint] {
         ],
         HintContext::GroomPlacement => &[&[K("↑/↓"), W("move")], &[K("Enter"), W("place")], &[K("Esc"), W("cancel")]],
         HintContext::GroomBounce => &[&[K("⌘Enter"), W("post")], &[K("Esc"), W("cancel")]],
+        HintContext::Team => &[
+            &[K("h/l"), W("or"), K("←/→"), W("member")],
+            &[K("j/k"), W("or"), K("↑/↓"), W("move")],
+            &[K("Enter"), W("open")],
+            &[K("d"), W("done")],
+            &[K("?"), W("help")],
+        ],
         HintContext::SignIn => &[&[K("Enter"), W("sign in")]],
         HintContext::Browse => &[&[K("j/k"), W("or"), K("↑/↓"), W("move")], &[K("⌘K"), W("go to")], &[K("⌘F"), W("search")], &[K("?"), W("help")]],
         HintContext::BrowseSearch => {
@@ -382,8 +401,9 @@ mod tests {
         assert!(!t.contains("Close the go-to box"), "the go-to bar shows its own Esc");
         assert!(t.contains("| `j/k` or `↑/↓` | Next or previous issue |\n"));
         assert!(t.contains("| **Grooming** | |\n| `j/k` or `↑/↓` | Next or previous ticket |\n| `r` | Ready |\n"));
-        assert!(t.contains("| `Tab` | Switch between Pre-check and Session |\n| **Pickers and Edit** | |\n"));
-        assert_eq!(t.matches("| **").count(), 4);
+        assert!(t.contains("| `Tab` | Switch between Pre-check and Session |\n| **Team** | |\n| `h/l` or `←/→` | Previous or next member |\n"));
+        assert!(t.contains("| `d` | Show or hide done in the last 7 days |\n| **Pickers and Edit** | |\n"));
+        assert_eq!(t.matches("| **").count(), 5);
     }
 
     fn st(help_open: bool, goto_open: bool, picker: Option<PickerHint>, has_selection: bool, focus: Focus) -> HintState {
@@ -440,6 +460,10 @@ mod tests {
         assert_eq!(hint_text(hints(GroomPlacement)), "↑/↓ move · Enter place · Esc cancel");
         assert_eq!(hint_context(HintState { focus: Focus::OtherText, ..groom(GroomHint::Bounce) }), GroomBounce, "the box has focus");
         assert_eq!(hint_text(hints(GroomBounce)), "⌘Enter post · Esc cancel");
+        let team = HintState { team: true, has_selection: true, ..HintState::new(Focus::None) };
+        assert_eq!(hint_context(team), Team, "the Issues selection does not leak onto Team");
+        assert_eq!(hint_context(HintState { help_open: true, ..team }), Help);
+        assert_eq!(hint_text(hints(Team)), "h/l or ←/→ member · j/k or ↑/↓ move · Enter open · d done · ? help");
         assert_eq!(hint_text(hints(GoTo)), "Enter open · Esc close");
         assert_eq!(hint_text(hints(Search)), "Enter run as JQL · Esc clear", "one Enter wording for every search text");
         assert_eq!(hint_text(hints(EditPicker)), "Tab/⇧Tab next or previous field · Enter confirm · Esc cancel");

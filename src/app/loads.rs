@@ -130,6 +130,19 @@ impl App {
             let _ = tx.send(Msg::Detail { key: key.clone(), result: c.issue(&key, &[]) });
         });
     }
+
+    /// A member's tickets done in the last 7 days, for the Team footer (`teamview::jql_done_recent`).
+    pub(super) fn load_done_recent(&mut self, member: &str) {
+        if !should_load(self.client.is_some(), self.team.done_loading.contains(member)) {
+            return;
+        }
+        self.team.done_loading.insert(member.to_string());
+        let jql = crate::teamview::jql_done_recent(&self.cfg.scope.projects, member);
+        let member = member.to_string();
+        self.spawn(move |c, tx| {
+            let _ = tx.send(Msg::DoneRecent { member, result: c.search(&jql, jira::LIST_FIELDS) });
+        });
+    }
 }
 
 /// A load starts only with a client to run it and none already in flight;
