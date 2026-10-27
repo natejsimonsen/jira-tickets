@@ -12,6 +12,8 @@ pub enum ListId {
     Epics,
     TeamInProgress,
     Search,
+    /// Every child of the roadmap's initiative epics, whatever its status, for their progress.
+    EpicChildren,
 }
 
 #[derive(Default, Clone, Serialize, Deserialize)]
@@ -84,8 +86,15 @@ impl Store {
         out
     }
 
+    /// An epic's children: EpicChildren (all statuses) then any TeamOpen ones it lacks, so open children show
+    /// before EpicChildren lands; each key once.
     pub fn children_of(&self, epic_key: &str) -> Vec<&Issue> {
-        self.list(ListId::TeamOpen).into_iter().filter(|i| i.parent_key.as_deref() == Some(epic_key)).collect()
+        let mut seen = std::collections::HashSet::new();
+        self.list(ListId::EpicChildren)
+            .into_iter()
+            .chain(self.list(ListId::TeamOpen))
+            .filter(|i| i.parent_key.as_deref() == Some(epic_key) && seen.insert(i.key.as_str()))
+            .collect()
     }
 
     pub fn load_cached() -> Option<Store> {
@@ -184,6 +193,12 @@ pub fn jql_epics(cfg: &Config, parent_keys: &[String]) -> String {
         clauses.push(format!("key in ({})", cfg.roadmap.epics.join(", ")));
     }
     format!("project = {} AND issuetype = Epic AND ({}) ORDER BY Rank ASC", jql_quote(&cfg.scope.project), clauses.join(" OR "))
+}
+
+/// Every child of `epic_keys` (the initiative epics) across the scope's projects, Done ones included.
+pub fn jql_epic_children(cfg: &Config, epic_keys: &[String]) -> String {
+    let projects: Vec<String> = cfg.scope.projects.iter().map(|p| jql_quote(p)).collect();
+    format!("project in ({}) AND parent in ({}) ORDER BY Rank ASC", projects.join(", "), epic_keys.join(", "))
 }
 
 /// The members' in-progress work across the scope's projects. The list is by
@@ -359,6 +374,25 @@ mod tests {
             jql_epics(&c, &["CI-1".into()]),
             r#"project = "CI" AND issuetype = Epic AND (labels in ("PLAT") OR labels = "roadmap" OR key in (CI-1) OR key in (CI-9)) ORDER BY Rank ASC"#
         );
+    }
+
+    #[test]
+    fn jql_epic_children_spans_the_projects() {
+        let mut c = cfg();
+        c.scope.projects = vec!["CI".into(), "OPS".into()];
+        assert_eq!(jql_epic_children(&c, &["CI-1".into(), "CI-2".into()]), r#"project in ("CI", "OPS") AND parent in (CI-1, CI-2) ORDER BY Rank ASC"#);
+    }
+
+    #[test]
+    fn children_of_unions_epic_children_and_team_open_once() {
+        let mut s = Store::default();
+        s.absorb(ListId::EpicChildren, vec![issue("CI-1", "Done", Some("E-1"), None), issue("CI-2", "New", Some("E-1"), None)]);
+        s.absorb(
+            ListId::TeamOpen,
+            vec![issue("CI-2", "New", Some("E-1"), None), issue("CI-3", "New", Some("E-1"), None), issue("CI-4", "New", Some("E-2"), None)],
+        );
+        let keys: Vec<&str> = s.children_of("E-1").iter().map(|i| i.key.as_str()).collect();
+        assert_eq!(keys, ["CI-1", "CI-2", "CI-3"]);
     }
 
     #[test]

@@ -148,6 +148,9 @@ impl App {
                         if id == ListId::TeamOpen && self.client.is_some() {
                             self.load_epics();
                         }
+                        if id == ListId::Epics && self.client.is_some() {
+                            self.load_epic_children();
+                        }
                     }
                     Err(jira::Error::Unauthorized(m)) => {
                         self.client = None;
@@ -336,7 +339,7 @@ fn should_retry_without_members(err_is_unresolved_assignee: bool, sent_with_memb
 /// Only a transport failure on a refresh list means we are offline; bad JQL,
 /// rate limits, or a failed search just show on that list.
 fn marks_offline(id: ListId, e: &jira::Error) -> bool {
-    matches!(e, jira::Error::Network(_)) && matches!(id, ListId::TeamOpen | ListId::TeamInProgress | ListId::Epics)
+    matches!(e, jira::Error::Network(_)) && matches!(id, ListId::TeamOpen | ListId::TeamInProgress | ListId::Epics | ListId::EpicChildren)
 }
 
 #[cfg(test)]
@@ -354,7 +357,7 @@ mod tests {
     #[test]
     fn only_network_errors_on_refresh_lists_mark_offline() {
         let net = jira::Error::Network("Network error: refused".into());
-        for id in [ListId::TeamOpen, ListId::TeamInProgress, ListId::Epics] {
+        for id in [ListId::TeamOpen, ListId::TeamInProgress, ListId::Epics, ListId::EpicChildren] {
             assert!(marks_offline(id, &net), "{id:?}");
         }
         assert!(!marks_offline(ListId::Search, &net));

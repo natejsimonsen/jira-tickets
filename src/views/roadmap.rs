@@ -75,11 +75,17 @@ pub fn shipped_in(items: &[Initiative], year: i32) -> Vec<&Initiative> {
 
 /// The KTLO footnote under Now: the ongoing epics by summary, without their "(ongoing)" marker. None when there are none.
 pub fn ktlo_line(ongoing: &[String]) -> Option<String> {
+    const MARK: &str = "(ongoing)";
     let names: Vec<String> = ongoing
         .iter()
-        .map(|s| match s.to_lowercase().find("(ongoing)") {
-            Some(i) => format!("{}{}", &s[..i], &s[i + "(ongoing)".len()..]).split_whitespace().collect::<Vec<_>>().join(" "),
-            None => s.trim().to_string(),
+        .map(|s| {
+            // Searched on `s` itself (ASCII-insensitive), so the byte index is always a char boundary of `s`.
+            let at = s.char_indices().map(|(i, _)| i).find(|&i| s.get(i..i + MARK.len()).is_some_and(|w| w.eq_ignore_ascii_case(MARK)));
+            let rest = match at {
+                Some(i) => format!("{}{}", &s[..i], &s[i + MARK.len()..]),
+                None => s.clone(),
+            };
+            rest.split_whitespace().collect::<Vec<_>>().join(" ")
         })
         .collect();
     (!names.is_empty()).then(|| format!("Also ongoing (KTLO, not initiatives): {}", names.join(", ")))
@@ -552,6 +558,9 @@ mod tests {
         assert_eq!(owners_text((0, 7)), "0 / 7");
         assert_eq!(health_label(Health::None), "No health set");
         assert_eq!(ktlo_line(&[]), None);
+        // "İ" lowercases to three bytes from two: an index into the lowercased text would cut a char.
+        assert_eq!(ktlo_line(&["Türkiye İzleme (ongoing)".into()]).as_deref(), Some("Also ongoing (KTLO, not initiatives): Türkiye İzleme"));
+        assert_eq!(ktlo_line(&["İİİİ (ONGOING) x".into()]).as_deref(), Some("Also ongoing (KTLO, not initiatives): İİİİ x"));
         assert_eq!(
             ktlo_line(&["Audit (ongoing)".into(), "Support/Enablement (Ongoing) work".into()]).as_deref(),
             Some("Also ongoing (KTLO, not initiatives): Audit, Support/Enablement work")

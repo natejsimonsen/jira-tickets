@@ -55,6 +55,19 @@ impl App {
         self.load_list(ListId::Epics, store::jql_epics(&cfg, &parents), fields);
     }
 
+    /// Every child of the initiative epics, for their progress; loads after Epics lands, and not at all when no
+    /// epic is an initiative.
+    pub(super) fn load_epic_children(&mut self) {
+        let epics = self.store.list(ListId::Epics);
+        let (inits, _) = crate::roadmap::select(&epics, &self.cfg.roadmap.initiative_label);
+        let keys: Vec<String> = inits.iter().map(|e| e.key.clone()).collect();
+        if keys.is_empty() {
+            return;
+        }
+        let jql = store::jql_epic_children(&self.cfg, &keys);
+        self.load_list(ListId::EpicChildren, jql, jira::LIST_FIELDS.iter().map(|s| s.to_string()).collect());
+    }
+
     /// TeamOpen and TeamInProgress are built with members unless they are disabled.
     pub fn load_list(&mut self, id: ListId, jql: String, fields: Vec<String>) {
         let with_members = matches!(id, ListId::TeamOpen | ListId::TeamInProgress) && !self.members_disabled;
@@ -88,6 +101,7 @@ impl App {
                 }
             }
             ListId::Epics => self.load_epics(),
+            ListId::EpicChildren => self.load_epic_children(),
             ListId::Search => {}
         }
     }

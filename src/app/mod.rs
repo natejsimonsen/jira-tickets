@@ -748,6 +748,30 @@ mod tests {
     }
 
     #[test]
+    fn epic_children_count_done_children_once() {
+        let mut app = App::for_test(cfg(), None);
+        let st = |cat: &str| crate::jira::Status { name: "x".into(), category: cat.into() };
+        let child = |key: &str, cat: &str| crate::jira::Issue { key: key.into(), status: st(cat), parent_key: Some("CI-10".into()), ..Default::default() };
+        let list = |id, issues| Msg::List { id, result: Ok(issues), stale: false, seq: None, with_members: false };
+        app.store.absorb(ListId::TeamOpen, vec![child("CI-21", "new"), child("CI-22", "indeterminate")]);
+        let epic = crate::jira::Issue { key: "CI-10".into(), summary: "Initiative".into(), status: st("indeterminate"), ..Default::default() };
+        app.handle(list(ListId::Epics, vec![epic]));
+        app.handle(list(ListId::EpicChildren, vec![child("CI-20", "done"), child("CI-21", "new")]));
+        let (items, _) = app.roadmap_items();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].progress, crate::roadmap::Progress { todo: 1, doing: 1, done: 1 }, "CI-21 is in both lists and counts once");
+    }
+
+    #[test]
+    fn epic_children_do_not_load_without_a_client() {
+        let mut app = App::for_test(cfg(), None);
+        let epic = crate::jira::Issue { key: "CI-10".into(), status: crate::jira::Status { name: "x".into(), category: "new".into() }, ..Default::default() };
+        app.handle(Msg::List { id: ListId::Epics, result: Ok(vec![epic]), stale: false, seq: None, with_members: false });
+        app.load_epic_children();
+        assert!(!app.lists.get(&ListId::EpicChildren).is_some_and(|l| l.loading), "no client: nothing would clear the flag");
+    }
+
+    #[test]
     fn roadmap_tab_and_move_clamp() {
         let mut app = roadmap_app();
         let ctx = egui::Context::default();
