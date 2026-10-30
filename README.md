@@ -149,8 +149,12 @@ The centre shows the selected epic in five blocks (the cursor walks all of them,
 - `y` accepts it: `↑`/`↓` move a ghost row through the Ready queue and `Enter` commits the move to Ready for Work at that place, from Planning or straight from New. `Esc` cancels.
 - `b` bounces it: type a one- or two-line comment and press `⌘Enter`. A Planning ticket goes back to New after the comment posts; a New ticket gets the comment only.
 - `p` parks it in Backlog.
-- `c` closes it (any row): a picker offers the configured closing resolutions (Done, Won't Do) and Enter moves it to `status_closed` with that resolution.
-- `s` opens the sprint picker for any focused row: Backlog, the active sprint or a future sprint; Enter moves it and the row hops to its new block.
+
+For any focused row:
+
+- `c` closes it: a picker offers the configured closing resolutions (Done, Won't Do) and Enter moves it to `status_closed` with that resolution.
+- `s` opens the sprint picker: Backlog, the active sprint or a future sprint; Enter moves it and the row hops to its new block.
+
 For a Ready for Work row, `J` and `K` move it one place down or up in rank with a single rank call (the row swaps at once and swaps back if the call fails).
 
 A timer runs per candidate and turns amber at 3 minutes and red at 5. The Ready ceiling pill in the header reads "Ready for Work N · soft S · hard H", counts the team's (PLAT-labelled) Ready for Work tickets, and turns amber past the soft ceiling (10) and red past the hard one (15). Both limits are configurable under `[grooming]`, and warnings never block anything.
