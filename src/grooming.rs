@@ -223,7 +223,6 @@ pub enum Stage {
 
 impl Stage {
     /// The rail's stage header.
-    #[cfg_attr(not(test), expect(dead_code, reason = "the rail draws it from task 3"))]
     pub fn label(self) -> &'static str {
         match self {
             Stage::Roadmap => "Roadmap",

@@ -9,9 +9,9 @@ pub fn purpose(mode: GroomMode, status_new: &str, status_planning: &str, status_
         GroomMode::PreCheck => format!(
             "Before the meeting. Judge each {status_new} ticket against the readiness bar, then promote the ready set to {status_planning} and write the report."
         ),
-        GroomMode::Session => {
-            format!("In the meeting. Walk {status_planning} epic by epic and place each accepted ticket in rank beside the epic's {status_ready} queue.")
-        }
+        GroomMode::Session => format!(
+            "In the meeting. Walk the roadmap epics first, then tickets with no epic, ongoing epics and the rest; accept each Proposed or {status_new} ticket into the epic's {status_ready} queue in rank."
+        ),
     }
 }
 
@@ -24,7 +24,7 @@ pub fn rubric_title(mode: GroomMode) -> &'static str {
 }
 
 /// The rubric card's lines. Each line is (key or "", text). An empty key draws text only.
-pub fn rubric_lines(mode: GroomMode, status_new: &str, status_ready: &str) -> Vec<(&'static str, String)> {
+pub fn rubric_lines(mode: GroomMode, status_new: &str, status_planning: &str, status_ready: &str) -> Vec<(&'static str, String)> {
     match mode {
         GroomMode::PreCheck => vec![
             ("", "Can a stranger tell WHAT is being done and WHEN it is done?".into()),
@@ -36,8 +36,9 @@ pub fn rubric_lines(mode: GroomMode, status_new: &str, status_ready: &str) -> Ve
         ],
         GroomMode::Session => vec![
             ("y", format!("{status_ready}: accept and place it in rank.")),
-            ("b", format!("Bounce to {status_new} with a one-line comment on what's missing.")),
+            ("b", format!("Bounce with a one-line comment on what's missing; {status_planning} goes back to {status_new}.")),
             ("p", "Backlog: real work, lower priority.".into()),
+            ("J/K", format!("Move a {status_ready} ticket down or up in rank.")),
             ("", "Three to five minutes per ticket. Past that, bounce.".into()),
         ],
     }
@@ -64,9 +65,9 @@ pub fn report_path(report_dir: &str, today: chrono::NaiveDate) -> String {
     format!("{}/{}.md", report_dir.trim_end_matches('/'), today.format("%Y-%m-%d"))
 }
 
-/// The session's empty state for an epic with nothing in Planning.
-pub fn nothing_in_planning(status_planning: &str) -> String {
-    format!("Nothing in {status_planning}. Run a pre-check first, or pick another epic with ].")
+/// The session's empty state for an epic with no Proposed and no New ticket.
+pub fn nothing_to_groom(status_new: &str) -> String {
+    format!("Nothing Proposed or {status_new} here. Run a pre-check first, or pick another epic with ].")
 }
 
 #[cfg(test)]
@@ -81,7 +82,7 @@ mod tests {
         );
         assert_eq!(
             purpose(GroomMode::Session, "New", "Planning", "Ready for Work"),
-            "In the meeting. Walk Planning epic by epic and place each accepted ticket in rank beside the epic's Ready for Work queue."
+            "In the meeting. Walk the roadmap epics first, then tickets with no epic, ongoing epics and the rest; accept each Proposed or New ticket into the epic's Ready for Work queue in rank."
         );
     }
 
@@ -90,7 +91,7 @@ mod tests {
         assert_eq!(rubric_title(GroomMode::PreCheck), "Readiness bar");
         assert_eq!(rubric_title(GroomMode::Session), "Decide");
         assert_eq!(
-            rubric_lines(GroomMode::PreCheck, "New", "Ready for Work"),
+            rubric_lines(GroomMode::PreCheck, "New", "Planning", "Ready for Work"),
             [
                 ("", "Can a stranger tell WHAT is being done and WHEN it is done?".to_string()),
                 ("r", "Yes: ready.".to_string()),
@@ -101,11 +102,12 @@ mod tests {
             ]
         );
         assert_eq!(
-            rubric_lines(GroomMode::Session, "New", "Ready for Work"),
+            rubric_lines(GroomMode::Session, "New", "Planning", "Ready for Work"),
             [
                 ("y", "Ready for Work: accept and place it in rank.".to_string()),
-                ("b", "Bounce to New with a one-line comment on what's missing.".to_string()),
+                ("b", "Bounce with a one-line comment on what's missing; Planning goes back to New.".to_string()),
                 ("p", "Backlog: real work, lower priority.".to_string()),
+                ("J/K", "Move a Ready for Work ticket down or up in rank.".to_string()),
                 ("", "Three to five minutes per ticket. Past that, bounce.".to_string()),
             ]
         );
@@ -142,7 +144,7 @@ mod tests {
     }
 
     #[test]
-    fn nothing_in_planning_points_at_the_pre_check() {
-        assert_eq!(nothing_in_planning("Planning"), "Nothing in Planning. Run a pre-check first, or pick another epic with ].");
+    fn nothing_to_groom_points_at_the_pre_check() {
+        assert_eq!(nothing_to_groom("New"), "Nothing Proposed or New here. Run a pre-check first, or pick another epic with ].");
     }
 }
