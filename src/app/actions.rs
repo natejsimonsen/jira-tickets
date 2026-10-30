@@ -88,6 +88,8 @@ pub enum Action {
     CancelBounce,
     /// Session `p`: transitions the focused candidate to Backlog.
     Park,
+    /// Session `J`/`K`: moves the focused Ready for Work row one place down or up in rank.
+    RankReady(i32),
     /// Moves the Team cursor down (or up) the focused column's cards.
     TeamMove(i32),
     /// Moves the Team cursor to the next (or previous) column.
@@ -261,6 +263,7 @@ impl App {
             Action::Bounce => self.bounce(),
             Action::CancelBounce => self.grooming.bounce_text = None,
             Action::Park => self.park(),
+            Action::RankReady(d) => self.rank_ready(d),
             Action::TeamMove(d) => self.team_move(0, d),
             Action::TeamCol(d) => self.team_move(d, 0),
             Action::TeamOpen => self.team_open(ctx),

@@ -192,6 +192,17 @@ impl App {
         if key(Key::Tab) {
             self.actions.push(Action::GroomMode(other_mode(self.grooming.mode)));
         }
+        // Shift+J/K re-rank a Ready row in the session; checked before plain j/k, which consume_shortcut(NONE, J)
+        // would otherwise match too.
+        let shifted = |k: Key| ctx.input_mut(|i| i.consume_shortcut(&KeyboardShortcut::new(Modifiers::SHIFT, k)));
+        if self.grooming.mode == GroomMode::Session {
+            if shifted(Key::J) {
+                self.actions.push(Action::RankReady(1));
+            }
+            if shifted(Key::K) {
+                self.actions.push(Action::RankReady(-1));
+            }
+        }
         if key(Key::J) | key(Key::ArrowDown) {
             self.actions.push(Action::GroomMove(1));
         }
@@ -218,7 +229,6 @@ impl App {
             GroomMode::Session => {
                 // Shift lands on epics with nothing in Planning too. Shift+] arrives as `}` on most layouts; checked
                 // before plain ] because consume_shortcut(NONE, ]) also matches Shift+].
-                let shifted = |k: Key| ctx.input_mut(|i| i.consume_shortcut(&KeyboardShortcut::new(Modifiers::SHIFT, k)));
                 for (keys, delta) in [([Key::CloseBracket, Key::CloseCurlyBracket], 1), ([Key::OpenBracket, Key::OpenCurlyBracket], -1)] {
                     if shifted(keys[0]) || key(keys[1]) {
                         self.actions.push(Action::GroomEpic { delta, skip_empty: false });

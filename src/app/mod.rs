@@ -242,7 +242,7 @@ pub struct App {
     /// "resolution required" error can retry it with a resolution.
     pending_transition: Option<(String, String)>,
     /// Optimistic rank swaps awaiting their Done: (list, issue, neighbour), oldest first.
-    pending_ranks: Vec<(ListId, String, String)>,
+    pub(super) pending_ranks: Vec<(ListId, String, String)>,
     pub grooming: GroomingState,
     pub team: TeamState,
     pub roadmap: RoadmapState,

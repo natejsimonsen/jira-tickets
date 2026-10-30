@@ -67,9 +67,10 @@ Only a token you paste is saved. Signing out deletes that file.
 | `w/n/e` | Unclear what, unclear when, or empty |
 | `u` | Undo the last verdict |
 | `Enter` | Pre-check summary and Promote |
-| `y` | Accept into Ready for Work: ↑/↓ to place, Enter to commit |
-| `b` | Bounce back to New with a comment (⌘Enter posts) |
+| `y` | Accept into Ready for Work from Planning or New: ↑/↓ to place, Enter to commit |
+| `b` | Bounce with a comment (⌘Enter posts); a Planning ticket goes back to New |
 | `p` | Park in Backlog |
+| `J/K` | Move a Ready for Work ticket down or up in rank |
 | `]/[` or `⇧]/⇧[` | Next or previous epic (with Shift, empty ones too) |
 | `Tab` | Switch between Pre-check and Session |
 | **Team** | |

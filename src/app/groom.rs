@@ -411,7 +411,6 @@ impl App {
     }
 
     /// Session: the Ready row under the cursor, as (index in the Ready queue, key).
-    #[cfg_attr(not(test), expect(dead_code, reason = "the view and the decisions use it from task 2"))]
     pub fn session_ready_focus(&self) -> Option<(usize, String)> {
         let queues = self.session_queues();
         let q = queues.get(self.grooming.epic_index)?;
@@ -485,13 +484,16 @@ impl App {
     pub(super) fn bounce(&mut self) {
         let Some(text) = self.grooming.bounce_text.clone().filter(|t| grooming::bounce_comment_ok(t)) else { return };
         let Some(key) = self.decidable() else { return };
-        self.grooming.deciding = Some(key.clone());
         let status = self.cfg.grooming.status_new.clone();
+        // A New ticket gets the comment only; there is nothing to move it back to.
+        let already_new = self.session_focus().is_some_and(|i| i.status.name == status);
+        self.grooming.deciding = Some(key.clone());
         self.spawn_write(move |c, tx| {
             // A move that fails after the comment posted is its own answer ("Bounce move"): the box must close so
             // the same comment is never posted twice.
             let (what, result) = match jira::check_writable().and_then(|_| c.add_comment(&key, text.trim())) {
                 Err(e) => ("Bounce", Err(e)),
+                Ok(()) if already_new => ("Bounce", Ok(())),
                 Ok(()) => match transition_to(c, &key, &status) {
                     Ok(()) => ("Bounce", Ok(())),
                     Err(e) => ("Bounce move", Err(jira::Error::Other(bounce_move_failed(&key, &status, &e)))),
@@ -511,6 +513,38 @@ impl App {
         self.spawn_write(move |c, tx| {
             let result = jira::check_writable().and_then(|_| transition_to(c, &key, &status));
             let _ = tx.send(Msg::Done { key, what: "Park", result });
+        });
+    }
+
+    /// `J`/`K`: moves the Ready row under the cursor one place down or up with one rank call. The row swaps at
+    /// once and the cursor follows it; a failed rank swaps it back when its Done lands (`pending_ranks`).
+    pub(super) fn rank_ready(&mut self, delta: i32) {
+        if self.grooming.mode != GroomMode::Session || self.client.is_none() || self.grooming.placement.is_some() || self.grooming.bounce_text.is_some() {
+            return;
+        }
+        let Some((at, key)) = self.session_ready_focus() else { return };
+        let ready: Vec<String> = self.session_ready_keys();
+        let to = at as i64 + delta as i64;
+        if to < 0 || to >= ready.len() as i64 {
+            return;
+        }
+        let neighbour = ready[to as usize].clone();
+        if let Err(e) = jira::check_writable() {
+            let (text, kind) = done_toast("Rank", &Err(e));
+            self.toast_kind(text, kind);
+            return;
+        }
+        if let Some(list) = self.store.lists.get_mut(&ListId::TeamOpen)
+            && let (Some(a), Some(b)) = (list.iter().position(|k| *k == key), list.iter().position(|k| *k == neighbour))
+        {
+            list.swap(a, b);
+            self.pending_ranks.push((ListId::TeamOpen, key.clone(), neighbour.clone()));
+            self.grooming.cursor = to as usize;
+        }
+        let before = delta < 0;
+        self.spawn_write(move |c, tx| {
+            let (b, a) = if before { (Some(neighbour.as_str()), None) } else { (None, Some(neighbour.as_str())) };
+            let _ = tx.send(Msg::Done { key: key.clone(), what: "Rank", result: c.rank(&key, b, a) });
         });
     }
 
@@ -1140,6 +1174,7 @@ mod tests {
 
     #[test]
     fn entering_the_session_focuses_the_first_candidate() {
+        // No rank route: the stub answers 404.
         let (base, _rx) = crate::jira::tests::stub_server(vec![]);
         let mut app = session_app(&base);
         app.grooming.mode = GroomMode::PreCheck;
@@ -1151,6 +1186,7 @@ mod tests {
 
     #[test]
     fn the_cursor_walks_ready_rows_then_candidates() {
+        // No rank route: the stub answers 404.
         let (base, _rx) = crate::jira::tests::stub_server(vec![]);
         let mut app = session_app(&base);
         app.grooming.cursor = 2;
@@ -1166,6 +1202,7 @@ mod tests {
 
     #[test]
     fn stepping_epics_lands_on_the_first_candidate_and_skips_epics_without_one() {
+        // No rank route: the stub answers 404.
         let (base, _rx) = crate::jira::tests::stub_server(vec![]);
         let mut app = session_app(&base);
         let mut only_ready = session_issue("CI-20", "Ready for Work");
@@ -1199,5 +1236,108 @@ mod tests {
         app.groom_epic(-1, false);
         assert_eq!(app.grooming.epic_index, 1, "Shift lands on the empty epic");
         assert!(app.session_focus().is_none());
+    }
+
+    #[test]
+    fn accept_moves_a_new_ticket_straight_to_ready() {
+        let _g = crate::jira::tests::WRITE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut new_ticket = session_issue("CI-7", "New");
+        new_ticket.status.category = "new".into();
+        let (base, rx) = crate::jira::tests::stub_server(vec![
+            ("GET", "/rest/api/3/issue/CI-7/transitions", transitions_json()),
+            ("POST", "/rest/api/3/issue/CI-7/transitions", serde_json::json!({})),
+            ("PUT", "/rest/agile/1.0/issue/rank", serde_json::json!({})),
+        ]);
+        let mut app = session_app(&base);
+        // `absorb` replaces the list: the session's four tickets plus the New one.
+        app.store.absorb(
+            ListId::TeamOpen,
+            vec![
+                session_issue("CI-5", "Ready for Work"),
+                session_issue("CI-1", "Planning"),
+                session_issue("CI-6", "Ready for Work"),
+                session_issue("CI-2", "Planning"),
+                new_ticket,
+            ],
+        );
+        // Rows: CI-5, CI-6 (Ready), CI-1, CI-2 (Planning), CI-7 (New).
+        app.grooming.cursor = 4;
+        assert_eq!(app.session_focus().map(|i| i.key.as_str()), Some("CI-7"));
+        app.start_accept();
+        app.grooming.placement = Some(0);
+        app.accept();
+        drain_until(&mut app, |a| a.grooming.deciding.is_none());
+        let w = writes(&rx);
+        assert_eq!(w[0].1, "/rest/api/3/issue/CI-7/transitions");
+        assert_eq!(w[0].2["transition"]["id"], "31", "the transition to Ready for Work, found by name");
+        assert_eq!(w[1].2["rankBeforeIssue"], "CI-5");
+    }
+
+    #[test]
+    fn bounce_on_a_new_ticket_posts_the_comment_only() {
+        let _g = crate::jira::tests::WRITE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut new_ticket = session_issue("CI-7", "New");
+        new_ticket.status.category = "new".into();
+        let (base, rx) = crate::jira::tests::stub_server(vec![("POST", "/rest/api/3/issue/CI-7/comment", serde_json::json!({"id": "1"}))]);
+        let mut app = session_app(&base);
+        app.store.absorb(
+            ListId::TeamOpen,
+            vec![
+                session_issue("CI-5", "Ready for Work"),
+                session_issue("CI-1", "Planning"),
+                session_issue("CI-6", "Ready for Work"),
+                session_issue("CI-2", "Planning"),
+                new_ticket,
+            ],
+        );
+        app.grooming.cursor = 4;
+        app.grooming.bounce_text = Some("Which clusters?".into());
+        app.bounce();
+        drain_until(&mut app, |a| a.grooming.deciding.is_none());
+        let w = writes(&rx);
+        assert_eq!(w.len(), 1, "no transition for a ticket already in New: {w:?}");
+        assert_eq!(w[0].1, "/rest/api/3/issue/CI-7/comment");
+        assert!(app.grooming.bounce_text.is_none(), "the box closes");
+    }
+
+    #[test]
+    fn shift_j_ranks_a_ready_row_after_the_next_one() {
+        let _g = crate::jira::tests::WRITE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (base, rx) = crate::jira::tests::stub_server(vec![("PUT", "/rest/agile/1.0/issue/rank", serde_json::json!({}))]);
+        let mut app = session_app(&base);
+        app.grooming.cursor = 0; // CI-5
+        app.rank_ready(1);
+        assert_eq!(app.grooming.cursor, 1, "the cursor follows the ticket");
+        let ready: Vec<String> = app.session_queues()[0].ready.iter().map(|i| i.key.clone()).collect();
+        assert_eq!(ready, ["CI-6", "CI-5"], "swapped at once");
+        drain_until(&mut app, |a| a.pending_ranks.is_empty());
+        let w = writes(&rx);
+        assert_eq!(w[0].2["issues"][0], "CI-5");
+        assert_eq!(w[0].2["rankAfterIssue"], "CI-6");
+    }
+
+    #[test]
+    fn shift_k_at_the_top_and_on_a_candidate_do_nothing() {
+        let (base, rx) = crate::jira::tests::stub_server(vec![]);
+        let mut app = session_app(&base);
+        app.grooming.cursor = 0;
+        app.rank_ready(-1);
+        app.grooming.cursor = 2; // CI-1, a candidate
+        app.rank_ready(1);
+        assert!(writes(&rx).is_empty());
+        assert!(app.pending_ranks.is_empty());
+    }
+
+    #[test]
+    fn a_failed_rank_swaps_the_ready_rows_back() {
+        let _g = crate::jira::tests::WRITE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // No rank route: the stub answers 404.
+        let (base, _rx) = crate::jira::tests::stub_server(vec![]);
+        let mut app = session_app(&base);
+        app.grooming.cursor = 0;
+        app.rank_ready(1);
+        drain_until(&mut app, |a| a.pending_ranks.is_empty());
+        let ready: Vec<String> = app.session_queues()[0].ready.iter().map(|i| i.key.clone()).collect();
+        assert_eq!(ready, ["CI-5", "CI-6"]);
     }
 }
