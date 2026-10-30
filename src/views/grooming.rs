@@ -214,6 +214,16 @@ fn candidate_list(app: &mut App, ui: &mut Ui, p: &Palette, cursor: usize) {
     }
 }
 
+/// The Proposed list's row salt.
+const PROPOSED_SALT: &str = "groom-proposed";
+/// The New list's row salt.
+const NEW_SALT: &str = "groom-new";
+
+/// A list row's widget id: unique per list (salt) and row.
+fn row_id(salt: &str, idx: usize) -> egui::Id {
+    egui::Id::new((salt, idx))
+}
+
 /// A list row card: `selected_row` under the cursor, the hover fill otherwise; returns its click response.
 fn row_frame(ui: &mut Ui, p: &Palette, salt: &str, sel: bool, idx: usize, n: usize, content: impl FnOnce(&mut Ui)) -> egui::Response {
     let corners = super::issues::row_corners(idx, n);
@@ -223,7 +233,7 @@ fn row_frame(ui: &mut Ui, p: &Palette, salt: &str, sel: bool, idx: usize, n: usi
         content(ui);
     });
     let rect = r.response.rect;
-    let resp = ui.interact(rect, egui::Id::new((salt, idx)), egui::Sense::click());
+    let resp = ui.interact(rect, row_id(salt, idx), egui::Sense::click());
     let fill = super::issues::row_fill(sel, resp.hovered(), p);
     ui.painter().set(bg, egui::epaint::RectShape::filled(rect, corners, fill));
     resp
@@ -682,18 +692,19 @@ fn queue_label(ui: &mut Ui, p: &Palette, name: &str, n: usize) {
     ui.add_space(8.0);
 }
 
-/// A context row: the key and title in muted text, not selectable.
-fn context_row(ui: &mut Ui, p: &Palette, salt: &str, i: &jira::Issue, idx: usize, n: usize) {
-    row_frame(ui, p, salt, false, idx, n, |ui| {
+/// A key-and-title row: muted, or in the selected colours under the cursor.
+fn context_row(ui: &mut Ui, p: &Palette, salt: &str, i: &jira::Issue, sel: bool, idx: usize, n: usize) -> egui::Response {
+    row_frame(ui, p, salt, sel, idx, n, |ui| {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 8.0;
-            ui.label(RichText::new(&i.key).font(theme::mono(12.5)).color(p.muted));
+            let color = if sel { p.text } else { p.muted };
+            ui.label(RichText::new(&i.key).font(theme::mono(12.5)).color(if sel { super::issues::row_key_color(true, p) } else { p.muted }));
             let painter = ui.painter().clone();
             let t =
-                crate::views::truncate_title(&i.summary, ui.available_width(), |t| painter.layout_no_wrap(t.to_string(), theme::body(13.5), p.muted).size().x);
-            ui.label(RichText::new(t).font(theme::body(13.5)).color(p.muted));
+                crate::views::truncate_title(&i.summary, ui.available_width(), |t| painter.layout_no_wrap(t.to_string(), theme::body(13.5), color).size().x);
+            ui.label(RichText::new(t).font(theme::body(13.5)).color(color));
         });
-    });
+    })
 }
 
 /// A sprint block: its label (the sprint's name) over muted context rows, or "None".
@@ -704,7 +715,7 @@ fn sprint_block(ui: &mut Ui, p: &Palette, name: &str, salt: &str, rows: &[jira::
     }
     ui.spacing_mut().item_spacing.y = ROW_GAP;
     for (idx, i) in rows.iter().enumerate() {
-        context_row(ui, p, salt, i, idx, rows.len());
+        context_row(ui, p, salt, i, false, idx, rows.len());
     }
     ui.spacing_mut().item_spacing.y = ui.style().spacing.item_spacing.y;
     ui.add_space(GROUP_GAP);
@@ -715,6 +726,7 @@ fn sprint_block(ui: &mut Ui, p: &Palette, name: &str, salt: &str, rows: &[jira::
 fn candidate_row(
     ui: &mut Ui,
     p: &Palette,
+    salt: &str,
     i: &jira::Issue,
     idx: usize,
     n: usize,
@@ -723,7 +735,7 @@ fn candidate_row(
     today: chrono::NaiveDate,
     elapsed: u64,
 ) -> egui::Response {
-    row_frame(ui, p, "groom-cand", sel, idx, n, |ui| {
+    row_frame(ui, p, salt, sel, idx, n, |ui| {
         title_line(ui, p, &i.key, &i.summary, sel);
         ui.add_space(LINE_GAP);
         ui.horizontal(|ui| {
@@ -779,32 +791,23 @@ fn epic_queue(app: &mut App, ui: &mut Ui, p: &Palette, view: &QueueView, cursor:
             }
             if let Some(i) = ready.get(at) {
                 let sel = cursor == at;
-                let resp = row_frame(ui, p, "groom-ready", sel, row, rows, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.spacing_mut().item_spacing.x = 8.0;
-                        let color = if sel { p.text } else { p.muted };
-                        ui.label(RichText::new(&i.key).font(theme::mono(12.5)).color(if sel { super::issues::row_key_color(true, p) } else { p.muted }));
-                        let painter = ui.painter().clone();
-                        let t = crate::views::truncate_title(&i.summary, ui.available_width(), |t| {
-                            painter.layout_no_wrap(t.to_string(), theme::body(13.5), color).size().x
-                        });
-                        ui.label(RichText::new(t).font(theme::body(13.5)).color(color));
-                    });
-                });
+                let resp = context_row(ui, p, "groom-ready", i, sel, row, rows);
                 if resp.clicked() && app.grooming.placement.is_none() && app.grooming.bounce_text.is_none() {
                     clicked = Some(at);
                 }
                 row += 1;
             }
         }
-        for (label, list, offset) in [("Proposed", &view.planning, ready.len()), (status.1.as_str(), &view.new, ready.len() + view.planning.len())] {
+        for (label, salt, list, offset) in
+            [("Proposed", PROPOSED_SALT, &view.planning, ready.len()), (status.1.as_str(), NEW_SALT, &view.new, ready.len() + view.planning.len())]
+        {
             ui.spacing_mut().item_spacing.y = ui.style().spacing.item_spacing.y;
             ui.add_space(GROUP_GAP);
             queue_label(ui, p, label, list.len());
             ui.spacing_mut().item_spacing.y = ROW_GAP;
             for (idx, i) in list.iter().enumerate() {
                 let sel = offset + idx == cursor;
-                let resp = candidate_row(ui, p, i, idx, list.len(), sel, report.as_ref(), today, elapsed);
+                let resp = candidate_row(ui, p, salt, i, idx, list.len(), sel, report.as_ref(), today, elapsed);
                 if resp.clicked() && app.grooming.placement.is_none() && app.grooming.bounce_text.is_none() {
                     clicked = Some(offset + idx);
                 }
@@ -1153,6 +1156,13 @@ mod tests {
         app.grooming.cursor = 0;
         let t = texts(&mut app);
         assert!(!t.iter().any(|x| x == "0:00"), "no timer on a Ready row: {t:?}");
+    }
+
+    #[test]
+    fn proposed_and_new_rows_get_distinct_widget_ids() {
+        // Both lists have a row 0; sharing an id would make egui treat them as one widget.
+        assert_ne!(row_id(PROPOSED_SALT, 0), row_id(NEW_SALT, 0));
+        assert_ne!(row_id(PROPOSED_SALT, 0), row_id("groom-ready", 0));
     }
 
     #[test]
