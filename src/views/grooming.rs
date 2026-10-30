@@ -1174,7 +1174,10 @@ mod tests {
             assert!(t.iter().any(|x| x == want), "{want} in {t:?}");
         }
         // The 300 pt rail truncates the epic name by platform font width, so match the ends only.
-        assert!(t.iter().any(|x| x.starts_with("CI-1860") && x.ends_with(" · Sp 1 · Nx 1 · R 1 · P 1 · N 1")), "rail line in {t:?}");
+        assert!(
+            t.iter().any(|x| x.starts_with("CI") && x.ends_with(" · Sp 1 · Nx 1 · R 1 · P 1 · N 1")),
+            "rail line (the epic name may truncate to its key or less on narrow fonts) in {t:?}"
+        );
         assert!(!t.iter().any(|x| x == "Ongoing" || x == "Other epics"), "stage headers only for stages with epics: {t:?}");
         app.grooming.placement = Some(0);
         let t = texts(&mut app);
@@ -1196,7 +1199,7 @@ mod tests {
         for want in ["Unclaimed · 1", "CI-77", "Summary CI-77"] {
             assert!(t.iter().any(|x| x == want), "{want} in {t:?}");
         }
-        assert!(t.iter().any(|x| x.starts_with("CI-1860") && x.ends_with(" · Sp 1 · Nx 1 · R 1 · P 1 · N 1 · U 1")), "rail line with U in {t:?}");
+        assert!(t.iter().any(|x| x.starts_with("CI") && x.ends_with(" · Sp 1 · Nx 1 · R 1 · P 1 · N 1 · U 1")), "rail line with U in {t:?}");
         assert!(!t.iter().any(|x| x == "0:00"), "no timer on an Unclaimed row: {t:?}");
     }
 
