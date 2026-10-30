@@ -415,7 +415,17 @@ pub fn epic_queues<'a>(issues: &[&'a Issue], team_label: &str, g: &config::Groom
     }
     // Every roadmap epic is listed, with or without team tickets, and gets its open children outside the team.
     let any_labelled = ctx.epics.iter().any(|e| e.labels.iter().any(|l| l == ctx.initiative_label));
-    for e in ctx.epics.iter().filter(|e| roadmap::is_initiative(e, ctx.initiative_label, any_labelled)) {
+    let team: std::collections::HashSet<&str> = issues.iter().map(|t| t.key.as_str()).collect();
+    let mut children: std::collections::HashMap<&str, Vec<&'a Issue>> = std::collections::HashMap::new();
+    for c in ctx.roadmap_children.iter().filter(|c| c.status.category != "done" && !team.contains(c.key.as_str())) {
+        if let Some(p) = c.parent_key.as_deref() {
+            children.entry(p).or_default().push(c);
+        }
+    }
+    // A shipped epic (Done category) drops off the rail.
+    let mut listed: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    for e in ctx.epics.iter().filter(|e| e.status.category != "done" && roadmap::is_initiative(e, ctx.initiative_label, any_labelled)) {
+        listed.insert(e.key.as_str());
         let q = by_epic.entry(Some(e.key.clone())).or_insert_with(|| EpicQueue {
             epic: Some(e.key.clone()),
             summary: e.summary.clone(),
@@ -427,15 +437,12 @@ pub fn epic_queues<'a>(issues: &[&'a Issue], team_label: &str, g: &config::Groom
             new: vec![],
             unclaimed: vec![],
         });
-        q.unclaimed = ctx
-            .roadmap_children
-            .iter()
-            .filter(|c| c.parent_key.as_deref() == Some(e.key.as_str()) && c.status.category != "done" && !issues.iter().any(|t| t.key == c.key))
-            .copied()
-            .collect();
+        q.unclaimed = children.get(e.key.as_str()).cloned().unwrap_or_default();
     }
-    let mut out: Vec<_> =
-        by_epic.into_values().filter(|q| q.stage.stage == Stage::Roadmap || !q.ready.is_empty() || !q.planning.is_empty() || !q.new.is_empty()).collect();
+    let mut out: Vec<_> = by_epic
+        .into_values()
+        .filter(|q| q.epic.as_deref().is_some_and(|k| listed.contains(k)) || !q.ready.is_empty() || !q.planning.is_empty() || !q.new.is_empty())
+        .collect();
     out.sort_by(|a, b| a.stage.cmp(&b.stage));
     out
 }
@@ -723,6 +730,19 @@ mod tests {
         assert_eq!(q[0].new.iter().map(|i| i.key.as_str()).collect::<Vec<_>>(), ["CI-3"]);
         assert_eq!(q[0].rows().iter().map(|i| i.key.as_str()).collect::<Vec<_>>(), ["CI-3", "CI-1"]);
         assert!(q[0].has_work());
+    }
+
+    #[test]
+    fn done_roadmap_epics_are_not_listed() {
+        let g = config::Grooming::default();
+        let rm = config::Roadmap::default();
+        let mut shipped = epic("E-D", "Shipped", "Done", &["roadmap"]);
+        shipped.status.category = "done".into();
+        let live = epic("E-R", "Delivery Metrics", "New", &["roadmap"]);
+        let child = issue("CI-1", "New", Some("E-D"), "", &[]);
+        let c = ctx_with(&[&shipped, &live], &[&child], &rm);
+        let q = epic_queues(&[], "PLAT", &g, &c);
+        assert_eq!(q.iter().map(|e| e.epic.as_deref()).collect::<Vec<_>>(), [Some("E-R")]);
     }
 
     #[test]

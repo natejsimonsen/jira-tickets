@@ -1706,22 +1706,20 @@ mod tests {
     fn the_focus_follows_a_labelled_ticket_out_of_unclaimed() {
         let (base, _rx) = crate::jira::tests::stub_server(vec![]);
         let mut app = unclaimed_app(&base);
-        let (epic, focus) = app.session_anchor();
-        assert_eq!(focus.as_deref(), Some("CI-9"));
-        // The refresh lands with CI-9 labelled and New: it joins the team's New block, before nothing else.
+        assert_eq!((app.grooming.cursor, app.session_row_focus().as_deref()), (4, Some("CI-9")));
+        // The refresh lands with CI-9 labelled and New, behind another New ticket: its row index moves from 4 to 5.
         let mut labelled = session_issue("CI-9", "New");
         labelled.labels = vec!["PLAT".into()];
-        app.store.absorb(
-            ListId::TeamOpen,
-            vec![
-                session_issue("CI-5", "Ready for Work"),
-                session_issue("CI-1", "Planning"),
-                session_issue("CI-6", "Ready for Work"),
-                session_issue("CI-2", "Planning"),
-                labelled.clone(),
-            ],
-        );
-        app.session_keep(epic, focus);
+        let landed = vec![
+            session_issue("CI-5", "Ready for Work"),
+            session_issue("CI-1", "Planning"),
+            session_issue("CI-6", "Ready for Work"),
+            session_issue("CI-2", "Planning"),
+            session_issue("CI-3", "New"),
+            labelled,
+        ];
+        app.handle(super::super::Msg::List { id: ListId::TeamOpen, result: Ok(landed), seq: None, with_members: false });
+        assert_eq!(app.grooming.cursor, 5);
         assert_eq!(app.session_row_focus().as_deref(), Some("CI-9"));
         assert_eq!(app.session_focus().map(|i| i.key.as_str()), Some("CI-9"), "now a candidate");
     }
