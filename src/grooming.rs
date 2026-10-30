@@ -1,6 +1,5 @@
 //! Pure grooming model: pre-check candidates, verdict prefill, promotion planning, session queues and thresholds.
 
-use std::cmp::Reverse;
 use std::collections::BTreeMap;
 
 use crate::config;
@@ -153,14 +152,14 @@ pub fn siblings_jql(project: &str, status_ready: &str, parents: &[String]) -> St
     )
 }
 
-/// The report's "Planning — by epic": the promoted rows grouped by epic, most promoted first, then epic key, with
-/// "(no epic)" always last. Each epic lists its Ready for Work `siblings` (in rank order) with their 1-based
-/// position among that epic's Ready tickets.
-pub fn promoted_epics(promoted: &[&RunRow], siblings: &[Issue]) -> Vec<PromotedEpic> {
-    let mut by_epic: Vec<PromotedEpic> = Vec::new();
+/// The report's "Planning — by epic": the promoted rows grouped by epic in stage order (roadmap, no epic, ongoing,
+/// other; see `StageKey`). Each epic lists its Ready for Work `siblings` (in rank order) with their 1-based
+/// position among that epic's Ready tickets, and carries its stage note.
+pub fn promoted_epics(promoted: &[&RunRow], siblings: &[Issue], ctx: &StageContext) -> Vec<PromotedEpic> {
+    let mut by_epic: Vec<(StageKey, PromotedEpic)> = Vec::new();
     for r in promoted {
         let key = r.epic.as_ref().map(|e| e.key.as_str());
-        let at = match by_epic.iter().position(|e| e.epic.as_ref().map(|e| e.key.as_str()) == key) {
+        let at = match by_epic.iter().position(|(_, e)| e.epic.as_ref().map(|e| e.key.as_str()) == key) {
             Some(i) => i,
             None => {
                 let existing_ready = key
@@ -173,11 +172,16 @@ pub fn promoted_epics(promoted: &[&RunRow], siblings: &[Issue]) -> Vec<PromotedE
                             .collect()
                     })
                     .unwrap_or_default();
-                by_epic.push(PromotedEpic { epic: r.epic.clone(), existing_ready, candidates: vec![] });
+                let sk = stage_of(key, r.epic.as_ref().map(|e| e.summary.as_str()), ctx);
+                let epic = r.epic.clone().map(|mut e| {
+                    e.note = sk.note();
+                    e
+                });
+                by_epic.push((sk, PromotedEpic { epic, existing_ready, candidates: vec![] }));
                 by_epic.len() - 1
             }
         };
-        by_epic[at].candidates.push(PlanningRow {
+        by_epic[at].1.candidates.push(PlanningRow {
             key: r.key.clone(),
             summary: r.summary.clone(),
             rank: Some(r.rank),
@@ -185,14 +189,14 @@ pub fn promoted_epics(promoted: &[&RunRow], siblings: &[Issue]) -> Vec<PromotedE
             epic: key.map(String::from),
         });
     }
-    by_epic.sort_by_key(|e| (e.epic.is_none(), Reverse(e.candidates.len()), e.epic.as_ref().map(|e| e.key.clone())));
-    by_epic
+    by_epic.sort_by(|a, b| a.0.cmp(&b.0));
+    by_epic.into_iter().map(|(_, e)| e).collect()
 }
 
-/// The report's "Needs detail": the first `cap` rows in rank order, grouped by epic (most rows first, then epic
-/// key, "(no epic)" always last; rows keep rank order), and the count before the cap.
-pub fn needs_detail_epics(rows: &[(&RunRow, Vec<Code>)], cap: usize) -> (Vec<NeedsDetailEpic>, usize) {
-    let mut out: Vec<NeedsDetailEpic> = Vec::new();
+/// The report's "Needs detail": the first `cap` rows in rank order, grouped by epic in stage order (rows keep rank
+/// order), and the count before the cap.
+pub fn needs_detail_epics(rows: &[(&RunRow, Vec<Code>)], cap: usize, ctx: &StageContext) -> (Vec<NeedsDetailEpic>, usize) {
+    let mut out: Vec<(StageKey, NeedsDetailEpic)> = Vec::new();
     for (r, codes) in rows.iter().take(cap) {
         let key = r.epic.as_ref().map(|e| e.key.as_str());
         let row = NeedsDetailRow {
@@ -203,13 +207,20 @@ pub fn needs_detail_epics(rows: &[(&RunRow, Vec<Code>)], cap: usize) -> (Vec<Nee
             codes: codes.iter().map(|c| c.slug().to_string()).collect(),
             epic: key.map(String::from),
         };
-        match out.iter_mut().find(|e| e.epic.as_ref().map(|e| e.key.as_str()) == key) {
-            Some(e) => e.rows.push(row),
-            None => out.push(NeedsDetailEpic { epic: r.epic.clone(), rows: vec![row] }),
+        match out.iter_mut().find(|(_, e)| e.epic.as_ref().map(|e| e.key.as_str()) == key) {
+            Some((_, e)) => e.rows.push(row),
+            None => {
+                let sk = stage_of(key, r.epic.as_ref().map(|e| e.summary.as_str()), ctx);
+                let epic = r.epic.clone().map(|mut e| {
+                    e.note = sk.note();
+                    e
+                });
+                out.push((sk, NeedsDetailEpic { epic, rows: vec![row] }));
+            }
         }
     }
-    out.sort_by_key(|e| (e.epic.is_none(), Reverse(e.rows.len()), e.epic.as_ref().map(|e| e.key.clone())));
-    (out, rows.len())
+    out.sort_by(|a, b| a.0.cmp(&b.0));
+    (out.into_iter().map(|(_, e)| e).collect(), rows.len())
 }
 
 /// The session's four stages, in meeting order.
@@ -263,7 +274,6 @@ impl StageKey {
     }
 
     /// The report heading's note: "roadmap (Now, P0)", "roadmap (Later)", "ongoing", "other"; none for no epic.
-    #[cfg_attr(not(test), expect(dead_code, reason = "the report heading uses it from a later task"))]
     pub fn note(&self) -> Option<String> {
         match self.stage {
             Stage::Roadmap => {
@@ -740,53 +750,42 @@ mod tests {
             rank,
             age: "older".into(),
             created: "2026-09-01".into(),
-            epic: epic.map(|e| crate::report::EpicRef { key: e.into(), summary: format!("Epic {e}"), numeric_id: Some("1".into()), status: None }),
+            epic: epic.map(|e| crate::report::EpicRef { key: e.into(), summary: format!("Epic {e}"), numeric_id: Some("1".into()), status: None, note: None }),
         }
     }
 
     #[test]
-    fn report_epics_order_by_count_then_key_with_ready_siblings() {
-        let rows = [run_row("CI-1", Some("E-2"), 1), run_row("CI-2", Some("E-1"), 2), run_row("CI-3", Some("E-2"), 3), run_row("CI-4", None, 4)];
+    fn report_epics_follow_the_stage_order_with_ready_siblings() {
+        let rm = config::Roadmap::default();
+        let r_now = epic("E-2", "Cost", "Work in Progress", &["roadmap"]);
+        let og = epic("E-1", "Node Autoscaling (ongoing)", "New", &[]);
+        let epics = [&og, &r_now];
+        let c = ctx(&epics, &rm);
+        let rows = [run_row("CI-1", Some("E-1"), 1), run_row("CI-2", Some("E-1"), 2), run_row("CI-3", None, 3), run_row("CI-4", Some("E-2"), 4)];
         let ready = |k: &str, e: &str| Issue { key: k.into(), summary: format!("R {k}"), parent_key: Some(e.into()), ..Default::default() };
         let sib = [ready("CI-50", "E-2"), ready("CI-51", "E-1"), ready("CI-52", "E-2")];
         let refs: Vec<&RunRow> = rows.iter().collect();
-        let out = promoted_epics(&refs, &sib);
+        let out = promoted_epics(&refs, &sib, &c);
         let keys: Vec<Option<&str>> = out.iter().map(|e| e.epic.as_ref().map(|e| e.key.as_str())).collect();
-        assert_eq!(keys, [Some("E-2"), Some("E-1"), None], "most promoted first, then key, no epic last");
-        assert_eq!(out[0].candidates.iter().map(|c| c.key.as_str()).collect::<Vec<_>>(), ["CI-1", "CI-3"]);
+        assert_eq!(keys, [Some("E-2"), None, Some("E-1")], "roadmap, then no epic, then ongoing, whatever the counts");
+        assert_eq!(out[0].epic.as_ref().unwrap().note.as_deref(), Some("roadmap (Now)"));
         assert_eq!(out[0].existing_ready, [("CI-50".to_string(), "R CI-50".to_string(), 1), ("CI-52".to_string(), "R CI-52".to_string(), 2)]);
-        assert_eq!(out[1].existing_ready, [("CI-51".to_string(), "R CI-51".to_string(), 1)]);
-        assert!(out[2].existing_ready.is_empty());
+        assert_eq!(out[2].candidates.iter().map(|c| c.key.as_str()).collect::<Vec<_>>(), ["CI-1", "CI-2"]);
+        assert_eq!(out[2].epic.as_ref().unwrap().note.as_deref(), Some("ongoing"));
     }
 
     #[test]
-    fn needs_detail_is_capped_and_counted() {
+    fn needs_detail_is_capped_and_in_stage_order() {
+        let rm = config::Roadmap::default();
+        let c = ctx(&[], &rm);
         let rows: Vec<RunRow> = (1..=5).map(|i| run_row(&format!("CI-{i}"), if i % 2 == 0 { Some("E-1") } else { None }, i)).collect();
         let nd: Vec<(&RunRow, Vec<Code>)> = rows.iter().map(|r| (r, vec![Code::UnclearWhen])).collect();
-        let (epics, total) = needs_detail_epics(&nd, 3);
+        let (epics, total) = needs_detail_epics(&nd, 3, &c);
         assert_eq!(total, 5);
         assert_eq!(epics.iter().map(|e| e.rows.len()).sum::<usize>(), 3);
-        assert_eq!(epics[0].epic.as_ref().map(|e| e.key.as_str()), Some("E-1"), "\"(no epic)\" is last even with more rows");
-        assert_eq!(epics[0].rows[0].codes, ["unclear-when"]);
-        assert_eq!(epics[1].epic, None);
-        assert_eq!(epics[1].rows.iter().map(|r| r.key.as_str()).collect::<Vec<_>>(), ["CI-1", "CI-3"], "rows keep rank order");
-    }
-
-    #[test]
-    fn needs_detail_epics_order_by_count_then_key() {
-        let rows = [run_row("CI-1", Some("E-2"), 1), run_row("CI-2", Some("E-3"), 2), run_row("CI-3", Some("E-3"), 3), run_row("CI-4", Some("E-1"), 4)];
-        let nd: Vec<(&RunRow, Vec<Code>)> = rows.iter().map(|r| (r, vec![Code::Empty])).collect();
-        let (epics, _) = needs_detail_epics(&nd, 10);
-        let keys: Vec<Option<&str>> = epics.iter().map(|e| e.epic.as_ref().map(|e| e.key.as_str())).collect();
-        assert_eq!(keys, [Some("E-3"), Some("E-1"), Some("E-2")]);
-    }
-
-    #[test]
-    fn no_epic_is_last_in_planning_even_when_largest() {
-        let rows = [run_row("CI-1", None, 1), run_row("CI-2", None, 2), run_row("CI-3", Some("E-1"), 3)];
-        let refs: Vec<&RunRow> = rows.iter().collect();
-        let keys: Vec<Option<String>> = promoted_epics(&refs, &[]).iter().map(|e| e.epic.as_ref().map(|e| e.key.clone())).collect();
-        assert_eq!(keys, [Some("E-1".to_string()), None]);
+        assert_eq!(epics[0].epic, None, "no epic (stage 2) comes before an other epic (stage 4)");
+        assert_eq!(epics[0].rows.iter().map(|r| r.key.as_str()).collect::<Vec<_>>(), ["CI-1", "CI-3"], "rows keep rank order");
+        assert_eq!(epics[1].epic.as_ref().unwrap().note.as_deref(), Some("other"));
     }
 
     #[test]

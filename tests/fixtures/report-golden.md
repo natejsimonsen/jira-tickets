@@ -5,7 +5,7 @@ Boards: [Parent 100](https://example.atlassian.net/jira/software/c/projects/CI/b
 
 ## Planning — by epic
 
-### Epic [CI-79](https://example.atlassian.net/jira/software/c/projects/CI/boards/101/backlog?customFilter=201&issueParent=10002) · Cluster Operations (ongoing) · In Progress
+### Epic [CI-79](https://example.atlassian.net/jira/software/c/projects/CI/boards/101/backlog?customFilter=201&issueParent=10002) · Cluster Operations (ongoing) · In Progress · roadmap (Now, P0)
 
 Existing Ready for Work in this epic: 2 (CI-100 rank 1, CI-101 rank 4)
 
@@ -21,7 +21,7 @@ Planning candidates:
 
 ## Needs detail (still in `New`)
 
-### Epic [CI-79](https://example.atlassian.net/jira/software/c/projects/CI/boards/101/backlog?customFilter=201&issueParent=10002) · Cluster Operations (ongoing)
+### Epic [CI-79](https://example.atlassian.net/jira/software/c/projects/CI/boards/101/backlog?customFilter=201&issueParent=10002) · Cluster Operations (ongoing) · other
 
 - [CI-3](https://example.atlassian.net/browse/CI-3) — Look into X · rank 12 · created 2026-09-30 · missing: unclear-when
 

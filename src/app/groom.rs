@@ -187,6 +187,7 @@ impl App {
                     summary: i.parent_summary.clone().unwrap_or_default(),
                     numeric_id: i.parent_id.clone(),
                     status: self.store.get(k).map(|e| e.status.name.clone()).filter(|s| !s.is_empty()),
+                    note: None,
                 });
                 RunRow {
                     key: i.key.clone(),
@@ -308,12 +309,13 @@ impl App {
     /// Renders the report from the run and the siblings, and writes it unless today's exists (then it waits on
     /// the confirm).
     fn finish_report(&mut self, siblings: &[Issue], siblings_error: Option<String>) {
+        let ctx = self.stage_context();
         let Some(run) = &self.grooming.promote_run else { return };
         let cfg = &self.cfg;
-        let promoted = grooming::promoted_epics(&self.promoted_rows(), siblings);
+        let promoted = grooming::promoted_epics(&self.promoted_rows(), siblings, &ctx);
         let nd_rows: Vec<(&RunRow, Vec<Code>)> =
             run.needs_detail.iter().filter_map(|(k, codes)| run.rows.iter().find(|r| r.key == *k).map(|r| (r, codes.clone()))).collect();
-        let (needs_detail, needs_detail_total) = grooming::needs_detail_epics(&nd_rows, cfg.grooming.needs_detail_cap);
+        let (needs_detail, needs_detail_total) = grooming::needs_detail_epics(&nd_rows, cfg.grooming.needs_detail_cap, &ctx);
         let jql = grooming::pre_check_jql(&cfg.scope.project, &cfg.scope.team_label, &cfg.grooming.status_new);
         let text = report::render(&report::WriterInput {
             date: &run.date,
@@ -724,7 +726,7 @@ mod tests {
         let date = chrono::Local::now().date_naive().format("%Y-%m-%d").to_string();
         let text = std::fs::read_to_string(dir.path().join(format!("{date}.md"))).expect("report written");
         let back = crate::report::parse(&text);
-        assert_eq!(back.promoted.iter().map(|p| p.key.as_str()).collect::<Vec<_>>(), ["CI-1", "CI-2"]);
+        assert_eq!(back.promoted.iter().map(|p| p.key.as_str()).collect::<Vec<_>>(), ["CI-2", "CI-1"], "no epic comes before an other epic");
         assert_eq!(back.needs_detail.iter().map(|n| (n.key.as_str(), n.codes.clone())).collect::<Vec<_>>(), [("CI-3", vec!["unclear-when".to_string()])]);
         assert!(text.contains("JQL: `project = CI AND labels = PLAT AND status = New ORDER BY rank ASC`"), "{text}");
         assert!(text.contains("issueParent=10002"), "the epic's numeric id: {text}");

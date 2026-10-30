@@ -10,6 +10,8 @@ pub struct EpicRef {
     pub summary: String,
     pub numeric_id: Option<String>,
     pub status: Option<String>,
+    /// The stage note the writer adds to the heading: "roadmap (Now, P0)", "ongoing", "other".
+    pub note: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -161,8 +163,21 @@ fn parse_epic_heading(h: &str) -> Option<EpicRef> {
         Some((k, s)) => (k.to_string(), s.trim().to_string()),
         None => (inner.to_string(), after.split('·').nth(1).map(|s| s.trim().to_string()).unwrap_or_default()),
     };
-    let status = after.split(" · ").nth(2).map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
-    Some(EpicRef { key, summary, numeric_id, status })
+    let mut status = None;
+    let mut note = None;
+    for seg in after.split(" · ").skip(2).map(str::trim).filter(|s| !s.is_empty()) {
+        if is_stage_note(seg) {
+            note = Some(seg.to_string());
+        } else if status.is_none() {
+            status = Some(seg.to_string());
+        }
+    }
+    Some(EpicRef { key, summary, numeric_id, status, note })
+}
+
+/// A heading segment the writer adds for the stage: "roadmap (…)", "ongoing", "other".
+fn is_stage_note(seg: &str) -> bool {
+    seg.starts_with("roadmap") || seg == "ongoing" || seg == "other"
 }
 
 /// `- [CI-1](url) — summary · note · note` → (key, summary, notes). Struck rows (`- ~~CI-1~~ — …`) return None.
@@ -308,6 +323,9 @@ pub fn render(i: &WriterInput) -> String {
                 if with_status && let Some(st) = &e.status {
                     h.push_str(&format!(" · {st}"));
                 }
+                if let Some(n) = &e.note {
+                    h.push_str(&format!(" · {n}"));
+                }
                 h
             }
         }
@@ -412,6 +430,18 @@ mod tests {
     }
 
     #[test]
+    fn headings_carry_a_stage_note_that_is_not_a_status() {
+        let text = "# PLAT pre-grooming — 2026-10-30\n\n## Planning — by epic\n\n### Epic [CI-1569](https://x/boards/101/backlog?customFilter=201&issueParent=1) · Cluster Upgrade · New · roadmap (Later, P0)\n\nPlanning candidates:\n\n- [CI-1](https://x/browse/CI-1) — a · rank 1 · older\n\n## Needs detail (still in `New`)\n\n### Epic [CI-79](https://x/boards/101/backlog?customFilter=201&issueParent=2) · Cluster Operations (ongoing) · ongoing\n\n- [CI-2](https://x/browse/CI-2) — b · rank 2 · created 2026-09-30 · missing: empty\n";
+        let r = parse(text);
+        let e = &r.epics["CI-1569"];
+        assert_eq!(e.status.as_deref(), Some("New"));
+        assert_eq!(e.note.as_deref(), Some("roadmap (Later, P0)"));
+        let n = &r.epics["CI-79"];
+        assert_eq!(n.status, None, "a note is not a status");
+        assert_eq!(n.note.as_deref(), Some("ongoing"));
+    }
+
+    #[test]
     fn parses_promoted_rows_and_skips_existing_ready() {
         let r = real();
         let row = r.promoted.iter().find(|p| p.key == "CI-3727").expect("CI-3727 promoted");
@@ -463,8 +493,13 @@ mod tests {
 
     #[test]
     fn render_matches_golden() {
-        let kube =
-            EpicRef { key: "CI-79".into(), summary: "Cluster Operations (ongoing)".into(), numeric_id: Some("10002".into()), status: Some("In Progress".into()) };
+        let kube = EpicRef {
+            key: "CI-79".into(),
+            summary: "Cluster Operations (ongoing)".into(),
+            numeric_id: Some("10002".into()),
+            status: Some("In Progress".into()),
+            note: Some("roadmap (Now, P0)".into()),
+        };
         let input = WriterInput {
             date: "2026-10-08",
             jql: "project = CI AND labels = PLAT AND status = New ORDER BY rank ASC",
@@ -499,7 +534,7 @@ mod tests {
                 },
             ],
             needs_detail: &[NeedsDetailEpic {
-                epic: Some(EpicRef { status: None, ..kube.clone() }),
+                epic: Some(EpicRef { status: None, note: Some("other".into()), ..kube.clone() }),
                 rows: vec![NeedsDetailRow {
                     key: "CI-3".into(),
                     summary: "Look into X".into(),
