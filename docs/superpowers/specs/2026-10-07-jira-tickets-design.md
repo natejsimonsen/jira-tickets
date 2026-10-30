@@ -370,6 +370,8 @@ rows; for the focused candidate:
   ticket gets the comment only.
 - `p` park: transitions to `Backlog`.
 
+Roadmap epics are always listed. For them a sixth block, Unclaimed, holds the epic's open children outside the team's scope (no team label, not assigned to a member); `l` adds the team label and `a` opens the assign picker on any focused row, after which the next refresh moves the ticket into its queue.
+
 For a focused `Ready for Work` row, `J` and `K` move it one place down or
 up with a single rank call (after the next row, or before the previous
 one); the list reorders when the refresh lands.
@@ -481,6 +483,7 @@ Tabs:
 - The pre-check summary dialog keeps its rank-ordered list; only the written report is staged.
 - `J`/`K` reuse the Issues view's optimistic swap: the Ready rows swap at once and swap back when the rank call fails.
 - The focused Ready row's detail shows in the right pane; the "nothing to groom" card shows only for an epic with no Proposed and no New ticket.
+- Unclaimed rows exist only for roadmap epics because only initiative children are loaded (`ListId::EpicChildren`).
 
 ## 10. Error handling
 

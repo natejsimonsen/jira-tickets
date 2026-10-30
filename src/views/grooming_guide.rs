@@ -24,7 +24,7 @@ pub fn rubric_title(mode: GroomMode) -> &'static str {
 }
 
 /// The rubric card's lines. Each line is (key or "", text). An empty key draws text only.
-pub fn rubric_lines(mode: GroomMode, status_new: &str, status_planning: &str, status_ready: &str) -> Vec<(&'static str, String)> {
+pub fn rubric_lines(mode: GroomMode, status_new: &str, status_planning: &str, status_ready: &str, team_label: &str) -> Vec<(&'static str, String)> {
     match mode {
         GroomMode::PreCheck => vec![
             ("", "Can a stranger tell WHAT is being done and WHEN it is done?".into()),
@@ -39,6 +39,7 @@ pub fn rubric_lines(mode: GroomMode, status_new: &str, status_planning: &str, st
             ("b", format!("Bounce with a one-line comment on what's missing; {status_planning} goes back to {status_new}.")),
             ("p", "Backlog: real work, lower priority.".into()),
             ("J/K", format!("Move a {status_ready} ticket down or up in rank.")),
+            ("l/a", format!("Unclaimed: not on the team's map yet. Label it {team_label} or assign it to bring it in.")),
             ("", "Three to five minutes per ticket. Past that, bounce.".into()),
         ],
     }
@@ -91,7 +92,7 @@ mod tests {
         assert_eq!(rubric_title(GroomMode::PreCheck), "Readiness bar");
         assert_eq!(rubric_title(GroomMode::Session), "Decide");
         assert_eq!(
-            rubric_lines(GroomMode::PreCheck, "New", "Planning", "Ready for Work"),
+            rubric_lines(GroomMode::PreCheck, "New", "Planning", "Ready for Work", "PLAT"),
             [
                 ("", "Can a stranger tell WHAT is being done and WHEN it is done?".to_string()),
                 ("r", "Yes: ready.".to_string()),
@@ -102,12 +103,13 @@ mod tests {
             ]
         );
         assert_eq!(
-            rubric_lines(GroomMode::Session, "New", "Planning", "Ready for Work"),
+            rubric_lines(GroomMode::Session, "New", "Planning", "Ready for Work", "PLAT"),
             [
                 ("y", "Ready for Work: accept and place it in rank.".to_string()),
                 ("b", "Bounce with a one-line comment on what's missing; Planning goes back to New.".to_string()),
                 ("p", "Backlog: real work, lower priority.".to_string()),
                 ("J/K", "Move a Ready for Work ticket down or up in rank.".to_string()),
+                ("l/a", "Unclaimed: not on the team's map yet. Label it PLAT or assign it to bring it in.".to_string()),
                 ("", "Three to five minutes per ticket. Past that, bounce.".to_string()),
             ]
         );

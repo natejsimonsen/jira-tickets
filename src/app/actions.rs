@@ -362,16 +362,23 @@ impl App {
                 }
             }
             Action::ApplyTeamLabel => {
-                let crate::filter::TeamScope::Label(label) = &self.filter.team else {
-                    self.toast_kind("Pick a team to label", ToastKind::Info);
-                    return;
+                // The Session labels with the scope's team; the Issues screen with its team picker's choice.
+                let session = self.screen == Screen::Grooming && self.grooming.mode == super::GroomMode::Session;
+                let label = if session {
+                    self.cfg.scope.team_label.clone()
+                } else {
+                    let crate::filter::TeamScope::Label(label) = &self.filter.team else {
+                        self.toast_kind("Pick a team to label", ToastKind::Info);
+                        return;
+                    };
+                    label.clone()
                 };
-                let Some(i) = self.selected.as_ref().and_then(|k| self.store.get(k)) else { return };
-                if i.labels.iter().any(|l| l == label) {
+                let Some(i) = self.action_target().and_then(|k| self.store.get(&k)) else { return };
+                if i.labels.contains(&label) {
                     self.toast_kind("Already labelled", ToastKind::Info);
                     return;
                 }
-                let (key, label) = (i.key.clone(), label.clone());
+                let key = i.key.clone();
                 self.spawn_write(move |c, tx| {
                     let _ = tx.send(Msg::Done { key: key.clone(), what: "Label", result: c.add_label(&key, &label) });
                 });

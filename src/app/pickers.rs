@@ -59,7 +59,7 @@ impl App {
     }
 
     pub(super) fn open_assign(&mut self) {
-        let Some(key) = self.selected.clone() else { return };
+        let Some(key) = self.action_target() else { return };
         if self.client.is_none() || self.picker_loading {
             return;
         }

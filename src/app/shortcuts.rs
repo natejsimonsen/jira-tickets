@@ -236,7 +236,13 @@ impl App {
                         self.actions.push(Action::GroomEpic { delta, skip_empty: true });
                     }
                 }
-                for (k, a) in [(Key::Y, Action::StartAccept), (Key::B, Action::StartBounce), (Key::P, Action::Park)] {
+                for (k, a) in [
+                    (Key::Y, Action::StartAccept),
+                    (Key::B, Action::StartBounce),
+                    (Key::P, Action::Park),
+                    (Key::L, Action::ApplyTeamLabel),
+                    (Key::A, Action::OpenAssign),
+                ] {
                     if key(k) {
                         self.actions.push(a);
                     }

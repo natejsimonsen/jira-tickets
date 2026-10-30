@@ -67,6 +67,8 @@ pub const BINDINGS: &[KeyBinding] = &[
     b(Group::Grooming, "b", "Bounce with a comment (⌘Enter posts); a Planning ticket goes back to New"),
     b(Group::Grooming, "p", "Park in Backlog"),
     b(Group::Grooming, "J/K", "Move a Ready for Work ticket down or up in rank"),
+    b(Group::Grooming, "l", "Add the team label to the focused ticket"),
+    b(Group::Grooming, "a", "Assign the focused ticket"),
     // Shift lands on epics with nothing in Planning too; plain ]/[ steps over them.
     b(Group::Grooming, "]/[, ⇧]/⇧[", "Next or previous epic (with Shift, empty ones too)"),
     b(Group::Grooming, "Tab", "Switch between Pre-check and Session"),
@@ -328,6 +330,8 @@ pub fn hints(c: HintContext) -> &'static [Hint] {
             &[K("b"), W("bounce")],
             &[K("p"), W("park")],
             &[K("J/K"), W("rank")],
+            &[K("l"), W("label")],
+            &[K("a"), W("assign")],
             &[K("Tab"), W("pre-check")],
             &[K("?"), W("help")],
         ],
@@ -476,7 +480,10 @@ mod tests {
         assert_eq!(hint_text(hints(GroomPreCheck)), "j/k or ↑/↓ move · r ready · w/n/e code · u undo · Enter summary · Tab session");
         assert_eq!(hint_text(hints(GroomSummary)), "Enter promote · Esc cancel");
         assert_eq!(hint_text(hints(GroomOverwrite)), "Enter overwrite · Esc keep the old one");
-        assert_eq!(hint_text(hints(GroomSession)), "j/k or ↑/↓ move · ]/[ epic · y accept · b bounce · p park · J/K rank · Tab pre-check · ? help");
+        assert_eq!(
+            hint_text(hints(GroomSession)),
+            "j/k or ↑/↓ move · ]/[ epic · y accept · b bounce · p park · J/K rank · l label · a assign · Tab pre-check · ? help"
+        );
         assert_eq!(hint_context(groom(GroomHint::Placement)), GroomPlacement);
         assert_eq!(hint_text(hints(GroomPlacement)), "↑/↓ move · Enter place · Esc cancel");
         assert_eq!(hint_context(HintState { focus: Focus::OtherText, ..groom(GroomHint::Bounce) }), GroomBounce, "the box has focus");

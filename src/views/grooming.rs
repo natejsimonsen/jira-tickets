@@ -218,6 +218,8 @@ fn candidate_list(app: &mut App, ui: &mut Ui, p: &Palette, cursor: usize) {
 const PROPOSED_SALT: &str = "groom-proposed";
 /// The New list's row salt.
 const NEW_SALT: &str = "groom-new";
+/// The Unclaimed list's row salt.
+const UNCLAIMED_SALT: &str = "groom-unclaimed";
 
 /// A list row's widget id: unique per list (salt) and row.
 fn row_id(salt: &str, idx: usize) -> egui::Id {
@@ -269,7 +271,7 @@ fn focused_ticket(app: &mut App, ui: &mut Ui, p: &Palette, issue: jira::Issue) {
         app.actions.push(Action::GroomFocusDetail(issue.key.clone()));
     }
     let g = &app.cfg.grooming;
-    rubric_card(ui, p, app.grooming.mode, &g.status_new, &g.status_planning, &g.status_ready);
+    rubric_card(ui, p, app.grooming.mode, &g.status_new, &g.status_planning, &g.status_ready, &app.cfg.scope.team_label);
     ui.add_space(PANE_GAP - ui.spacing().item_spacing.y);
     card(ui, p, |ui| {
         egui::ScrollArea::vertical().id_salt("groom-detail").auto_shrink([false, false]).show(ui, |ui| {
@@ -365,12 +367,12 @@ fn card_frame(ui: &mut Ui, p: &Palette, fill: bool, content: impl FnOnce(&mut Ui
 }
 
 /// The mode's rubric over the focused ticket: the title, then each line with its key drawn as the hint bar draws keys.
-fn rubric_card(ui: &mut Ui, p: &Palette, mode: GroomMode, status_new: &str, status_planning: &str, status_ready: &str) {
+fn rubric_card(ui: &mut Ui, p: &Palette, mode: GroomMode, status_new: &str, status_planning: &str, status_ready: &str, team_label: &str) {
     card_frame(ui, p, false, |ui| {
         ui.label(RichText::new(guide::rubric_title(mode)).font(theme::bold(13.5)).color(p.text));
         ui.add_space(8.0);
         ui.spacing_mut().item_spacing.y = 4.0;
-        for (key, text) in guide::rubric_lines(mode, status_new, status_planning, status_ready) {
+        for (key, text) in guide::rubric_lines(mode, status_new, status_planning, status_ready, team_label) {
             let text = RichText::new(text).color(p.muted).size(12.0);
             if key.is_empty() {
                 ui.add(egui::Label::new(text).wrap());
@@ -509,13 +511,14 @@ const BOUNCE_H: f32 = 64.0;
 /// The bounce box's placeholder.
 pub const BOUNCE_HINT: &str = "What is missing? One or two lines (⌘Enter to post)";
 
-/// The rail row's counts: tickets in the active sprint, the next sprint, Ready for Work, Proposed and New.
+/// The rail row's counts: tickets in the active sprint, the next sprint, Ready for Work, Proposed, New and Unclaimed.
 pub struct RailCounts {
     pub sprint: usize,
     pub next: usize,
     pub ready: usize,
     pub planning: usize,
     pub new: usize,
+    pub unclaimed: usize,
 }
 
 /// One epic on the session rail, taken from `grooming::epic_queues`.
@@ -524,7 +527,7 @@ struct RailRow {
     summary: String,
     stage: grooming::Stage,
     counts: RailCounts,
-    has_candidates: bool,
+    has_work: bool,
 }
 
 /// What the centre column draws for the selected epic, cloned out of the store so the app can be borrowed mutably.
@@ -536,6 +539,7 @@ struct QueueView {
     ready: Vec<jira::Issue>,
     planning: Vec<jira::Issue>,
     new: Vec<jira::Issue>,
+    unclaimed: Vec<jira::Issue>,
 }
 
 /// The epic-by-epic walk: the stage rail, the selected epic's five blocks (sprint, next sprint, Ready for Work,
@@ -552,8 +556,15 @@ fn session_body(app: &mut App, ui: &mut Ui, p: &Palette) {
             epic: q.epic.clone(),
             summary: q.summary.clone(),
             stage: q.stage.stage,
-            counts: RailCounts { sprint: q.sprint.len(), next: q.next.len(), ready: q.ready.len(), planning: q.planning.len(), new: q.new.len() },
-            has_candidates: !q.planning.is_empty() || !q.new.is_empty(),
+            counts: RailCounts {
+                sprint: q.sprint.len(),
+                next: q.next.len(),
+                ready: q.ready.len(),
+                planning: q.planning.len(),
+                new: q.new.len(),
+                unclaimed: q.unclaimed.len(),
+            },
+            has_work: q.has_work(),
         })
         .collect();
     let at = app.grooming.epic_index.min(rail.len().saturating_sub(1));
@@ -566,6 +577,7 @@ fn session_body(app: &mut App, ui: &mut Ui, p: &Palette) {
         ready: clone_all(&q.ready),
         planning: clone_all(&q.planning),
         new: clone_all(&q.new),
+        unclaimed: clone_all(&q.unclaimed),
     });
     drop(queues);
     if rail.is_empty() {
@@ -574,11 +586,11 @@ fn session_body(app: &mut App, ui: &mut Ui, p: &Palette) {
         return;
     }
     let view = view.expect("a non-empty rail has a selected epic");
-    let rows = view.ready.len() + view.planning.len() + view.new.len();
+    let rows = view.ready.len() + view.planning.len() + view.new.len() + view.unclaimed.len();
     let cursor = app.grooming.cursor.min(rows.saturating_sub(1));
-    let focused: Option<jira::Issue> = view.ready.iter().chain(&view.planning).chain(&view.new).nth(cursor).cloned();
+    let focused: Option<jira::Issue> = view.ready.iter().chain(&view.planning).chain(&view.new).chain(&view.unclaimed).nth(cursor).cloned();
     // An epic with Ready rows only has nothing to groom, whatever the cursor is on.
-    let nothing_to_groom = view.planning.is_empty() && view.new.is_empty();
+    let nothing_to_groom = view.planning.is_empty() && view.new.is_empty() && view.unclaimed.is_empty();
     let list_w = (ui.available_width() * 0.36).clamp(LIST_MIN, LIST_MAX).min(ui.available_width());
     ui.horizontal_top(|ui| {
         ui.spacing_mut().item_spacing.x = PANE_GAP;
@@ -605,7 +617,7 @@ fn session_body(app: &mut App, ui: &mut Ui, p: &Palette) {
 }
 
 /// "CI-1860 Progressive Delivery · Sp 2 · Nx 1 · R 7 · P 3 · N 12": the epic, then its counts. The sprint counts
-/// (`Sp`, `Nx`) are left out when zero; R, P and N always show. A key-only epic shows the key once.
+/// (`Sp`, `Nx`) and `U` (unclaimed) are left out when zero; R, P and N always show. A key-only epic shows the key once.
 pub fn rail_line(epic: Option<&str>, summary: &str, c: &RailCounts) -> String {
     let name = match epic {
         Some(k) if k != summary => format!("{k} {summary}"),
@@ -624,6 +636,9 @@ fn rail_counts(c: &RailCounts) -> String {
         s.push_str(&format!(" · Nx {}", c.next));
     }
     s.push_str(&format!(" · R {} · P {} · N {}", c.ready, c.planning, c.new));
+    if c.unclaimed > 0 {
+        s.push_str(&format!(" · U {}", c.unclaimed));
+    }
     s
 }
 
@@ -639,6 +654,9 @@ fn rail_tip(c: &RailCounts, active: Option<&str>, next: Option<&str>, status_rea
     parts.push(format!("{} {status_ready}", c.ready));
     parts.push(format!("{} Proposed", c.planning));
     parts.push(format!("{} {status_new}", c.new));
+    if c.unclaimed > 0 {
+        parts.push(format!("{} unclaimed", c.unclaimed));
+    }
     parts.join(" · ")
 }
 
@@ -660,7 +678,7 @@ fn epic_rail(app: &mut App, ui: &mut Ui, p: &Palette, rail: &[RailRow], at: usiz
             }
             let sel = idx == at;
             let color = match &r.epic {
-                _ if !r.has_candidates => p.muted,
+                _ if !r.has_work => p.muted,
                 Some(k) => theme::epic_tint_in(k, &app.epic_slots, p, &app.cfg.issues.epic_colors).fg,
                 None => p.text,
             };
@@ -731,6 +749,7 @@ fn candidate_row(
     idx: usize,
     n: usize,
     sel: bool,
+    unclaimed: bool,
     report: Option<&(String, report::Report)>,
     today: chrono::NaiveDate,
     elapsed: u64,
@@ -743,9 +762,12 @@ fn candidate_row(
             if let Some((d, b)) = report.and_then(|(d, r)| r.badge_for(&i.key).map(|b| (d, b))) {
                 badge(ui, p, &b, d);
             }
+            if unclaimed {
+                neutral_pill(ui, p, &i.status.name, sel);
+            }
             neutral_pill(ui, p, &grooming::age_tag(&i.created, today), sel);
             neutral_pill(ui, p, i.assignee.as_ref().map_or("Unassigned", |u| u.display_name.as_str()), sel);
-            if sel {
+            if sel && !unclaimed {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let c = timer_color(grooming::timer_level(elapsed), p);
                     crate::views::tooltip(
@@ -798,20 +820,25 @@ fn epic_queue(app: &mut App, ui: &mut Ui, p: &Palette, view: &QueueView, cursor:
                 row += 1;
             }
         }
-        for (label, salt, list, offset) in
-            [("Proposed", PROPOSED_SALT, &view.planning, ready.len()), (status.1.as_str(), NEW_SALT, &view.new, ready.len() + view.planning.len())]
-        {
+        for (label, salt, list, offset, unclaimed) in [
+            ("Proposed", PROPOSED_SALT, &view.planning, ready.len(), false),
+            (status.1.as_str(), NEW_SALT, &view.new, ready.len() + view.planning.len(), false),
+            ("Unclaimed", UNCLAIMED_SALT, &view.unclaimed, ready.len() + view.planning.len() + view.new.len(), true),
+        ] {
+            if unclaimed && list.is_empty() {
+                continue;
+            }
             ui.spacing_mut().item_spacing.y = ui.style().spacing.item_spacing.y;
             ui.add_space(GROUP_GAP);
             queue_label(ui, p, label, list.len());
             ui.spacing_mut().item_spacing.y = ROW_GAP;
             for (idx, i) in list.iter().enumerate() {
                 let sel = offset + idx == cursor;
-                let resp = candidate_row(ui, p, salt, i, idx, list.len(), sel, report.as_ref(), today, elapsed);
+                let resp = candidate_row(ui, p, salt, i, idx, list.len(), sel, unclaimed, report.as_ref(), today, elapsed);
                 if resp.clicked() && app.grooming.placement.is_none() && app.grooming.bounce_text.is_none() {
                     clicked = Some(offset + idx);
                 }
-                if sel && app.grooming.bounce_text.is_some() {
+                if sel && !unclaimed && app.grooming.bounce_text.is_some() {
                     ui.spacing_mut().item_spacing.y = ui.style().spacing.item_spacing.y;
                     ui.add_space(8.0);
                     bounce_box(app, ui, p);
@@ -1159,6 +1186,16 @@ mod tests {
         app.grooming.cursor = 0;
         let t = texts(&mut app);
         assert!(!t.iter().any(|x| x == "0:00"), "no timer on a Ready row: {t:?}");
+        assert!(!t.iter().any(|x| x.starts_with("Unclaimed ·")), "no Unclaimed block without roadmap children: {t:?}");
+        let mut child = issue("CI-77", "New", Some("CI-1860"), None);
+        child.labels.clear();
+        app.store.absorb(crate::store::ListId::EpicChildren, vec![child]);
+        app.grooming.cursor = 4;
+        let t = texts(&mut app);
+        for want in ["Unclaimed · 1", "CI-1860 Deployer… · Sp 1 · Nx 1 · R 1 · P 1 · N 1 · U 1", "CI-77", "Summary CI-77"] {
+            assert!(t.iter().any(|x| x == want), "{want} in {t:?}");
+        }
+        assert!(!t.iter().any(|x| x == "0:00"), "no timer on an Unclaimed row: {t:?}");
     }
 
     #[test]
@@ -1170,7 +1207,7 @@ mod tests {
 
     #[test]
     fn session_wording() {
-        let counts = |s, n, r, p, new| RailCounts { sprint: s, next: n, ready: r, planning: p, new };
+        let counts = |s, n, r, p, new| RailCounts { sprint: s, next: n, ready: r, planning: p, new, unclaimed: 0 };
         assert_eq!(rail_line(Some("CI-1860"), "Progressive Delivery", &counts(2, 1, 7, 3, 12)), "CI-1860 Progressive Delivery · Sp 2 · Nx 1 · R 7 · P 3 · N 12");
         assert_eq!(
             rail_line(Some("CI-1860"), "CI-1860", &counts(0, 0, 1, 0, 2)),
@@ -1178,6 +1215,9 @@ mod tests {
             "a key-only epic shows the key once; zero sprint counts are left out"
         );
         assert_eq!(rail_line(None, "(no epic)", &counts(0, 3, 0, 1, 0)), "(no epic) · Nx 3 · R 0 · P 1 · N 0");
+        let with_u = RailCounts { unclaimed: 4, ..counts(0, 0, 0, 0, 2) };
+        assert_eq!(rail_line(Some("CI-3104"), "Delivery Metrics", &with_u), "CI-3104 Delivery Metrics · R 0 · P 0 · N 2 · U 4");
+        assert!(rail_tip(&with_u, None, None, "Ready for Work", "New").ends_with("4 unclaimed"));
         assert_eq!(bounce_note("Which clusters?", "New", false), ("⌘Enter posts the comment, then moves the ticket to New".to_string(), false));
         assert_eq!(bounce_note("Which clusters?", "New", true), ("⌘Enter posts the comment; the ticket stays in New".to_string(), false));
         assert_eq!(bounce_note(" ", "New", false).0, "A one- or two-line comment is required");

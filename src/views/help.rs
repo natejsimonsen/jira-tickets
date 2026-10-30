@@ -61,8 +61,8 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
     });
 }
 
-/// The help's two columns, top to bottom: the closest balance of the groups (22 and 22 rows with headers).
-pub const COLUMNS: [&[Group]; 2] = [&[Group::Issues, Group::Roadmap, Group::Pickers], &[Group::Grooming, Group::Team, Group::Global]];
+/// The help's two columns, top to bottom: the closest balance of the groups (24 and 23 rows with headers).
+pub const COLUMNS: [&[Group]; 2] = [&[Group::Issues, Group::Roadmap, Group::Global], &[Group::Grooming, Group::Team, Group::Pickers]];
 
 /// A column's groups, each a section gap under the last.
 fn groups(ui: &mut egui::Ui, p: &Palette, gs: &[Group], key_w: f32, row: f32, header: f32) {

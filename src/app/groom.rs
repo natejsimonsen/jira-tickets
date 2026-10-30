@@ -48,6 +48,7 @@ impl App {
         let (active, next) = grooming::sprint_names(&self.sprints);
         StageContext {
             epics: self.store.list(ListId::Epics),
+            roadmap_children: crate::filter::action_items(&self.store.list(ListId::EpicChildren)),
             initiative_label: &self.cfg.roadmap.initiative_label,
             roadmap: &self.cfg.roadmap,
             active_sprint: active,
@@ -134,7 +135,7 @@ impl App {
     }
 
     pub(super) fn groom_epic(&mut self, delta: i32, skip_empty: bool) {
-        let counts: Vec<usize> = self.session_queues().iter().map(|q| q.candidates().len()).collect();
+        let counts: Vec<usize> = self.session_queues().iter().map(|q| usize::from(q.has_work())).collect();
         let to = step_epic(&counts, self.grooming.epic_index, delta, skip_empty);
         if to != self.grooming.epic_index {
             let start = self.session_queues().get(to).map_or(0, |q| q.start_cursor());
@@ -417,6 +418,18 @@ impl App {
         q.candidates().get(at).copied()
     }
 
+    /// Session: the key of the row under the cursor, whatever its block (Ready, Proposed, New or Unclaimed).
+    pub fn session_row_focus(&self) -> Option<String> {
+        let queues = self.session_queues();
+        queues.get(self.grooming.epic_index)?.rows().get(self.grooming.cursor).map(|i| i.key.clone())
+    }
+
+    /// What a ticket action (label, assign) acts on: the Session row under the cursor on the Grooming screen,
+    /// the Issues selection everywhere else.
+    pub fn action_target(&self) -> Option<String> {
+        if self.screen == super::Screen::Grooming && self.grooming.mode == GroomMode::Session { self.session_row_focus() } else { self.selected.clone() }
+    }
+
     /// Session: the Ready row under the cursor, as (index in the Ready queue, key).
     pub fn session_ready_focus(&self) -> Option<(usize, String)> {
         let queues = self.session_queues();
@@ -641,10 +654,10 @@ impl App {
         }
     }
 
-    /// The selected epic's key and the focused candidate's, taken before the lists change.
+    /// The selected epic's key and the focused row's, taken before the lists change.
     pub(super) fn session_anchor(&self) -> (Option<Option<String>>, Option<String>) {
         let epic = self.session_queues().get(self.grooming.epic_index).map(|q| q.epic.clone());
-        (epic, self.session_focus().map(|i| i.key.clone()))
+        (epic, self.session_row_focus())
     }
 
     /// After the lists changed: the rail stays on the same epic (its place may move, as the rail sorts by Planning
@@ -661,7 +674,7 @@ impl App {
         drop(queues);
         self.grooming.epic_index = at;
         self.grooming.cursor = follow.unwrap_or_else(|| self.grooming.cursor.min(n.saturating_sub(1)));
-        if self.session_focus().map(|i| i.key.clone()) != focus {
+        if self.session_row_focus() != focus {
             // A placement or bounce box was for the ticket that left.
             self.grooming.placement = None;
             self.grooming.bounce_text = None;
@@ -1633,5 +1646,83 @@ mod tests {
         assert_eq!(app.grooming.epic_index, 1);
         assert_eq!(app.grooming.cursor, 1);
         assert_eq!(app.session_ready_focus(), Some((1, "CI-21".to_string())));
+    }
+
+    /// `session_app` with CI-79 a roadmap epic holding one unlabelled New child, CI-9, outside the team.
+    fn unclaimed_app(base: &str) -> App {
+        let mut app = session_app(base);
+        let mut epic = session_issue("CI-79", "New");
+        epic.issue_type = "Epic".into();
+        epic.labels = vec!["roadmap".into()];
+        epic.parent_key = None;
+        app.store.absorb(ListId::Epics, vec![epic]);
+        let mut child = session_issue("CI-9", "New");
+        child.labels = vec![];
+        app.store.absorb(ListId::EpicChildren, vec![child]);
+        app.grooming.cursor = 4; // ready x2, planning x2, then CI-9
+        app
+    }
+
+    #[test]
+    fn l_on_an_unclaimed_row_labels_it_with_the_scope_team() {
+        let _g = crate::jira::tests::WRITE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (base, rx) = crate::jira::tests::stub_server(vec![("PUT", "/rest/api/3/issue/CI-9", serde_json::json!({}))]);
+        let mut app = unclaimed_app(&base);
+        assert_eq!(app.session_row_focus().as_deref(), Some("CI-9"));
+        assert!(app.session_focus().is_none(), "an unclaimed row is not a candidate");
+        app.actions.push(super::super::Action::ApplyTeamLabel);
+        app.drain();
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        let w: Vec<_> = writes(&rx);
+        assert_eq!(w.len(), 1);
+        assert_eq!((w[0].0.as_str(), w[0].1.as_str()), ("PUT", "/rest/api/3/issue/CI-9"));
+        assert_eq!(w[0].2["update"]["labels"][0]["add"], "PLAT");
+    }
+
+    #[test]
+    fn a_on_a_session_row_opens_the_assign_picker() {
+        let (base, _rx) = crate::jira::tests::stub_server(vec![("GET", "/rest/api/3/user/assignable/search", serde_json::json!([]))]);
+        let mut app = unclaimed_app(&base);
+        app.actions.push(super::super::Action::OpenAssign);
+        app.drain();
+        drain_until(&mut app, |a| a.picker.is_some());
+        assert!(matches!(&app.picker, Some(super::super::pickers::Picker::Assign { key, .. }) if key == "CI-9"));
+    }
+
+    #[test]
+    fn action_target_is_the_issues_selection_elsewhere() {
+        let (base, _rx) = crate::jira::tests::stub_server(vec![]);
+        let mut app = unclaimed_app(&base);
+        app.selected = Some("CI-2".into());
+        assert_eq!(app.action_target().as_deref(), Some("CI-9"));
+        app.grooming.mode = GroomMode::PreCheck;
+        assert_eq!(app.action_target().as_deref(), Some("CI-2"));
+        app.grooming.mode = GroomMode::Session;
+        app.screen = super::super::Screen::Issues;
+        assert_eq!(app.action_target().as_deref(), Some("CI-2"));
+    }
+
+    #[test]
+    fn the_focus_follows_a_labelled_ticket_out_of_unclaimed() {
+        let (base, _rx) = crate::jira::tests::stub_server(vec![]);
+        let mut app = unclaimed_app(&base);
+        let (epic, focus) = app.session_anchor();
+        assert_eq!(focus.as_deref(), Some("CI-9"));
+        // The refresh lands with CI-9 labelled and New: it joins the team's New block, before nothing else.
+        let mut labelled = session_issue("CI-9", "New");
+        labelled.labels = vec!["PLAT".into()];
+        app.store.absorb(
+            ListId::TeamOpen,
+            vec![
+                session_issue("CI-5", "Ready for Work"),
+                session_issue("CI-1", "Planning"),
+                session_issue("CI-6", "Ready for Work"),
+                session_issue("CI-2", "Planning"),
+                labelled.clone(),
+            ],
+        );
+        app.session_keep(epic, focus);
+        assert_eq!(app.session_row_focus().as_deref(), Some("CI-9"));
+        assert_eq!(app.session_focus().map(|i| i.key.as_str()), Some("CI-9"), "now a candidate");
     }
 }

@@ -247,6 +247,8 @@ impl Stage {
 /// What staging the epics needs: the store's epics in rank order, the roadmap rules, and the two sprint names.
 pub struct StageContext<'a> {
     pub epics: Vec<&'a Issue>,
+    /// Every child of every roadmap epic (the store's `EpicChildren` action items), Done included.
+    pub roadmap_children: Vec<&'a Issue>,
     pub initiative_label: &'a str,
     pub roadmap: &'a config::Roadmap,
     pub active_sprint: Option<&'a str>,
@@ -347,6 +349,8 @@ pub struct EpicQueue<'a> {
     pub ready: Vec<&'a Issue>,
     pub planning: Vec<&'a Issue>,
     pub new: Vec<&'a Issue>,
+    /// A roadmap epic's open children outside the team's scope (not in the team's lists), in rank order.
+    pub unclaimed: Vec<&'a Issue>,
 }
 
 impl<'a> EpicQueue<'a> {
@@ -355,9 +359,14 @@ impl<'a> EpicQueue<'a> {
         self.planning.iter().chain(&self.new).copied().collect()
     }
 
-    /// Every row the cursor walks: Ready, then the candidates.
+    /// Every row the cursor walks: Ready, the candidates, then the Unclaimed rows.
     pub fn rows(&self) -> Vec<&'a Issue> {
-        self.ready.iter().chain(&self.planning).chain(&self.new).copied().collect()
+        self.ready.iter().chain(&self.planning).chain(&self.new).chain(&self.unclaimed).copied().collect()
+    }
+
+    /// Whether the epic has anything to decide on or to claim: a candidate or an Unclaimed row.
+    pub fn has_work(&self) -> bool {
+        !self.candidates().is_empty() || !self.unclaimed.is_empty()
     }
 
     /// Where a freshly entered epic starts: its first candidate, or its last row when it has only Ready rows.
@@ -374,7 +383,7 @@ impl<'a> EpicQueue<'a> {
 /// Groups the team's tickets by epic in stage order (`StageKey`). A ticket in the active or next sprint goes in
 /// that block whatever its status; the rest go by status. An epic is named by its summary, else its key; epics
 /// with nothing in Ready, Proposed or New are left out.
-pub fn epic_queues<'a>(issues: &[&'a Issue], team_label: &str, g: &config::Grooming, ctx: &StageContext) -> Vec<EpicQueue<'a>> {
+pub fn epic_queues<'a>(issues: &[&'a Issue], team_label: &str, g: &config::Grooming, ctx: &StageContext<'a>) -> Vec<EpicQueue<'a>> {
     let mut by_epic: BTreeMap<Option<String>, EpicQueue<'a>> = BTreeMap::new();
     for i in issues.iter().filter(|i| i.labels.iter().any(|l| l == team_label)) {
         let q = by_epic.entry(i.parent_key.clone()).or_insert_with(|| EpicQueue {
@@ -389,6 +398,7 @@ pub fn epic_queues<'a>(issues: &[&'a Issue], team_label: &str, g: &config::Groom
             ready: vec![],
             planning: vec![],
             new: vec![],
+            unclaimed: vec![],
         });
         if i.sprint.is_some() && i.sprint.as_deref() == ctx.active_sprint {
             q.sprint.push(i);
@@ -403,7 +413,29 @@ pub fn epic_queues<'a>(issues: &[&'a Issue], team_label: &str, g: &config::Groom
             }
         }
     }
-    let mut out: Vec<_> = by_epic.into_values().filter(|q| !q.ready.is_empty() || !q.planning.is_empty() || !q.new.is_empty()).collect();
+    // Every roadmap epic is listed, with or without team tickets, and gets its open children outside the team.
+    let any_labelled = ctx.epics.iter().any(|e| e.labels.iter().any(|l| l == ctx.initiative_label));
+    for e in ctx.epics.iter().filter(|e| roadmap::is_initiative(e, ctx.initiative_label, any_labelled)) {
+        let q = by_epic.entry(Some(e.key.clone())).or_insert_with(|| EpicQueue {
+            epic: Some(e.key.clone()),
+            summary: e.summary.clone(),
+            stage: stage_of(Some(&e.key), Some(&e.summary), ctx),
+            sprint: vec![],
+            next: vec![],
+            ready: vec![],
+            planning: vec![],
+            new: vec![],
+            unclaimed: vec![],
+        });
+        q.unclaimed = ctx
+            .roadmap_children
+            .iter()
+            .filter(|c| c.parent_key.as_deref() == Some(e.key.as_str()) && c.status.category != "done" && !issues.iter().any(|t| t.key == c.key))
+            .copied()
+            .collect();
+    }
+    let mut out: Vec<_> =
+        by_epic.into_values().filter(|q| q.stage.stage == Stage::Roadmap || !q.ready.is_empty() || !q.planning.is_empty() || !q.new.is_empty()).collect();
     out.sort_by(|a, b| a.stage.cmp(&b.stage));
     out
 }
@@ -579,7 +611,14 @@ mod tests {
     }
 
     fn ctx<'a>(epics: &[&'a Issue], roadmap: &'a config::Roadmap) -> StageContext<'a> {
-        StageContext { epics: epics.to_vec(), initiative_label: "roadmap", roadmap, active_sprint: Some("Sprint 92"), next_sprint: Some("Sprint 93") }
+        StageContext {
+            epics: epics.to_vec(),
+            roadmap_children: vec![],
+            initiative_label: "roadmap",
+            roadmap,
+            active_sprint: Some("Sprint 92"),
+            next_sprint: Some("Sprint 93"),
+        }
     }
 
     #[test]
@@ -647,6 +686,69 @@ mod tests {
         assert_eq!(q[0].candidates().iter().map(|i| i.key.as_str()).collect::<Vec<_>>(), ["CI-3", "CI-2"]);
         assert_eq!(q[0].rows().iter().map(|i| i.key.as_str()).collect::<Vec<_>>(), ["CI-1", "CI-3", "CI-2"]);
         assert_eq!(q[0].first_candidate(), 1);
+    }
+
+    fn ctx_with<'a>(epics: &[&'a Issue], children: &[&'a Issue], roadmap: &'a config::Roadmap) -> StageContext<'a> {
+        StageContext { roadmap_children: children.to_vec(), ..ctx(epics, roadmap) }
+    }
+
+    #[test]
+    fn roadmap_epics_are_listed_even_without_team_tickets() {
+        let g = config::Grooming::default();
+        let rm = config::Roadmap::default();
+        let er = epic("E-R", "Delivery Metrics", "New", &["roadmap"]);
+        let ex = epic("E-X", "Cloud Role Access", "New", &[]);
+        let eo = epic("E-O", "Node Autoscaling (ongoing)", "New", &[]);
+        let c = ctx(&[&ex, &er, &eo], &rm);
+        let t = issue("CI-1", "New", Some("E-O"), "", &["PLAT"]);
+        let q = epic_queues(&[&t], "PLAT", &g, &c);
+        assert_eq!(q.iter().map(|e| (e.epic.as_deref(), e.stage.stage)).collect::<Vec<_>>(), [(Some("E-R"), Stage::Roadmap), (Some("E-O"), Stage::Ongoing)]);
+        assert_eq!(q[0].summary, "Delivery Metrics");
+        assert!(!q[0].has_work());
+    }
+
+    #[test]
+    fn unclaimed_are_open_children_outside_the_team() {
+        let g = config::Grooming::default();
+        let rm = config::Roadmap::default();
+        let er = epic("E-R", "Delivery Metrics", "New", &["roadmap"]);
+        let c1 = issue("CI-1", "New", Some("E-R"), "", &[]);
+        let mut c2 = issue("CI-2", "Closed", Some("E-R"), "", &[]);
+        c2.status.category = "done".into();
+        let c3 = issue("CI-3", "New", Some("E-R"), "", &["PLAT"]);
+        let c = ctx_with(&[&er], &[&c1, &c2, &c3], &rm);
+        let q = epic_queues(&[&c3], "PLAT", &g, &c);
+        assert_eq!(q.len(), 1);
+        assert_eq!(q[0].unclaimed.iter().map(|i| i.key.as_str()).collect::<Vec<_>>(), ["CI-1"]);
+        assert_eq!(q[0].new.iter().map(|i| i.key.as_str()).collect::<Vec<_>>(), ["CI-3"]);
+        assert_eq!(q[0].rows().iter().map(|i| i.key.as_str()).collect::<Vec<_>>(), ["CI-3", "CI-1"]);
+        assert!(q[0].has_work());
+    }
+
+    #[test]
+    fn an_epic_with_only_unclaimed_rows_starts_on_the_first_of_them() {
+        let g = config::Grooming::default();
+        let rm = config::Roadmap::default();
+        let er = epic("E-R", "Delivery Metrics", "New", &["roadmap"]);
+        let c1 = issue("CI-1", "New", Some("E-R"), "", &[]);
+        let c = ctx_with(&[&er], &[&c1], &rm);
+        let q = epic_queues(&[], "PLAT", &g, &c);
+        assert_eq!(q[0].start_cursor(), 0);
+        assert!(q[0].candidates().is_empty() && q[0].has_work());
+    }
+
+    #[test]
+    fn non_roadmap_epics_get_no_unclaimed() {
+        let g = config::Grooming::default();
+        let rm = config::Roadmap::default();
+        let er = epic("E-R", "Delivery Metrics", "New", &["roadmap"]);
+        let ex = epic("E-X", "Cloud Role Access", "New", &[]);
+        let child = issue("CI-1", "New", Some("E-X"), "", &[]);
+        let t = issue("CI-2", "New", Some("E-X"), "", &["PLAT"]);
+        let c = ctx_with(&[&er, &ex], &[&child], &rm);
+        let q = epic_queues(&[&t], "PLAT", &g, &c);
+        let x = q.iter().find(|e| e.epic.as_deref() == Some("E-X")).unwrap();
+        assert!(x.unclaimed.is_empty());
     }
 
     #[test]
