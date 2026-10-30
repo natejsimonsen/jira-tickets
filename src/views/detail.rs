@@ -682,10 +682,10 @@ mod tests {
 
     #[test]
     fn comment_author_and_date_stand_apart() {
-        // Regression (round 7): "Alan Turing2026-07-29 13:28" — the pane's zero item spacing leaked in.
+        // Regression (round 7): "Ada Lovelace2026-07-29 13:28" — the pane's zero item spacing leaked in.
         let (a, d) = crate::testutil::with_ui(|ui| {
             ui.spacing_mut().item_spacing.x = 0.0;
-            comment_header(ui, &crate::theme::LIGHT, "Alan Turing", "2026-07-29 13:28")
+            comment_header(ui, &crate::theme::LIGHT, "Ada Lovelace", "2026-07-29 13:28")
         });
         assert!(d.left() - a.right() >= 8.0, "gap {}", d.left() - a.right());
     }

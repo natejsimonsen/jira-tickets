@@ -417,7 +417,7 @@ mod tests {
     use super::*;
 
     fn real() -> Report {
-        parse(&std::fs::read_to_string("tests/fixtures/report-2026-09-04.md").unwrap())
+        parse(&std::fs::read_to_string("tests/fixtures/report-sample.md").unwrap())
     }
 
     #[test]

@@ -226,7 +226,7 @@ shape, not just hue; the detail view's parent line uses the hue's text
 colour, and each row has a 3 px left edge in the stripe colour. Hovering an
 epic pill shows "KEY · name". Labels stay neutral. Both maps can be overridden in config under
 `[issues.status_colors]` and `[issues.epic_colors]` (`"#rrggbb"`). Filters above the list: a team picker (All teams, each
-configured the parent team sub-team label such as PLAT or TOOLS, or "No team
+configured sub-team label such as PLAT or TOOLS, or "No team
 label"; defaults to the user's own team), an epic picker, a sprint scope (All, the
 board's active sprint, each future sprint, or Backlog; defaults to the
 active sprint, as jira-cli did), quick filters from config, a "Mine"
