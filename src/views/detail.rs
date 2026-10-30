@@ -602,7 +602,8 @@ mod tests {
         // the title's last line's ink → the pills 24, with or without descenders. Real fonts, 2x.
         let p = crate::theme::LIGHT;
         let marker = egui::Color32::from_rgb(1, 2, 3);
-        for (link, title) in [(None, "Dashboards"), (Some("CI-404 Build System (ongoing)"), "Verify the MM/DD x-axis label on the autoscaler daily spend bar chart")]
+        for (link, title) in
+            [(None, "Dashboards"), (Some("CI-404 Build System (ongoing)"), "Verify the MM/DD x-axis label on the autoscaler daily spend bar chart")]
         {
             let shapes = crate::testutil::paint_at2(egui::vec2(800.0, 400.0), |ui| {
                 let lowest = ui

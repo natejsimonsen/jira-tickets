@@ -1192,7 +1192,7 @@ mod tests {
         app.store.absorb(crate::store::ListId::EpicChildren, vec![child]);
         app.grooming.cursor = 4;
         let t = texts(&mut app);
-        for want in ["Unclaimed · 1", "CI-1860 Deployer… · Sp 1 · Nx 1 · R 1 · P 1 · N 1 · U 1", "CI-77", "Summary CI-77"] {
+        for want in ["Unclaimed · 1", "CI-1860 Blue… · Sp 1 · Nx 1 · R 1 · P 1 · N 1 · U 1", "CI-77", "Summary CI-77"] {
             assert!(t.iter().any(|x| x == want), "{want} in {t:?}");
         }
         assert!(!t.iter().any(|x| x == "0:00"), "no timer on an Unclaimed row: {t:?}");
@@ -1208,7 +1208,10 @@ mod tests {
     #[test]
     fn session_wording() {
         let counts = |s, n, r, p, new| RailCounts { sprint: s, next: n, ready: r, planning: p, new, unclaimed: 0 };
-        assert_eq!(rail_line(Some("CI-1860"), "Progressive Delivery", &counts(2, 1, 7, 3, 12)), "CI-1860 Progressive Delivery · Sp 2 · Nx 1 · R 7 · P 3 · N 12");
+        assert_eq!(
+            rail_line(Some("CI-1860"), "Progressive Delivery", &counts(2, 1, 7, 3, 12)),
+            "CI-1860 Progressive Delivery · Sp 2 · Nx 1 · R 7 · P 3 · N 12"
+        );
         assert_eq!(
             rail_line(Some("CI-1860"), "CI-1860", &counts(0, 0, 1, 0, 2)),
             "CI-1860 · R 1 · P 0 · N 2",

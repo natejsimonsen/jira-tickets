@@ -327,6 +327,7 @@ impl App {
             date: &run.date,
             jql: &jql,
             site: cfg.site.trim_end_matches('/'),
+            team_label: &cfg.scope.team_label,
             board_id: cfg.scope.board_id,
             filter_id: cfg.scope.filter_id,
             parent_board_id: cfg.scope.parent_board_id,

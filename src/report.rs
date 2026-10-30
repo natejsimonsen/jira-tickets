@@ -258,6 +258,8 @@ pub struct WriterInput<'a> {
     pub date: &'a str,
     pub jql: &'a str,
     pub site: &'a str,
+    /// The configured team label, shown in the report title and the board link.
+    pub team_label: &'a str,
     pub board_id: u64,
     pub filter_id: u64,
     pub parent_board_id: u64,
@@ -299,10 +301,11 @@ pub enum WriteError {
 
 pub fn render(i: &WriterInput) -> String {
     let mut s = String::new();
-    s.push_str(&format!("# PLAT pre-grooming — {}\n\n", i.date));
+    s.push_str(&format!("# {} pre-grooming — {}\n\n", i.team_label, i.date));
     s.push_str(&format!("JQL: `{}`\n", i.jql));
     s.push_str(&format!(
-        "Boards: [Parent {pb}]({site}/jira/software/c/projects/CI/boards/{pb}/backlog) · [PLAT {b}]({site}/jira/software/c/projects/CI/boards/{b}/backlog?customFilter={f})\n",
+        "Boards: [Parent {pb}]({site}/jira/software/c/projects/CI/boards/{pb}/backlog) · [{label} {b}]({site}/jira/software/c/projects/CI/boards/{b}/backlog?customFilter={f})\n",
+        label = i.team_label,
         pb = i.parent_board_id,
         b = i.board_id,
         f = i.filter_id,
@@ -504,6 +507,7 @@ mod tests {
             date: "2026-10-08",
             jql: "project = CI AND labels = PLAT AND status = New ORDER BY rank ASC",
             site: "https://example.atlassian.net",
+            team_label: "PLAT",
             board_id: 101,
             filter_id: 201,
             parent_board_id: 100,
