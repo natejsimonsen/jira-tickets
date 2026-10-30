@@ -8,7 +8,7 @@ rustPlatform.buildRustPackage {
   version = manifest.version;
   src = lib.fileset.toSource {
     root = ../.;
-    fileset = lib.fileset.unions [ ../Cargo.toml ../Cargo.lock ../src ../tests ];
+    fileset = lib.fileset.unions [ ../Cargo.toml ../Cargo.lock ../README.md ../src ../tests ];
   };
   cargoLock.lockFile = ../Cargo.lock;
   postFixup = lib.optionalString stdenv.hostPlatform.isLinux ''

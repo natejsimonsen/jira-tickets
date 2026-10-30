@@ -398,7 +398,7 @@ mod tests {
 
     #[test]
     fn readme_matches_bindings() {
-        let readme = include_str!("../README.md");
+        let readme = include_str!("../README.md").replace("\r\n", "\n");
         let start = readme.find("<!-- keys:start -->").expect("start marker") + "<!-- keys:start -->".len();
         let end = readme.find("<!-- keys:end -->").expect("end marker");
         assert_eq!(readme[start..end].trim(), readme_table().trim());

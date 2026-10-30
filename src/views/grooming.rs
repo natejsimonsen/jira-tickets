@@ -1158,7 +1158,6 @@ mod tests {
         }
         for want in [
             "Roadmap",
-            "CI-1860 Blue Green Ops · Sp 1 · Nx 1 · R 1 · P 1 · N 1",
             "No epic",
             "(no epic) · R 0 · P 0 · N 1",
             "Sprint 92 · 1",
@@ -1174,6 +1173,8 @@ mod tests {
         ] {
             assert!(t.iter().any(|x| x == want), "{want} in {t:?}");
         }
+        // The 300 pt rail truncates the epic name by platform font width, so match the ends only.
+        assert!(t.iter().any(|x| x.starts_with("CI-1860") && x.ends_with(" · Sp 1 · Nx 1 · R 1 · P 1 · N 1")), "rail line in {t:?}");
         assert!(!t.iter().any(|x| x == "Ongoing" || x == "Other epics"), "stage headers only for stages with epics: {t:?}");
         app.grooming.placement = Some(0);
         let t = texts(&mut app);
@@ -1192,9 +1193,10 @@ mod tests {
         app.store.absorb(crate::store::ListId::EpicChildren, vec![child]);
         app.grooming.cursor = 4;
         let t = texts(&mut app);
-        for want in ["Unclaimed · 1", "CI-1860 Blue… · Sp 1 · Nx 1 · R 1 · P 1 · N 1 · U 1", "CI-77", "Summary CI-77"] {
+        for want in ["Unclaimed · 1", "CI-77", "Summary CI-77"] {
             assert!(t.iter().any(|x| x == want), "{want} in {t:?}");
         }
+        assert!(t.iter().any(|x| x.starts_with("CI-1860") && x.ends_with(" · Sp 1 · Nx 1 · R 1 · P 1 · N 1 · U 1")), "rail line with U in {t:?}");
         assert!(!t.iter().any(|x| x == "0:00"), "no timer on an Unclaimed row: {t:?}");
     }
 

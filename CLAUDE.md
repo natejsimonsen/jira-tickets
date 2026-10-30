@@ -6,6 +6,7 @@ Plans 1 (foundation + Issues view), 2 (Grooming), 3 (Team, Roadmap) and 4 (Groom
 
 ## Build and test
 
+- Eight glyph-ink metric tests (adf_view, detail, issues, widget_tests) run on macOS only: their pixel distances were calibrated on macOS font rasterisation and differ by fractions of a pixel elsewhere.
 - There is no system cargo. Run everything through the nix dev shell:
   `nix develop --command cargo build|test|fmt|clippy ...` (first `nix develop` takes a few minutes).
 - Before every commit: `cargo fmt`, `cargo clippy --all-targets -- -D warnings`, the same with

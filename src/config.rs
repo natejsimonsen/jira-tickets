@@ -439,6 +439,7 @@ email = "me@example.com"
     }
 
     #[test]
+    #[cfg(unix)]
     fn op_not_on_path_retries_through_login_shell() {
         let dir = tempfile::tempdir().unwrap();
         // A stand-in shell that prints the command it was asked to run.
@@ -456,6 +457,7 @@ email = "me@example.com"
     }
 
     #[test]
+    #[cfg(unix)]
     fn op_account_reaches_login_shell_command() {
         let dir = tempfile::tempdir().unwrap();
         let sh = dir.path().join("fake-shell");

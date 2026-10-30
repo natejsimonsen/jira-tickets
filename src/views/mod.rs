@@ -1538,6 +1538,7 @@ mod widget_tests {
     }
 
     #[test]
+    #[cfg_attr(not(target_os = "macos"), ignore = "glyph-ink metrics are calibrated on macOS font rasterisation")]
     fn a_key_tip_sits_even_in_its_frame() {
         // Round 14 F2: "⌘Enter" rode 1 low (9 above, 8 below to the frame's outer edge); raised 0.5, the two
         // insets are within half a point. Prose tips keep their place.
@@ -1693,6 +1694,7 @@ mod widget_tests {
     }
 
     #[test]
+    #[cfg_attr(not(target_os = "macos"), ignore = "glyph-ink metrics are calibrated on macOS font rasterisation")]
     fn header_gaps_are_measured_to_the_ink() {
         // Round 13 A1–A3, real fonts at the captures' density: 32 from the title's ink to the first tab's, 24
         // between tabs, and 8 between the right-hand labels' ink.

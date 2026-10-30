@@ -13,7 +13,7 @@ A fast native desktop app for working through Jira tickets, built with Rust and 
 
     cargo install --git https://github.com/ssoriche/jira-tickets
 
-On Linux you need a C compiler and the X11 or Wayland libraries; on Windows you need the Visual Studio C++ build tools.
+On Linux you need a C compiler and the X11 or Wayland libraries.
 
 ### Download
 
@@ -35,7 +35,7 @@ To build a macOS app bundle and install it (default `/Applications`, or pass a f
 
 The bundle is ad-hoc signed and has no icon yet.
 
-Before every commit run `cargo fmt`, `cargo clippy --all-targets -- -D warnings`, the same with `--features snapshot`, and `cargo test`; all must be clean. CI runs fmt, clippy, tests and release builds on macOS, Linux and Windows plus `nix build`; releases are automatic from Conventional Commits (`fix:` is a patch, `feat:` a minor, `!` or a `BREAKING CHANGE` footer a major).
+Before every commit run `cargo fmt`, `cargo clippy --all-targets -- -D warnings`, the same with `--features snapshot`, and `cargo test`; all must be clean. CI runs fmt, clippy, tests and release builds on macOS and Linux plus `nix build`; releases are automatic from Conventional Commits (`fix:` is a patch, `feat:` a minor, `!` or a `BREAKING CHANGE` footer a major).
 
 ## Config
 

@@ -2332,6 +2332,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(not(target_os = "macos"), ignore = "glyph-ink metrics are calibrated on macOS font rasterisation")]
     fn every_hint_key_is_drawn_mono() {
         use crate::keys::{HintContext::*, Tok, hints};
         let all =

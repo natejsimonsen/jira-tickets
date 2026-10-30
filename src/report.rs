@@ -554,7 +554,7 @@ mod tests {
             held_back: 0,
         };
         let out = render(&input);
-        let golden = std::fs::read_to_string("tests/fixtures/report-golden.md").unwrap();
+        let golden = std::fs::read_to_string("tests/fixtures/report-golden.md").unwrap().replace("\r\n", "\n");
         assert_eq!(out, golden);
         // The writer's output must parse back with the same promoted and needs-detail keys.
         let back = parse(&out);

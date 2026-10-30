@@ -526,6 +526,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(not(target_os = "macos"), ignore = "glyph-ink metrics are calibrated on macOS font rasterisation")]
     fn the_composer_insets_its_text_like_a_card() {
         // Round 14 F1: 12 from the box's outer edge to the first line's ink, typed or placeholder; the box keeps
         // COMPOSER_H.
@@ -597,6 +598,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(not(target_os = "macos"), ignore = "glyph-ink metrics are calibrated on macOS font rasterisation")]
     fn the_title_sits_24_under_the_key_row_and_24_over_the_pills() {
         // Round 15 E2 / E7: the key row's lowest ink (the link's descenders, else the key) → the title's ink 24;
         // the title's last line's ink → the pills 24, with or without descenders. Real fonts, 2x.
