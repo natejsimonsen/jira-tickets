@@ -472,6 +472,15 @@ Tabs:
 - A `health:` label beats `health_field`; the field is read only when no label is set.
 - Horizon precedence: a `horizon:` label first, then `horizon_by_status`, then the Done status category. So `horizon_by_status` is consulted before the Done category, and a `horizon:` label overrides even a Done-category epic.
 
+### Deviations (plan 4)
+
+- Sprint blocks take precedence: a ticket in the active or next sprint appears only there, whatever its status, so a `New` ticket someone already pulled into a sprint is not a session candidate.
+- An epic's stage is known once the Epics list has landed; until then it is "Other epics" and the rail reorders when the list arrives. An epic absent from the list is staged by the ticket's parent summary (ongoing, else other) and sorts after the listed ones.
+- Rail counts leave out `Sp` and `Nx` when zero; `R`, `P`, `N` always show.
+- The pre-check summary dialog keeps its rank-ordered list; only the written report is staged.
+- `J`/`K` reuse the Issues view's optimistic swap: the Ready rows swap at once and swap back when the rank call fails.
+- The focused Ready row's detail shows in the right pane; the "nothing to groom" card shows only for an epic with no Proposed and no New ticket.
+
 ## 10. Error handling
 
 - Network failure: cached data stays on screen under an "offline, data from
@@ -522,6 +531,7 @@ Snapshot runs block every write.
 | `src/jira.rs` | REST v3 and Agile 1.0 client, data types |
 | `src/adf.rs` | ADF to egui rich text and plain text |
 | `src/store.rs` | Issue store, list ids, projections, disk cache |
+| `src/grooming.rs` | Pure grooming model: pre-check verdicts and promotion, session stages (`Stage`, `StageKey`, `epic_queues`), report grouping |
 | `src/report.rs` | Pre-check report writer and parser |
 | `src/teamview.rs` | Team columns, cursor clamping, days since the status category changed, done-recent JQL |
 | `src/roadmap.rs` | Epic → initiative derivation (horizon, health, quarters, metrics), timeline lanes and bar spans |

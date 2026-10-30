@@ -2,7 +2,7 @@
 
 Rust 2024 / eframe-egui 0.36 desktop Jira client for the Platform (PLAT) sub-team of the parent team.
 Spec (binding): `docs/superpowers/specs/2026-10-07-jira-tickets-design.md`. Plans: `docs/superpowers/plans/`.
-Plans 1 (foundation + Issues view), 2 (Grooming) and 3 (Team, Roadmap) are done.
+Plans 1 (foundation + Issues view), 2 (Grooming), 3 (Team, Roadmap) and 4 (Grooming session by stage) are done.
 
 ## Build and test
 

@@ -110,23 +110,29 @@ Promote performs only `New → Planning` transitions. It sets no fields, no reso
 
 After promotion the app fetches the existing Ready for Work siblings of the promoted epics and then writes the report to `~/Documents/grooming-reports/YYYY-MM-DD.md` (change the directory with `[grooming] report_dir`). If a report for today already exists, the app asks before overwriting it.
 
+The report lists epics in the session's stage order (roadmap first, then no epic, ongoing, other), and each epic heading carries its stage, for example `· roadmap (Now, P0)`.
+
 On launch and refresh the newest report in that directory is read. Its verdicts pre-fill Pre-check once per report file, and tickets show badges such as "needs detail: unclear-when (report 2026-10-07)" or "promoted by pre-check".
 
 ### Session
 
-Session mode walks epics one at a time. The left rail lists epics with their Planning / Ready / New counts (P/R/N). `]` and `[` jump to the next or previous epic with something in Planning; with Shift they include the empty ones. The centre shows the epic's Ready for Work queue with its Planning candidates beneath. For the focused candidate:
+Session mode walks epics in four stages, so the meeting spends its time on the roadmap first: roadmap epics in the Roadmap screen's order (Now, Next, Later; P0 first; then rank), then the team's tickets with no epic, then ongoing epics, then the rest. The left rail shows a header per stage and each epic's counts: `Sp` in the active sprint and `Nx` in the next (left out when zero), `R` Ready for Work, `P` Proposed (Planning) and `N` New. Epics with nothing Proposed and nothing New are dimmed; `]` and `[` skip them (with Shift they land on them too).
 
-- `y` accepts it: `↑`/`↓` move a ghost row through the Ready queue and `Enter` commits the move to Ready for Work at that place. `Esc` cancels.
-- `b` bounces it back to `New`: type a one- or two-line comment and press `⌘Enter`. The comment is posted first, then the ticket moves to New. If the move fails, the comment stays posted and the box closes with a toast.
+The centre shows the selected epic in five blocks: the active sprint's tickets and the next sprint's (context only), the Ready for Work queue in rank order, Proposed and New. `j`/`k` walk the Ready, Proposed and New rows as one list; entering an epic starts on its first Proposed or New ticket. For a Proposed or New ticket:
+
+- `y` accepts it: `↑`/`↓` move a ghost row through the Ready queue and `Enter` commits the move to Ready for Work at that place, from Planning or straight from New. `Esc` cancels.
+- `b` bounces it: type a one- or two-line comment and press `⌘Enter`. A Planning ticket goes back to New after the comment posts; a New ticket gets the comment only.
 - `p` parks it in Backlog.
 
-A timer runs per ticket and turns amber at 3 minutes and red at 5. The Ready ceiling pill in the header reads "Ready for Work N · soft S · hard H", counts the team's (PLAT-labelled) Ready for Work tickets, and turns amber past the soft ceiling (10) and red past the hard one (15). Both limits are configurable under `[grooming]`, and warnings never block anything.
+For a Ready for Work row, `J` and `K` move it one place down or up in rank with a single rank call (the row swaps at once and swaps back if the call fails).
+
+A timer runs per candidate and turns amber at 3 minutes and red at 5. The Ready ceiling pill in the header reads "Ready for Work N · soft S · hard H", counts the team's (PLAT-labelled) Ready for Work tickets, and turns amber past the soft ceiling (10) and red past the hard one (15). Both limits are configurable under `[grooming]`, and warnings never block anything.
 
 ### How to groom
 
 Pre-check: before the meeting. Judge each New ticket against the readiness bar, then promote the ready set to Planning and write the report. The bar is one question: can a stranger tell WHAT is being done and WHEN it is done? `r` yes, ready; `w` unclear what is being done; `n` unclear when it is done; `e` empty, nothing to judge. When in doubt, pass. Promote moves the ready set to Planning (the top `planning_cap` by rank) and writes today's report; paste the report into the team channel.
 
-Session: in the meeting. Walk Planning epic by epic and place each accepted ticket in rank beside the epic's Ready for Work queue. Decide each ticket: `y` Ready for Work, accept and place it in rank; `b` bounce to New with a one-line comment on what's missing; `p` Backlog, real work, lower priority. Three to five minutes per ticket. Past that, bounce.
+Session: in the meeting. Walk the roadmap epics first, then tickets with no epic, ongoing epics and the rest; accept each Proposed or New ticket into the epic's Ready for Work queue in rank. Decide each ticket: `y` Ready for Work, accept and place it in rank; `b` bounce with a one-line comment on what's missing, Planning goes back to New; `p` Backlog, real work, lower priority. `J`/`K` move a Ready for Work ticket down or up in rank. Three to five minutes per ticket. Past that, bounce.
 
 ## Team
 
