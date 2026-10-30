@@ -325,7 +325,7 @@ mod tests {
     fn team_filter() -> IssueFilter {
         IssueFilter {
             team_labels: vec!["PLAT".into(), "TOOLS".into()],
-            team_members: BTreeMap::from([("PLAT".into(), vec!["nate".into()]), ("TOOLS".into(), vec!["acct-9".into()])]),
+            team_members: BTreeMap::from([("PLAT".into(), vec!["ada".into()]), ("TOOLS".into(), vec!["acct-9".into()])]),
             ..Default::default()
         }
     }
@@ -360,7 +360,7 @@ mod tests {
     #[test]
     fn missing_label_only_for_members_without_it() {
         let members = vec!["Ada".to_string()];
-        assert!(missing_team_label(&issue("CI-1", "a", None, Some("nate"), &["infra"]), "PLAT", &members));
+        assert!(missing_team_label(&issue("CI-1", "a", None, Some("ada"), &["infra"]), "PLAT", &members));
         assert!(!missing_team_label(&issue("CI-2", "a", None, Some("Ada"), &["PLAT"]), "PLAT", &members));
         assert!(!missing_team_label(&issue("CI-3", "a", None, Some("Zed"), &[]), "PLAT", &members));
         assert!(!missing_team_label(&issue("CI-4", "a", None, None, &[]), "PLAT", &members));

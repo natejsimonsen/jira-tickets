@@ -339,9 +339,9 @@ mod tests {
     fn assign_filter_moves_cursor_to_first_match() {
         let u = |n: &str| User { account_id: n.to_lowercase(), display_name: n.into() };
         let shawn = u("Shawn");
-        let items: Vec<User> = ["Ann", "Grace", "Robin"].map(u).to_vec();
+        let items: Vec<User> = ["Ann", "Grace", "Grace Lee"].map(u).to_vec();
         let (rows, _) = assign_rows(&items, "grace", Some(&shawn));
-        assert_eq!(rows.iter().map(|r| r.display_name.as_str()).collect::<Vec<_>>(), ["Grace", "Robin"], "the non-matching assignee is not pinned");
+        assert_eq!(rows.iter().map(|r| r.display_name.as_str()).collect::<Vec<_>>(), ["Grace", "Grace Lee"], "the non-matching assignee is not pinned");
         assert_eq!(assign_cursor_after_filter(&rows, "grace", false), 1, "the first match");
         assert_eq!(assign_current_row(&rows, Some(&shawn)), None);
         let (rows, _) = assign_rows(&items, "sha", Some(&shawn));

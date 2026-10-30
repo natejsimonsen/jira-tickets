@@ -2,18 +2,40 @@
 
 A fast native desktop app for working through Jira tickets, built with Rust and egui. It keeps a local cache so it opens instantly, searches and filters the team's issues from the keyboard, and shows each issue's description and comments with Jira's rich text rendered. The Grooming screen walks the New column and runs grooming sessions, the Team screen shows what each member is working on, and the Roadmap screen turns the project's epics into a Now / Next / Later board, a quarter timeline, a status review, and outcomes by metric.
 
-## Install from source
+## Install
 
-This project is built through its nix dev shell, so run cargo via `nix develop`.
+### Nix
+
+    nix run github:ssoriche/jira-tickets
+    nix profile install github:ssoriche/jira-tickets
+
+### Cargo
+
+    cargo install --git https://github.com/ssoriche/jira-tickets
+
+On Linux you need a C compiler and the X11 or Wayland libraries; on Windows you need the Visual Studio C++ build tools.
+
+### Download
+
+The [Releases page](https://github.com/ssoriche/jira-tickets/releases) has a macOS app (a universal zip) and a Linux x86_64 tarball, each with a `.sha256` checksum file. Check one with `shasum -a 256 -c <file>.sha256`.
+
+The macOS app is ad-hoc signed, not notarised, so Gatekeeper blocks it on first launch. Either unzip it and clear the quarantine flag with `xattr -dr com.apple.quarantine "Jira Tickets.app"` (or download with a tool that sets no quarantine flag, such as `curl`), or open it once, then allow it under System Settings, Privacy & Security, "Open Anyway". The app has no icon yet.
+
+## Develop
+
+The toolchain comes from the nix dev shell (`nix develop`) or from rustup; with nix, run cargo as `nix develop --command cargo ...`.
 
     nix develop --command cargo run --release
 
-To build a macOS app bundle and install it (default `/Applications`, or pass a folder):
+To build a macOS app bundle and install it (default `/Applications`, or pass a folder), or only build and sign it under `target/release` with `--no-install`:
 
     scripts/bundle-macos.sh
     scripts/bundle-macos.sh ~/Applications
+    scripts/bundle-macos.sh --no-install
 
 The bundle is ad-hoc signed and has no icon yet.
+
+Before every commit run `cargo fmt`, `cargo clippy --all-targets -- -D warnings`, the same with `--features snapshot`, and `cargo test`; all must be clean. CI runs fmt, clippy, tests and release builds on macOS, Linux and Windows plus `nix build`; releases are automatic from Conventional Commits (`fix:` is a patch, `feat:` a minor, `!` or a `BREAKING CHANGE` footer a major).
 
 ## Config
 
@@ -205,6 +227,10 @@ Screenshots need the `snapshot` feature:
 
 `JIRA_TICKETS_SCREENSHOT` is the output path and switches the app to an offscreen render at 1440x900, 2x. `JIRA_TICKETS_VIEW` picks `issues`, `grooming`, `team`, or `roadmap`. `JIRA_TICKETS_ROW=<n>` moves the selection by n rows, and `JIRA_TICKETS_THEME` picks `light` or `dark`; unset means light here, not the system theme. Writes are always blocked in this mode. If nothing has loaded after 20 seconds (for example, no token), the picture shows whatever is on screen.
 
+## How it works
+
+The window is egui drawn on the GPU (wgpu), with no web view. All Jira traffic (REST v3 and Agile 1.0) runs on background threads and reports back over a channel, so the interface never waits on the network. One cached store feeds every screen, which is why the app opens instantly and the screens agree with each other. Links open in your browser through the operating system.
+
 ## Code map
 
 | File | Role |
@@ -225,5 +251,11 @@ Screenshots need the `snapshot` feature:
 | `src/views/adf_view.rs` | Renders rich text |
 | `src/views/pickers.rs` | Transition, assign, sprint, and edit pickers |
 | `src/snapshot.rs` | Offscreen screenshots (`snapshot` feature) |
+| `.github/workflows/` | CI, and the semantic-release and release-build workflows |
+| `scripts/set-version.sh` | Stamps a release version into `Cargo.toml` and `Cargo.lock` |
 
 Grooming lives in `src/views/grooming.rs`, `src/app/groom.rs`, `src/grooming.rs`, and `src/report.rs`. Team lives in `src/teamview.rs` (the columns, pure) and `src/views/team.rs`. Roadmap lives in `src/roadmap.rs` (initiatives and the field mapping, pure), `src/views/roadmap.rs` (tabs 1 and 3), and `src/views/roadmap/timeline.rs` and `outcomes.rs` (tabs 2 and 4).
+
+## Licence
+
+MIT, see [LICENSE](LICENSE).

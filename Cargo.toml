@@ -4,6 +4,11 @@ version = "0.1.0"
 edition = "2024"
 description = "A fast desktop app for Jira tickets, grooming, and roadmaps"
 license = "MIT"
+authors = ["Shawn Sorichetti"]
+repository = "https://github.com/ssoriche/jira-tickets"
+readme = "README.md"
+keywords = ["jira", "egui", "desktop", "grooming", "roadmap"]
+categories = ["gui", "development-tools"]
 
 [dependencies]
 eframe = { version = "0.36", default-features = false, features = ["wgpu", "accesskit", "default_fonts", "persistence", "wayland", "x11"] }
