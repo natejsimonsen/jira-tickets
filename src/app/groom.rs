@@ -544,6 +544,10 @@ impl App {
             i.status.name = status;
             i.status.category = category.into();
         }
+        // The accepted ticket joined the Ready rows, so the candidate that followed it sits one row further on.
+        if matches!(what, "Accept" | "Accept rank") && focus.as_deref() == Some(key) {
+            self.grooming.cursor += 1;
+        }
         self.session_keep(epic, focus);
     }
 
@@ -931,6 +935,21 @@ mod tests {
         assert_eq!(app.store.get("CI-1").map(|i| i.status.name.as_str()), Some("Ready for Work"), "moved at once");
     }
 
+    #[test]
+    fn accept_keeps_the_next_candidate_focused() {
+        let _g = crate::jira::tests::WRITE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (base, _rx) = crate::jira::tests::stub_server(vec![
+            ("GET", "/rest/api/3/issue/CI-1/transitions", serde_json::json!({"transitions":[{"id":"31","name":"Ready","to":{"name":"Ready for Work"}}]})),
+            ("POST", "/rest/api/3/issue/CI-1/transitions", serde_json::json!({})),
+            ("PUT", "/rest/agile/1.0/issue/rank", serde_json::json!({})),
+        ]);
+        let mut app = session_app(&base);
+        app.grooming.placement = Some(0);
+        app.actions.push(super::super::Action::Accept);
+        drain_until(&mut app, |a| a.grooming.deciding.is_none());
+        assert_eq!(app.grooming.cursor, 3, "the Ready queue grew by one");
+        assert_eq!(app.session_focus().map(|i| i.key.as_str()), Some("CI-2"));
+    }
     #[test]
     fn an_accept_whose_rank_fails_still_moves_the_ticket() {
         let _g = crate::jira::tests::WRITE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
