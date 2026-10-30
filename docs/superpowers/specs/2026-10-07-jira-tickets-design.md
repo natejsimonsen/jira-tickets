@@ -12,10 +12,10 @@ from Jira epics.
 
 Reference material:
 
-- `github-rs` (adalovelace): structure, conventions, look.
+- [github-rs](https://github.com/natejsimonsen/github-rs): structure, conventions, look.
 - `jira-cli` (Go, Bubble Tea): the Jira behaviour to port.
-- `the team's grooming runbook`: the
-  grooming runbook this app implements.
+- The team's grooming runbook (internal): the process the Grooming screen
+  implements.
 - `~/.claude/plugins/cache/example/parent-team/*/commands/team-pre-check.md`:
   the Claude-driven pre-check whose report format this app reads and writes.
 - `~/Documents/designs/2026-10-06-roadmap-layout-mockups.html`: the four

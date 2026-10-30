@@ -27,7 +27,7 @@ pub struct Scope {
     pub team_label: String,
     pub board_id: u64,
     pub filter_id: u64,
-    /// The parent parent board the sub-teams roll up to.
+    /// The parent board the sub-teams roll up to.
     pub parent_board_id: u64,
     /// Sub-teams whose tickets the Issues view loads; filtered by team in the UI.
     pub teams: Vec<TeamEntry>,
