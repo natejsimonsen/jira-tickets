@@ -397,6 +397,13 @@ email = "me@example.com"
 "#;
 
     #[test]
+    fn partial_grooming_table_keeps_the_new_defaults() {
+        let c: Config = toml::from_str("site = \"https://x.atlassian.net\"\nemail = \"a@b.c\"\n[grooming]\nstatus_backlog = \"Backlog\"\n").unwrap();
+        assert_eq!(c.grooming.status_closed, "Closed");
+        assert_eq!(c.grooming.close_resolutions, ["Done", "Won't Do"]);
+    }
+
+    #[test]
     fn minimal_config_gets_defaults() {
         let c: Config = toml::from_str(MINIMAL).unwrap();
         assert_eq!(c.scope.project, "CI");

@@ -41,6 +41,7 @@ pub fn rubric_lines(mode: GroomMode, status_new: &str, status_planning: &str, st
             ("J/K", format!("Move a {status_ready} ticket down or up in rank.")),
             ("l/a", format!("Unclaimed: not on the team's map yet. Label it {team_label} or assign it to bring it in.")),
             ("c", "Close: Done, or Won't Do when the work no longer matters.".into()),
+            ("s", "Sprint: move it into a sprint or back to the backlog.".into()),
             ("", "Three to five minutes per ticket. Past that, bounce.".into()),
         ],
     }
@@ -112,6 +113,7 @@ mod tests {
                 ("J/K", "Move a Ready for Work ticket down or up in rank.".to_string()),
                 ("l/a", "Unclaimed: not on the team's map yet. Label it PLAT or assign it to bring it in.".to_string()),
                 ("c", "Close: Done, or Won't Do when the work no longer matters.".to_string()),
+                ("s", "Sprint: move it into a sprint or back to the backlog.".to_string()),
                 ("", "Three to five minutes per ticket. Past that, bounce.".to_string()),
             ]
         );

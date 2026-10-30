@@ -89,6 +89,8 @@ pub struct GroomingState {
     pub bounce_focus: bool,
     /// Session: the ticket whose Accept, Bounce or Park is in flight; no other decision starts meanwhile.
     pub deciding: Option<String>,
+    /// Session: a sprint move in flight, as (key, sprint name or None for the backlog); applied locally when it lands.
+    pub pending_sprint_move: Option<(String, Option<String>)>,
     /// When the focused ticket took focus, for the per-ticket timer.
     pub focused_since: Option<Instant>,
     /// The pre-check summary dialog is open.

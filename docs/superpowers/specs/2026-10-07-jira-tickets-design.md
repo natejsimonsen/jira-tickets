@@ -358,8 +358,8 @@ Centre, for the selected epic, five blocks in this order: the active
 sprint's tickets (named for the sprint, "Sprint 92 · 3"), the next sprint's
 (the first future sprint of the board), the `Ready for Work` queue in rank
 order, Proposed (`Planning` tickets, each with its report badge), and
-`New`. The sprint blocks are context only, drawn muted. The cursor walks
-the Ready, Proposed and New rows as one list; entering an epic puts it on
+`New`. The sprint blocks are drawn muted but selectable. The cursor walks
+all six blocks, sprint rows included, as one list; entering an epic puts it on
 the first Proposed or New row. The candidates are the Proposed and New
 rows; for the focused candidate:
 
@@ -372,6 +372,7 @@ rows; for the focused candidate:
   ticket gets the comment only.
 - `p` park: transitions to `Backlog`.
 - `c` close: a picker offers the configured closing resolutions (Done, Won't Do); Enter transitions to `status_closed` with that resolution.
+- `s` sprint: the sprint picker moves any focused ticket into a sprint or back to the backlog.
 
 Roadmap epics are always listed. For them a sixth block, Unclaimed, holds the epic's open children outside the team's scope (no team label, not assigned to a member); `l` adds the team label and `a` opens the assign picker on any focused row, after which the next refresh moves the ticket into its queue.
 

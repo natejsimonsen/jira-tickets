@@ -419,7 +419,7 @@ impl App {
         q.candidates().get(at).copied()
     }
 
-    /// Session: the key of the row under the cursor, whatever its block (Ready, Proposed, New or Unclaimed).
+    /// Session: the key of the row under the cursor, whatever its block (sprint, Ready, Proposed, New or Unclaimed).
     pub fn session_row_focus(&self) -> Option<String> {
         let queues = self.session_queues();
         queues.get(self.grooming.epic_index)?.rows().get(self.grooming.cursor).map(|i| i.key.clone())
@@ -435,7 +435,7 @@ impl App {
     pub fn session_ready_focus(&self) -> Option<(usize, String)> {
         let queues = self.session_queues();
         let q = queues.get(self.grooming.epic_index)?;
-        let at = self.grooming.cursor;
+        let at = self.grooming.cursor.checked_sub(q.sprint.len() + q.next.len())?;
         q.ready.get(at).map(|i| (at, i.key.clone()))
     }
 
@@ -604,7 +604,7 @@ impl App {
         {
             list.swap(a, b);
             self.pending_ranks.push((ListId::TeamOpen, key.clone(), neighbour.clone()));
-            self.grooming.cursor = to as usize;
+            self.grooming.cursor = self.grooming.cursor - at + to as usize;
         }
         let before = delta < 0;
         self.spawn_write(move |c, tx| {
@@ -668,6 +668,20 @@ impl App {
             self.grooming.cursor = (self.grooming.cursor + 1).min(n.saturating_sub(1));
             self.grooming.focused_since = Some(Instant::now());
         }
+    }
+
+    /// A "Sprint move" landed: on success the ticket takes its new sprint in the store at once, so it hops to its
+    /// block, and the cursor follows it. Clears the pending move either way.
+    pub(super) fn sprint_move_done(&mut self, key: &str, ok: bool) {
+        let Some((_, name)) = self.grooming.pending_sprint_move.take_if(|(k, _)| k == key) else { return };
+        if !ok || self.grooming.mode != GroomMode::Session {
+            return;
+        }
+        let (epic, focus) = self.session_anchor();
+        if let Some(i) = self.store.issues.get_mut(key) {
+            i.sprint = name;
+        }
+        self.session_keep(epic, focus);
     }
 
     /// The selected epic's key and the focused row's, taken before the lists change.
@@ -1350,6 +1364,124 @@ mod tests {
         std::thread::sleep(std::time::Duration::from_millis(50));
         assert!(writes(&rx).is_empty());
         assert_eq!(app.store.get("CI-1").map(|i| i.status.name.as_str()), Some("Planning"));
+    }
+
+    /// `session_app` plus CI-7, a Ready for Work ticket in the active Sprint 92, and the board's two sprints. The
+    /// rows are CI-7, CI-5, CI-6, CI-1, CI-2; the cursor starts on CI-7.
+    fn sprint_session_app(base: &str) -> App {
+        let mut app = session_app(base);
+        let mut s = session_issue("CI-7", "Ready for Work");
+        s.sprint = Some("Sprint 92".into());
+        app.store.absorb(
+            ListId::TeamOpen,
+            vec![
+                s,
+                session_issue("CI-5", "Ready for Work"),
+                session_issue("CI-1", "Planning"),
+                session_issue("CI-6", "Ready for Work"),
+                session_issue("CI-2", "Planning"),
+            ],
+        );
+        app.sprints = vec![
+            crate::jira::Sprint { id: 1, name: "Sprint 92".into(), state: "active".into() },
+            crate::jira::Sprint { id: 2, name: "Sprint 93".into(), state: "future".into() },
+        ];
+        app.grooming.cursor = 0;
+        app
+    }
+
+    fn sprint_stub(app_board: u64) -> (String, std::sync::mpsc::Receiver<crate::jira::tests::Recorded>) {
+        crate::jira::tests::stub_server(vec![
+            (
+                "GET",
+                Box::leak(format!("/rest/agile/1.0/board/{app_board}/sprint").into_boxed_str()),
+                serde_json::json!({"values": [
+                    {"id": 1, "name": "Sprint 92", "state": "active"},
+                    {"id": 2, "name": "Sprint 93", "state": "future"},
+                ]}),
+            ),
+            ("POST", "/rest/agile/1.0/backlog/issue", serde_json::json!({})),
+            ("POST", "/rest/agile/1.0/sprint/2/issue", serde_json::json!({})),
+        ])
+    }
+
+    fn board() -> u64 {
+        let cfg: crate::config::Config = toml::from_str("site = \"https://x.atlassian.net\"\nemail = \"a@b.c\"\n").unwrap();
+        cfg.scope.board_id
+    }
+
+    #[test]
+    fn s_on_a_sprint_row_opens_the_sprint_picker_for_it() {
+        let _g = crate::jira::tests::WRITE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (base, _rx) = sprint_stub(board());
+        let mut app = sprint_session_app(&base);
+        assert!(app.session_focus().is_none(), "a sprint row is not a candidate");
+        assert_eq!(app.session_row_focus().as_deref(), Some("CI-7"));
+        app.actions.push(super::super::Action::OpenSprint);
+        drain_until(&mut app, |a| a.picker.is_some());
+        assert!(matches!(&app.picker, Some(crate::app::Picker::Sprint { key, cursor: 1, .. }) if key == "CI-7"), "{:?}", app.picker.is_some());
+    }
+
+    #[test]
+    fn moving_a_sprint_ticket_to_the_backlog_puts_it_in_its_status_queue() {
+        let _g = crate::jira::tests::WRITE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (base, rx) = sprint_stub(board());
+        let mut app = sprint_session_app(&base);
+        app.actions.push(super::super::Action::OpenSprint);
+        drain_until(&mut app, |a| a.picker.is_some());
+        app.picker_move(-1);
+        app.confirm_picker();
+        drain_until(&mut app, |a| a.store.get("CI-7").is_some_and(|i| i.sprint.is_none()));
+        let w = writes(&rx);
+        assert_eq!(w.len(), 1, "{w:?}");
+        assert_eq!((w[0].1.as_str(), &w[0].2), ("/rest/agile/1.0/backlog/issue", &serde_json::json!({"issues": ["CI-7"]})));
+        let queues = app.session_queues();
+        assert!(queues[0].sprint.is_empty());
+        assert_eq!(queues[0].ready.iter().map(|i| i.key.as_str()).collect::<Vec<_>>(), ["CI-7", "CI-5", "CI-6"]);
+        drop(queues);
+        assert_eq!(app.session_row_focus().as_deref(), Some("CI-7"));
+        assert!(app.grooming.pending_sprint_move.is_none());
+    }
+
+    #[test]
+    fn moving_a_new_ticket_into_the_next_sprint_removes_it_from_the_candidates() {
+        let _g = crate::jira::tests::WRITE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (base, rx) = sprint_stub(board());
+        let mut app = sprint_session_app(&base);
+        app.grooming.cursor = 4; // CI-2, the second Planning ticket
+        app.actions.push(super::super::Action::OpenSprint);
+        drain_until(&mut app, |a| a.picker.is_some());
+        app.picker_move(1); // from Backlog (0) to Sprint 92 (1), then
+        if let Some(crate::app::Picker::Sprint { cursor, .. }) = &mut app.picker {
+            *cursor = 2;
+        }
+        app.confirm_picker();
+        drain_until(&mut app, |a| a.store.get("CI-2").is_some_and(|i| i.sprint.is_some()));
+        let w = writes(&rx);
+        assert_eq!((w[0].1.as_str(), &w[0].2), ("/rest/agile/1.0/sprint/2/issue", &serde_json::json!({"issues": ["CI-2"]})));
+        let queues = app.session_queues();
+        assert_eq!(queues[0].next.iter().map(|i| i.key.as_str()).collect::<Vec<_>>(), ["CI-2"]);
+        assert!(queues[0].candidates().iter().all(|i| i.key != "CI-2"));
+        drop(queues);
+        assert_eq!(app.session_row_focus().as_deref(), Some("CI-2"));
+        assert_eq!(app.grooming.cursor, 1, "the cursor follows CI-2 into the next-sprint block");
+    }
+
+    #[test]
+    fn read_only_sprint_move_sends_nothing() {
+        let _g = crate::jira::tests::WRITE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _ro = crate::jira::tests::ReadOnlyGuard::new();
+        let (base, rx) = sprint_stub(board());
+        let mut app = sprint_session_app(&base);
+        app.actions.push(super::super::Action::OpenSprint);
+        drain_until(&mut app, |a| a.picker.is_some());
+        app.picker_move(-1);
+        app.confirm_picker();
+        drain_until(&mut app, |a| a.toast.as_ref().is_some_and(|t| t.text.contains("Read-only")));
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        assert!(writes(&rx).is_empty());
+        assert_eq!(app.store.get("CI-7").and_then(|i| i.sprint.as_deref()), Some("Sprint 92"));
+        assert!(app.grooming.pending_sprint_move.is_none());
     }
 
     #[test]

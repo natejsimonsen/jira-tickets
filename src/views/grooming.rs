@@ -542,7 +542,7 @@ struct QueueView {
     unclaimed: Vec<jira::Issue>,
 }
 
-/// The epic-by-epic walk: the stage rail, the selected epic's five blocks (sprint, next sprint, Ready for Work,
+/// The epic-by-epic walk: the stage rail, the selected epic's six blocks (sprint, next sprint, Ready for Work,
 /// Proposed, New) and the focused ticket's description.
 fn session_body(app: &mut App, ui: &mut Ui, p: &Palette) {
     // The per-ticket timer ticks.
@@ -586,9 +586,10 @@ fn session_body(app: &mut App, ui: &mut Ui, p: &Palette) {
         return;
     }
     let view = view.expect("a non-empty rail has a selected epic");
-    let rows = view.ready.len() + view.planning.len() + view.new.len() + view.unclaimed.len();
+    let rows = view.sprint.len() + view.next_sprint.len() + view.ready.len() + view.planning.len() + view.new.len() + view.unclaimed.len();
     let cursor = app.grooming.cursor.min(rows.saturating_sub(1));
-    let focused: Option<jira::Issue> = view.ready.iter().chain(&view.planning).chain(&view.new).chain(&view.unclaimed).nth(cursor).cloned();
+    let focused: Option<jira::Issue> =
+        view.sprint.iter().chain(&view.next_sprint).chain(&view.ready).chain(&view.planning).chain(&view.new).chain(&view.unclaimed).nth(cursor).cloned();
     // An epic with Ready rows only has nothing to groom, whatever the cursor is on.
     let nothing_to_groom = view.planning.is_empty() && view.new.is_empty() && view.unclaimed.is_empty();
     let list_w = (ui.available_width() * 0.36).clamp(LIST_MIN, LIST_MAX).min(ui.available_width());
@@ -726,17 +727,22 @@ fn context_row(ui: &mut Ui, p: &Palette, salt: &str, i: &jira::Issue, sel: bool,
 }
 
 /// A sprint block: its label (the sprint's name) over muted context rows, or "None".
-fn sprint_block(ui: &mut Ui, p: &Palette, name: &str, salt: &str, rows: &[jira::Issue]) {
+/// Returns the index (within `rows`) of the row clicked this frame.
+fn sprint_block(ui: &mut Ui, p: &Palette, name: &str, salt: &str, rows: &[jira::Issue], offset: usize, cursor: usize) -> Option<usize> {
+    let mut clicked = None;
     queue_label(ui, p, name, rows.len());
     if rows.is_empty() {
         ui.label(RichText::new("None").color(p.muted).size(12.0));
     }
     ui.spacing_mut().item_spacing.y = ROW_GAP;
     for (idx, i) in rows.iter().enumerate() {
-        context_row(ui, p, salt, i, false, idx, rows.len());
+        if context_row(ui, p, salt, i, offset + idx == cursor, idx, rows.len()).clicked() {
+            clicked = Some(idx);
+        }
     }
     ui.spacing_mut().item_spacing.y = ui.style().spacing.item_spacing.y;
     ui.add_space(GROUP_GAP);
+    clicked
 }
 
 /// A Proposed or New candidate row: title, then the report's badge, age and assignee pills, and the timer when selected.
@@ -789,12 +795,20 @@ fn epic_queue(app: &mut App, ui: &mut Ui, p: &Palette, view: &QueueView, cursor:
     let today = chrono::Local::now().date_naive();
     let status = (app.cfg.grooming.status_ready.clone(), app.cfg.grooming.status_new.clone());
     let mut clicked = None;
+    let free = app.grooming.placement.is_none() && app.grooming.bounce_text.is_none();
+    let lead = view.sprint.len() + view.next_sprint.len();
     egui::ScrollArea::vertical().id_salt("groom-queue").auto_shrink([false, false]).show(ui, |ui| {
-        if let Some(name) = &view.active {
-            sprint_block(ui, p, name, "groom-sprint", &view.sprint);
+        if let Some(name) = &view.active
+            && let Some(at) = sprint_block(ui, p, name, "groom-sprint", &view.sprint, 0, cursor)
+            && free
+        {
+            clicked = Some(at);
         }
-        if let Some(name) = &view.next {
-            sprint_block(ui, p, name, "groom-next", &view.next_sprint);
+        if let Some(name) = &view.next
+            && let Some(at) = sprint_block(ui, p, name, "groom-next", &view.next_sprint, view.sprint.len(), cursor)
+            && free
+        {
+            clicked = Some(view.sprint.len() + at);
         }
         let ready = &view.ready;
         queue_label(ui, p, &status.0, ready.len());
@@ -806,24 +820,24 @@ fn epic_queue(app: &mut App, ui: &mut Ui, p: &Palette, view: &QueueView, cursor:
         let mut row = 0;
         for at in 0..=ready.len() {
             if placement == Some(at)
-                && let Some(c) = view.planning.iter().chain(&view.new).nth(cursor.saturating_sub(ready.len()))
+                && let Some(c) = view.planning.iter().chain(&view.new).nth(cursor.saturating_sub(lead + ready.len()))
             {
                 ghost_row(ui, p, c, row, rows);
                 row += 1;
             }
             if let Some(i) = ready.get(at) {
-                let sel = cursor == at;
+                let sel = cursor == lead + at;
                 let resp = context_row(ui, p, "groom-ready", i, sel, row, rows);
-                if resp.clicked() && app.grooming.placement.is_none() && app.grooming.bounce_text.is_none() {
-                    clicked = Some(at);
+                if resp.clicked() && free {
+                    clicked = Some(lead + at);
                 }
                 row += 1;
             }
         }
         for (label, salt, list, offset, unclaimed) in [
-            ("Proposed", PROPOSED_SALT, &view.planning, ready.len(), false),
-            (status.1.as_str(), NEW_SALT, &view.new, ready.len() + view.planning.len(), false),
-            ("Unclaimed", UNCLAIMED_SALT, &view.unclaimed, ready.len() + view.planning.len() + view.new.len(), true),
+            ("Proposed", PROPOSED_SALT, &view.planning, lead + ready.len(), false),
+            (status.1.as_str(), NEW_SALT, &view.new, lead + ready.len() + view.planning.len(), false),
+            ("Unclaimed", UNCLAIMED_SALT, &view.unclaimed, lead + ready.len() + view.planning.len() + view.new.len(), true),
         ] {
             if unclaimed && list.is_empty() {
                 continue;
@@ -1141,7 +1155,7 @@ mod tests {
             ],
         );
         app.grooming.mode = GroomMode::Session;
-        app.grooming.cursor = 1; // CI-1, the first candidate
+        app.grooming.cursor = 3; // CI-1, the first candidate (after CI-4, CI-6 and CI-5)
         app.grooming.focused_since = Some(std::time::Instant::now());
         let texts = |app: &mut App| {
             let shapes = crate::testutil::paint_at2(egui::vec2(1400.0, 900.0), |ui| show(app, ui));
@@ -1189,12 +1203,12 @@ mod tests {
         app.grooming.bounce_text = None;
         app.grooming.cursor = 0;
         let t = texts(&mut app);
-        assert!(!t.iter().any(|x| x == "0:00"), "no timer on a Ready row: {t:?}");
+        assert!(!t.iter().any(|x| x == "0:00"), "no timer on a sprint row: {t:?}");
         assert!(!t.iter().any(|x| x.starts_with("Unclaimed ·")), "no Unclaimed block without roadmap children: {t:?}");
         let mut child = issue("CI-77", "New", Some("CI-1860"), None);
         child.labels.clear();
         app.store.absorb(crate::store::ListId::EpicChildren, vec![child]);
-        app.grooming.cursor = 4;
+        app.grooming.cursor = 5;
         let t = texts(&mut app);
         for want in ["Unclaimed · 1", "CI-77", "Summary CI-77"] {
             assert!(t.iter().any(|x| x == want), "{want} in {t:?}");

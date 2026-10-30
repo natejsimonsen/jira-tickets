@@ -359,9 +359,9 @@ impl<'a> EpicQueue<'a> {
         self.planning.iter().chain(&self.new).copied().collect()
     }
 
-    /// Every row the cursor walks: Ready, the candidates, then the Unclaimed rows.
+    /// Every row the cursor walks: the two sprint blocks, Ready, the candidates, then the Unclaimed rows.
     pub fn rows(&self) -> Vec<&'a Issue> {
-        self.ready.iter().chain(&self.planning).chain(&self.new).chain(&self.unclaimed).copied().collect()
+        self.sprint.iter().chain(&self.next).chain(&self.ready).chain(&self.planning).chain(&self.new).chain(&self.unclaimed).copied().collect()
     }
 
     /// Whether the epic has anything to decide on or to claim: a candidate or an Unclaimed row.
@@ -374,9 +374,9 @@ impl<'a> EpicQueue<'a> {
         self.first_candidate().min(self.rows().len().saturating_sub(1))
     }
 
-    /// The cursor index of the first candidate (just past the Ready rows).
+    /// The cursor index of the first candidate (just past the sprint and Ready rows).
     pub fn first_candidate(&self) -> usize {
-        self.ready.len()
+        self.sprint.len() + self.next.len() + self.ready.len()
     }
 }
 
@@ -699,6 +699,24 @@ mod tests {
         assert_eq!(q[0].candidates().iter().map(|i| i.key.as_str()).collect::<Vec<_>>(), ["CI-3", "CI-2"]);
         assert_eq!(q[0].rows().iter().map(|i| i.key.as_str()).collect::<Vec<_>>(), ["CI-1", "CI-3", "CI-2"]);
         assert_eq!(q[0].first_candidate(), 1);
+    }
+
+    #[test]
+    fn sprint_rows_come_first_and_are_focusable() {
+        let g = config::Grooming::default();
+        let rm = config::Roadmap::default();
+        let c = ctx(&[], &rm);
+        let mut s = issue("CI-4", "Work in Progress", Some("E-1"), "", &["PLAT"]);
+        s.sprint = Some("Sprint 92".into());
+        let mut x = issue("CI-5", "New", Some("E-1"), "", &["PLAT"]);
+        x.sprint = Some("Sprint 93".into());
+        let r = issue("CI-1", "Ready for Work", Some("E-1"), "", &["PLAT"]);
+        let p = issue("CI-3", "Planning", Some("E-1"), "", &["PLAT"]);
+        let q = epic_queues(&[&s, &x, &r, &p], "PLAT", &g, &c);
+        assert_eq!(q[0].rows().iter().map(|i| i.key.as_str()).collect::<Vec<_>>(), ["CI-4", "CI-5", "CI-1", "CI-3"]);
+        assert_eq!(q[0].first_candidate(), 3);
+        assert_eq!(q[0].start_cursor(), 3);
+        assert_eq!(q[0].candidates().iter().map(|i| i.key.as_str()).collect::<Vec<_>>(), ["CI-3"]);
     }
 
     fn ctx_with<'a>(epics: &[&'a Issue], children: &[&'a Issue], roadmap: &'a config::Roadmap) -> StageContext<'a> {

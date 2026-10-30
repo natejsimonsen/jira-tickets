@@ -73,7 +73,7 @@ impl App {
     }
 
     pub(super) fn open_sprint(&mut self) {
-        let Some(key) = self.selected.clone() else { return };
+        let Some(key) = self.action_target() else { return };
         if self.client.is_none() || self.picker_loading {
             return;
         }
@@ -151,6 +151,10 @@ impl App {
                 let sprint = if cursor == 0 { None } else { items.get(cursor - 1).map(|s| s.id) };
                 if cursor != 0 && sprint.is_none() {
                     return;
+                }
+                if self.screen == super::Screen::Grooming && self.grooming.mode == super::GroomMode::Session {
+                    let name = sprint.and_then(|id| items.iter().find(|s| s.id == id)).map(|s| s.name.clone());
+                    self.grooming.pending_sprint_move = Some((key.clone(), name));
                 }
                 self.spawn_write(move |c, tx| {
                     let r = match sprint {

@@ -236,6 +236,9 @@ impl App {
                 if matches!(what, "Accept" | "Accept rank" | "Bounce" | "Bounce move" | "Park" | "Close") {
                     self.session_done(&key, what, &result);
                 }
+                if what == "Sprint move" {
+                    self.sprint_move_done(&key, result.is_ok());
+                }
                 if what == "Comment" {
                     self.posting = None;
                     if result.is_ok() {
