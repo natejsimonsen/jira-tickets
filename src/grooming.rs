@@ -488,6 +488,12 @@ pub fn pick_transition(ts: &[crate::jira::Transition], target: &str) -> Option<S
     ts.iter().find(|t| t.to.eq_ignore_ascii_case(target)).map(|t| t.id.clone())
 }
 
+/// The closing resolutions the session offers, in config order, taken from Jira's resolution list by name
+/// (case-insensitive). Names Jira does not have are left out.
+pub fn close_options(all: &[crate::jira::Resolution], wanted: &[String]) -> Vec<crate::jira::Resolution> {
+    wanted.iter().filter_map(|w| all.iter().find(|r| r.name.eq_ignore_ascii_case(w)).cloned()).collect()
+}
+
 /// The per-ticket timer: "0:07", "4:59", "12:03".
 pub fn fmt_elapsed(secs: u64) -> String {
     format!("{}:{:02}", secs / 60, secs % 60)
@@ -800,6 +806,18 @@ mod tests {
         assert_eq!(Stage::Ongoing.label(), "Ongoing");
         assert_eq!(Stage::Other.label(), "Other epics");
         assert!(Stage::Roadmap < Stage::NoEpic && Stage::NoEpic < Stage::Ongoing && Stage::Ongoing < Stage::Other);
+    }
+
+    #[test]
+    fn close_options_follow_config_order() {
+        let res = |id: &str, name: &str| crate::jira::Resolution { id: id.into(), name: name.into() };
+        let all = [res("1", "Done"), res("2", "Won't Do"), res("3", "Duplicate")];
+        let ids =
+            |wanted: &[&str]| close_options(&all, &wanted.iter().map(|s| s.to_string()).collect::<Vec<_>>()).into_iter().map(|r| r.id).collect::<Vec<_>>();
+        assert_eq!(ids(&["Won't Do", "Done"]), ["2", "1"], "config order, not Jira's");
+        assert_eq!(ids(&["done", "WON'T DO"]), ["1", "2"], "case-insensitive");
+        assert_eq!(ids(&["Done", "Cancelled"]), ["1"], "unknown names dropped");
+        assert!(ids(&["Cancelled"]).is_empty());
     }
 
     #[test]

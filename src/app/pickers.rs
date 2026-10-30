@@ -18,6 +18,8 @@ pub enum Picker {
         transition_id: String,
         items: Vec<Resolution>,
         cursor: usize,
+        /// Opened by the session's `c`: titled "Close KEY as", and its write is a "Close" the session applies.
+        close: bool,
     },
     Assign {
         key: String,
@@ -128,10 +130,11 @@ impl App {
                     let _ = tx.send(Msg::Done { key: key.clone(), what: "Transition", result: c.transition(&key, &t.id, None) });
                 });
             }
-            Picker::Resolution { key, transition_id, items, cursor } => {
+            Picker::Resolution { key, transition_id, items, cursor, close } => {
                 let Some(r) = items.get(cursor).cloned() else { return };
+                let what = if close { "Close" } else { "Transition" };
                 self.spawn_write(move |c, tx| {
-                    let _ = tx.send(Msg::Done { key: key.clone(), what: "Transition", result: c.transition(&key, &transition_id, Some(&r.id)) });
+                    let _ = tx.send(Msg::Done { key: key.clone(), what, result: c.transition(&key, &transition_id, Some(&r.id)) });
                 });
             }
             Picker::Assign { key, items, current, cursor, filter } => {

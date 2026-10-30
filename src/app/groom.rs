@@ -567,6 +567,20 @@ impl App {
         });
     }
 
+    /// `c`: fetches the focused row's transitions and Jira's resolutions; `Msg::CloseOptions` opens the picker.
+    pub(super) fn start_close(&mut self) {
+        let busy = self.picker.is_some() || self.picker_loading || self.grooming.placement.is_some() || self.grooming.bounce_text.is_some();
+        if self.grooming.mode != GroomMode::Session || self.client.is_none() || busy {
+            return;
+        }
+        let Some(key) = self.session_row_focus() else { return };
+        self.picker_loading = true;
+        self.spawn(move |c, tx| {
+            let result = c.transitions(&key).and_then(|t| Ok((t, c.resolutions()?)));
+            let _ = tx.send(Msg::CloseOptions { key, result });
+        });
+    }
+
     /// `J`/`K`: moves the Ready row under the cursor one place down or up with one rank call. The row swaps at
     /// once and the cursor follows it; a failed rank swaps it back when its Done lands (`pending_ranks`).
     pub(super) fn rank_ready(&mut self, delta: i32) {
@@ -619,6 +633,7 @@ impl App {
             "Accept" | "Accept rank" => Some((g.status_ready.clone(), "indeterminate")),
             "Bounce" => Some((g.status_new.clone(), "new")),
             "Bounce move" => None,
+            "Close" => Some((g.status_closed.clone(), "done")),
             _ => Some((g.status_backlog.clone(), "new")),
         };
         match what {
@@ -1256,6 +1271,85 @@ mod tests {
         std::thread::sleep(std::time::Duration::from_millis(50));
         assert!(rx.try_iter().next().is_none(), "not even the transitions read");
         assert!(app.toast.as_ref().is_some_and(|t| t.text.contains("Read-only")));
+    }
+
+    fn close_transitions() -> serde_json::Value {
+        serde_json::json!({"transitions": [
+            {"id": "51", "name": "Park", "to": {"name": "Backlog"}},
+            {"id": "61", "name": "Close", "to": {"name": "Closed"}},
+        ]})
+    }
+
+    fn resolutions_json() -> serde_json::Value {
+        serde_json::json!([{"id": "1", "name": "Done"}, {"id": "2", "name": "Won't Do"}, {"id": "3", "name": "Duplicate"}])
+    }
+
+    fn close_stub(transitions: serde_json::Value) -> (String, std::sync::mpsc::Receiver<crate::jira::tests::Recorded>) {
+        crate::jira::tests::stub_server(vec![
+            ("GET", "/rest/api/3/issue/CI-1/transitions", transitions),
+            ("GET", "/rest/api/3/resolution", resolutions_json()),
+            ("POST", "/rest/api/3/issue/CI-1/transitions", serde_json::json!({})),
+        ])
+    }
+
+    #[test]
+    fn c_opens_the_close_picker_for_the_focused_row() {
+        let _g = crate::jira::tests::WRITE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (base, _rx) = close_stub(close_transitions());
+        let mut app = session_app(&base);
+        app.actions.push(super::super::Action::StartClose);
+        drain_until(&mut app, |a| a.picker.is_some());
+        assert!(!app.picker_loading);
+        match &app.picker {
+            Some(crate::app::Picker::Resolution { key, transition_id, items, cursor: 0, close: true }) => {
+                assert_eq!((key.as_str(), transition_id.as_str()), ("CI-1", "61"));
+                assert_eq!(items.iter().map(|r| r.name.as_str()).collect::<Vec<_>>(), ["Done", "Won't Do"]);
+            }
+            _ => panic!("expected the close picker"),
+        }
+    }
+
+    #[test]
+    fn confirming_close_sends_one_transition_with_the_resolution_and_drops_the_row() {
+        let _g = crate::jira::tests::WRITE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (base, rx) = close_stub(close_transitions());
+        let mut app = session_app(&base);
+        app.actions.push(super::super::Action::StartClose);
+        drain_until(&mut app, |a| a.picker.is_some());
+        app.picker_move(1);
+        app.confirm_picker();
+        drain_until(&mut app, |a| a.store.get("CI-1").is_some_and(|i| i.status.category == "done"));
+        let w = writes(&rx);
+        assert_eq!(w.len(), 1, "{w:?}");
+        assert_eq!(w[0].2, serde_json::json!({"transition": {"id": "61"}, "fields": {"resolution": {"id": "2"}}}));
+        assert!(app.session_queues().iter().all(|q| q.rows().iter().all(|i| i.key != "CI-1")), "CI-1 left the session rows");
+        assert_eq!(app.session_focus().map(|i| i.key.clone()).as_deref(), Some("CI-2"));
+    }
+
+    #[test]
+    fn close_without_a_closed_transition_toasts() {
+        let _g = crate::jira::tests::WRITE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (base, _rx) = close_stub(transitions_json());
+        let mut app = session_app(&base);
+        app.actions.push(super::super::Action::StartClose);
+        drain_until(&mut app, |a| !a.picker_loading);
+        assert!(app.picker.is_none());
+        assert!(app.toast.as_ref().is_some_and(|t| t.text.contains("No transition to Closed")), "{:?}", app.toast.as_ref().map(|t| &t.text));
+    }
+
+    #[test]
+    fn read_only_close_sends_nothing() {
+        let _g = crate::jira::tests::WRITE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _ro = crate::jira::tests::ReadOnlyGuard::new();
+        let (base, rx) = close_stub(close_transitions());
+        let mut app = session_app(&base);
+        app.actions.push(super::super::Action::StartClose);
+        drain_until(&mut app, |a| a.picker.is_some());
+        app.confirm_picker();
+        drain_until(&mut app, |a| a.toast.as_ref().is_some_and(|t| t.text.contains("Read-only")));
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        assert!(writes(&rx).is_empty());
+        assert_eq!(app.store.get("CI-1").map(|i| i.status.name.as_str()), Some("Planning"));
     }
 
     #[test]

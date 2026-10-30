@@ -242,6 +242,7 @@ impl App {
                     (Key::P, Action::Park),
                     (Key::L, Action::ApplyTeamLabel),
                     (Key::A, Action::OpenAssign),
+                    (Key::C, Action::StartClose),
                 ] {
                     if key(k) {
                         self.actions.push(a);

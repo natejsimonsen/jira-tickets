@@ -79,6 +79,8 @@ status_new = "New"
 status_planning = "Planning"
 status_ready = "Ready for Work"
 status_backlog = "Backlog"
+status_closed = "Closed"                   # where `c` closes a ticket in Session
+close_resolutions = ["Done", "Won't Do"]   # the resolutions `c` offers, by Jira name
 planning_transition_id = "11"
 planning_cap = 10
 needs_detail_cap = 10
@@ -369,6 +371,7 @@ rows; for the focused candidate:
   posts the comment then transitions a `Planning` ticket to `New`. A `New`
   ticket gets the comment only.
 - `p` park: transitions to `Backlog`.
+- `c` close: a picker offers the configured closing resolutions (Done, Won't Do); Enter transitions to `status_closed` with that resolution.
 
 Roadmap epics are always listed. For them a sixth block, Unclaimed, holds the epic's open children outside the team's scope (no team label, not assigned to a member); `l` adds the team label and `a` opens the assign picker on any focused row, after which the next refresh moves the ticket into its queue.
 

@@ -88,6 +88,8 @@ pub enum Action {
     CancelBounce,
     /// Session `p`: transitions the focused candidate to Backlog.
     Park,
+    /// Session `c`: opens the close picker (Done or Won't Do) for the focused row.
+    StartClose,
     /// Session `J`/`K`: moves the focused Ready for Work row one place down or up in rank.
     RankReady(i32),
     /// Moves the Team cursor down (or up) the focused column's cards.
@@ -269,6 +271,7 @@ impl App {
                 self.grooming.decision_for = None;
             }
             Action::Park => self.park(),
+            Action::StartClose => self.start_close(),
             Action::RankReady(d) => self.rank_ready(d),
             Action::TeamMove(d) => self.team_move(0, d),
             Action::TeamCol(d) => self.team_move(d, 0),

@@ -38,6 +38,11 @@ pub enum Msg {
         result: jira::Result<Vec<Transition>>,
     },
     Resolutions(jira::Result<Vec<Resolution>>),
+    /// The session's `c`: the ticket's transitions and Jira's resolutions, fetched together.
+    CloseOptions {
+        key: String,
+        result: jira::Result<(Vec<Transition>, Vec<Resolution>)>,
+    },
     /// `key` is the issue selected when the picker was asked for.
     Users {
         key: String,
@@ -228,7 +233,7 @@ impl App {
                         undo_swap(rows, &a, &b);
                     }
                 }
-                if matches!(what, "Accept" | "Accept rank" | "Bounce" | "Bounce move" | "Park") {
+                if matches!(what, "Accept" | "Accept rank" | "Bounce" | "Bounce move" | "Park" | "Close") {
                     self.session_done(&key, what, &result);
                 }
                 if what == "Comment" {
@@ -263,9 +268,28 @@ impl App {
             Msg::Resolutions(result) => {
                 self.picker_loading = false;
                 match (result, self.pending_transition.take()) {
-                    (Ok(items), Some((key, transition_id))) => self.picker = Some(Picker::Resolution { key, transition_id, items, cursor: 0 }),
+                    (Ok(items), Some((key, transition_id))) => self.picker = Some(Picker::Resolution { key, transition_id, items, cursor: 0, close: false }),
                     (Err(e), _) => self.toast(e.to_string(), true),
                     _ => {}
+                }
+            }
+            Msg::CloseOptions { key, result } => {
+                self.picker_loading = false;
+                match result {
+                    Ok((transitions, all)) => {
+                        let closed = self.cfg.grooming.status_closed.clone();
+                        let Some(transition_id) = crate::grooming::pick_transition(&transitions, &closed) else {
+                            self.toast(format!("No transition to {closed} from this status"), true);
+                            return;
+                        };
+                        let items = crate::grooming::close_options(&all, &self.cfg.grooming.close_resolutions);
+                        if items.is_empty() {
+                            self.toast("Jira has none of the configured closing resolutions", true);
+                            return;
+                        }
+                        self.picker = Some(Picker::Resolution { key, transition_id, items, cursor: 0, close: true });
+                    }
+                    Err(e) => self.toast(e.to_string(), true),
                 }
             }
             Msg::Users { key, result } => {

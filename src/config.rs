@@ -51,6 +51,10 @@ pub struct Grooming {
     pub status_planning: String,
     pub status_ready: String,
     pub status_backlog: String,
+    /// The status `c` closes a ticket into.
+    pub status_closed: String,
+    /// The resolutions `c` offers, by Jira name, in this order.
+    pub close_resolutions: Vec<String>,
     pub planning_transition_id: String,
     pub planning_cap: usize,
     pub needs_detail_cap: usize,
@@ -144,6 +148,8 @@ impl Default for Grooming {
             status_planning: s("Planning"),
             status_ready: s("Ready for Work"),
             status_backlog: s("Backlog"),
+            status_closed: s("Closed"),
+            close_resolutions: ["Done", "Won't Do"].map(s).to_vec(),
             planning_transition_id: s("11"),
             planning_cap: 10,
             needs_detail_cap: 10,
@@ -340,6 +346,8 @@ status_new = "New"
 status_planning = "Planning"
 status_ready = "Ready for Work"
 status_backlog = "Backlog"
+status_closed = "Closed"                   # where `c` closes a ticket in Session
+close_resolutions = ["Done", "Won't Do"]   # the resolutions `c` offers, by Jira name
 planning_transition_id = "11"
 planning_cap = 10
 needs_detail_cap = 10

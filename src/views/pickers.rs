@@ -44,8 +44,8 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                         let names = items.iter().map(|t| Row::plain(transition_row(t)).current_if(t.to.eq_ignore_ascii_case(&status))).collect();
                         rows(ui, p, names, &mut confirm, cursor, None, Some(below))
                     }
-                    Picker::Resolution { key, items, cursor, .. } => {
-                        let below = title_line(ui, p, &format!("Resolution for {key}"));
+                    Picker::Resolution { key, items, cursor, close, .. } => {
+                        let below = title_line(ui, p, &if *close { format!("Close {key} as") } else { format!("Resolution for {key}") });
                         rows(ui, p, items.iter().map(|r| Row::plain(r.name.clone())).collect(), &mut confirm, cursor, None, Some(below))
                     }
                     Picker::Assign { key, items, current, cursor, filter } => {

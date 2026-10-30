@@ -95,6 +95,7 @@ Only a token you paste is saved. Signing out deletes that file.
 | `J/K` | Move a Ready for Work ticket down or up in rank |
 | `l` | Add the team label to the focused ticket |
 | `a` | Assign the focused ticket |
+| `c` | Close the focused ticket as Done or Won't Do |
 | `]/[` or `⇧]/⇧[` | Next or previous epic (with Shift, empty ones too) |
 | `Tab` | Switch between Pre-check and Session |
 | **Team** | |
@@ -147,6 +148,7 @@ The centre shows the selected epic in five blocks: the active sprint's tickets a
 - `y` accepts it: `↑`/`↓` move a ghost row through the Ready queue and `Enter` commits the move to Ready for Work at that place, from Planning or straight from New. `Esc` cancels.
 - `b` bounces it: type a one- or two-line comment and press `⌘Enter`. A Planning ticket goes back to New after the comment posts; a New ticket gets the comment only.
 - `p` parks it in Backlog.
+- `c` closes it (any row): a picker offers the configured closing resolutions (Done, Won't Do) and Enter moves it to `status_closed` with that resolution.
 
 For a Ready for Work row, `J` and `K` move it one place down or up in rank with a single rank call (the row swaps at once and swaps back if the call fails).
 
@@ -156,7 +158,7 @@ A timer runs per candidate and turns amber at 3 minutes and red at 5. The Ready 
 
 Pre-check: before the meeting. Judge each New ticket against the readiness bar, then promote the ready set to Planning and write the report. The bar is one question: can a stranger tell WHAT is being done and WHEN it is done? `r` yes, ready; `w` unclear what is being done; `n` unclear when it is done; `e` empty, nothing to judge. When in doubt, pass. Promote moves the ready set to Planning (the top `planning_cap` by rank) and writes today's report; paste the report into the team channel.
 
-Session: in the meeting. Walk the roadmap epics first, then tickets with no epic, ongoing epics and the rest; accept each Proposed or New ticket into the epic's Ready for Work queue in rank. Decide each ticket: `y` Ready for Work, accept and place it in rank; `b` bounce with a one-line comment on what's missing, Planning goes back to New; `p` Backlog, real work, lower priority. `J`/`K` move a Ready for Work ticket down or up in rank. An Unclaimed ticket is not on the team's map yet: `l` labels it PLAT, `a` assigns it. Three to five minutes per ticket. Past that, bounce.
+Session: in the meeting. Walk the roadmap epics first, then tickets with no epic, ongoing epics and the rest; accept each Proposed or New ticket into the epic's Ready for Work queue in rank. Decide each ticket: `y` Ready for Work, accept and place it in rank; `b` bounce with a one-line comment on what's missing, Planning goes back to New; `p` Backlog, real work, lower priority. `J`/`K` move a Ready for Work ticket down or up in rank. An Unclaimed ticket is not on the team's map yet: `l` labels it PLAT, `a` assigns it. `c` Close: Done, or Won't Do when the work no longer matters. Three to five minutes per ticket. Past that, bounce.
 
 ## Team
 
