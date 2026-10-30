@@ -332,23 +332,57 @@ attention. The report format is the contract; the command is not modified.
 
 ### Session mode
 
-Epic-by-epic walk. Left rail: epics with Planning / Ready for Work / New
-counts; epics with nothing in Planning are dimmed and skipped by `]` and
-`[`. Centre: the selected epic's `Ready for Work` queue in rank order with
-its `Planning` candidates beneath, each with the report badge if any.
+An epic-by-epic walk in four stages, so the meeting spends its time on
+the roadmap first:
 
-For the focused candidate:
+1. **Roadmap**: epics carrying `initiative_label` (`roadmap`), in the
+   Roadmap screen's order: horizon Now, then Next, then Later (the same
+   derivation as §9: `horizon:` label, else `horizon_by_status`, else the
+   status category); within a horizon `P0` before `P1` before unlabelled;
+   then the epics' rank.
+2. **No epic**: the team's tickets with no parent, as one row.
+3. **Ongoing**: epics whose summary contains "(ongoing)" and that are not
+   initiatives, in rank order.
+4. **Other epics**: everything else, in rank order.
+
+Left rail: a stage header over each group, then its epics with counts of
+tickets in the active sprint, the next sprint, `Ready for Work`, Proposed
+(`Planning`) and `New`. Epics with nothing Proposed and nothing `New` are
+dimmed and skipped by `]` and `[` (Shift lands on them too). Epics with
+nothing in any of Ready, Proposed or New are left out.
+
+Centre, for the selected epic, five blocks in this order: the active
+sprint's tickets (named for the sprint, "Sprint 92 · 3"), the next sprint's
+(the first future sprint of the board), the `Ready for Work` queue in rank
+order, Proposed (`Planning` tickets, each with its report badge), and
+`New`. The sprint blocks are context only, drawn muted. The cursor walks
+the Ready, Proposed and New rows as one list; entering an epic puts it on
+the first Proposed or New row. The candidates are the Proposed and New
+rows; for the focused candidate:
 
 - `y` accept: enters placement, where `↑`/`↓` move a ghost row through the
-  Ready queue and `Enter` commits one transition to `Ready for Work` plus
-  one rank-before or rank-after call. `Esc` cancels.
+  Ready queue and `Enter` commits one transition to `Ready for Work` (from
+  `Planning` or straight from `New`) plus one rank-before or rank-after
+  call. `Esc` cancels.
 - `b` bounce: an inline box requires a one- or two-line comment; `⌘Enter`
-  posts the comment then transitions to `New`.
+  posts the comment then transitions a `Planning` ticket to `New`. A `New`
+  ticket gets the comment only.
 - `p` park: transitions to `Backlog`.
 
-A per-ticket timer starts on focus, amber at 3 minutes, red at 5. The header
-shows total `Ready for Work` against the ceilings, amber past the soft
-ceiling and red past the hard one. Warnings never block.
+For a focused `Ready for Work` row, `J` and `K` move it one place down or
+up with a single rank call (after the next row, or before the previous
+one); the list reorders when the refresh lands.
+
+A per-ticket timer starts when a candidate takes focus, amber at 3
+minutes, red at 5. The header shows total `Ready for Work` against the
+ceilings, amber past the soft ceiling and red past the hard one. Warnings
+never block.
+
+The pre-check's written report lists epics in the same four stages,
+roadmap first, each epic heading carrying its stage and, for roadmap
+epics, its horizon and priority (`· roadmap (Now, P0)`); "(no epic)" is
+stage two and so follows the roadmap epics. The report's section names
+and row formats do not change, so the parser keeps working.
 
 ### Guidance
 
@@ -358,7 +392,7 @@ Static text in the grooming runbook's words, from `views::grooming_guide`:
 - Rubric card: over the focused ticket, the readiness bar (pre-check) or the three decisions (session), keys drawn as in the hint bar.
 - All-judged cue: on the summary row, "N of M judged" (or "All M judged") and that Enter opens the summary.
 - Promote explainer: at the top of the Promote dialog, what Promote moves, the cap when it holds tickets back, the report path, and "Paste the report into the team channel".
-- Empty Planning: an epic with nothing in Planning says to run a pre-check first or pick another epic with `]`.
+- Nothing to groom: an epic with nothing Proposed and nothing New says to run a pre-check first or pick another epic with `]`.
 
 ### Deviations (plan 2)
 
