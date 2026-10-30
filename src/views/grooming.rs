@@ -516,7 +516,7 @@ fn session_body(app: &mut App, ui: &mut Ui, p: &Palette) {
     let queues = app.session_queues();
     let rail: Vec<RailRow> = queues
         .iter()
-        .map(|q| RailRow { epic: q.epic.clone(), summary: q.summary.clone(), planning: q.planning.len(), ready: q.ready.len(), new: q.new_count })
+        .map(|q| RailRow { epic: q.epic.clone(), summary: q.summary.clone(), planning: q.planning.len(), ready: q.ready.len(), new: q.new.len() })
         .collect();
     let at = app.grooming.epic_index.min(rail.len().saturating_sub(1));
     let (ready, planning): (Vec<jira::Issue>, Vec<jira::Issue>) =
@@ -527,7 +527,7 @@ fn session_body(app: &mut App, ui: &mut Ui, p: &Palette) {
         empty_state(ui, p, &format!("Nothing in {}, {} or {}", g.status_planning, g.status_ready, g.status_new));
         return;
     }
-    let cursor = app.grooming.cursor.min(planning.len().saturating_sub(1));
+    let cursor = app.grooming.cursor.min((ready.len() + planning.len()).saturating_sub(1));
     let list_w = (ui.available_width() * 0.36).clamp(LIST_MIN, LIST_MAX).min(ui.available_width());
     ui.horizontal_top(|ui| {
         ui.spacing_mut().item_spacing.x = PANE_GAP;
@@ -954,6 +954,8 @@ mod tests {
         );
         app.grooming.mode = GroomMode::Session;
         app.grooming.focused_since = Some(std::time::Instant::now());
+        app.grooming.epic_index = 1;
+        app.grooming.cursor = 0; // the view still reads the cursor as a Planning index until task 3
         let texts = |app: &mut App| {
             let shapes = crate::testutil::paint_at2(egui::vec2(1400.0, 800.0), |ui| show(app, ui));
             crate::testutil::inks(&shapes).into_iter().map(|(t, _)| t).collect::<Vec<_>>()

@@ -140,7 +140,8 @@ fn health_word(s: &str) -> Health {
     }
 }
 
-fn horizon_of(epic: &Issue, cfg: &config::Roadmap) -> Horizon {
+/// The epic's horizon: a `horizon:` label, else `horizon_by_status`, else its status category.
+pub fn horizon_of(epic: &Issue, cfg: &config::Roadmap) -> Horizon {
     if let Some(h) = epic.labels.iter().find_map(|l| l.strip_prefix("horizon:").and_then(horizon_word)) {
         return h;
     }
@@ -161,7 +162,8 @@ fn health_of(epic: &Issue, cfg: &config::Roadmap) -> Health {
     custom_text(epic, &cfg.health_field).map(|v| health_word(&v)).unwrap_or(Health::None)
 }
 
-fn priority_of(epic: &Issue) -> Option<String> {
+/// `P0`/`P1` from labels, else from Jira priority (Highest → P0, High → P1).
+pub fn priority_of(epic: &Issue) -> Option<String> {
     ["P0", "P1"].iter().find(|p| has_label(epic, p)).map(|p| p.to_string()).or_else(|| match epic.priority.as_str() {
         "Highest" => Some("P0".into()),
         "High" => Some("P1".into()),

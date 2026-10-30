@@ -538,7 +538,19 @@ Append to `src/app/groom.rs` tests (the `session_app` helper has CI-5 and CI-6 R
         let mut ready_81 = session_issue("CI-31", "Ready for Work");
         ready_81.parent_key = Some("CI-81".into());
         ready_81.parent_summary = Some("Epic CI-81".into());
-        app.store.absorb(ListId::TeamOpen, vec![only_ready, with_new, ready_81]);
+        // `absorb` replaces the list, so the session's four tickets go in again with the new ones.
+        app.store.absorb(
+            ListId::TeamOpen,
+            vec![
+                session_issue("CI-5", "Ready for Work"),
+                session_issue("CI-1", "Planning"),
+                session_issue("CI-6", "Ready for Work"),
+                session_issue("CI-2", "Planning"),
+                only_ready,
+                with_new,
+                ready_81,
+            ],
+        );
         // Unlisted epics sort by key: CI-79, CI-80, CI-81.
         app.grooming.epic_index = 0;
         app.groom_epic(1, true);
@@ -596,7 +608,11 @@ Append to `src/app/groom.rs` tests:
             ("PUT", "/rest/agile/1.0/issue/rank", serde_json::json!({})),
         ]);
         let mut app = session_app(&base);
-        app.store.absorb(ListId::TeamOpen, vec![new_ticket]);
+        // `absorb` replaces the list: the session's four tickets plus the New one.
+        app.store.absorb(
+            ListId::TeamOpen,
+            vec![session_issue("CI-5", "Ready for Work"), session_issue("CI-1", "Planning"), session_issue("CI-6", "Ready for Work"), session_issue("CI-2", "Planning"), new_ticket],
+        );
         // Rows: CI-5, CI-6 (Ready), CI-1, CI-2 (Planning), CI-7 (New).
         app.grooming.cursor = 4;
         assert_eq!(app.session_focus().map(|i| i.key.as_str()), Some("CI-7"));
@@ -616,7 +632,10 @@ Append to `src/app/groom.rs` tests:
         new_ticket.status.category = "new".into();
         let (base, rx) = crate::jira::tests::stub_server(vec![("POST", "/rest/api/3/issue/CI-7/comment", serde_json::json!({"id": "1"}))]);
         let mut app = session_app(&base);
-        app.store.absorb(ListId::TeamOpen, vec![new_ticket]);
+        app.store.absorb(
+            ListId::TeamOpen,
+            vec![session_issue("CI-5", "Ready for Work"), session_issue("CI-1", "Planning"), session_issue("CI-6", "Ready for Work"), session_issue("CI-2", "Planning"), new_ticket],
+        );
         app.grooming.cursor = 4;
         app.grooming.bounce_text = Some("Which clusters?".into());
         app.bounce();

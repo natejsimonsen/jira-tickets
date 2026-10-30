@@ -2,15 +2,15 @@
 
 use super::msg::{Msg, done_toast};
 use super::{App, GroomMode, PromoteRun, ToastKind};
-use crate::grooming::{self, Candidate, Code, EpicQueue, Promotion, RunRow, Verdict};
+use crate::grooming::{self, Candidate, Code, EpicQueue, Promotion, RunRow, StageContext, Verdict};
 use crate::jira::{self, Client, Issue};
 use crate::report::{self, WriteError};
 use crate::store::ListId;
 use std::path::PathBuf;
 use std::time::Instant;
 
-/// The epic `delta` steps from `from` in a rail whose epics have `planning` tickets each, clamped to the ends.
-/// With `skip_empty`, epics with no Planning tickets are stepped over; when none is left that way, `from` stays.
+/// The epic `delta` steps from `from` in a rail whose epics have candidates each, clamped to the ends.
+/// With `skip_empty`, epics with no candidates are stepped over; when none is left that way, `from` stays.
 pub fn step_epic(planning: &[usize], from: usize, delta: i32, skip_empty: bool) -> usize {
     if planning.is_empty() || delta == 0 {
         return from.min(planning.len().saturating_sub(1));
@@ -43,9 +43,27 @@ impl App {
             .collect()
     }
 
-    /// The session rail: the team's action items (no epics) grouped by epic.
+    /// What `grooming::epic_queues` needs from the app: the loaded epics, the roadmap rules, the sprint names.
+    pub fn stage_context(&self) -> StageContext<'_> {
+        let (active, next) = grooming::sprint_names(&self.sprints);
+        StageContext {
+            epics: self.store.list(ListId::Epics),
+            initiative_label: &self.cfg.roadmap.initiative_label,
+            roadmap: &self.cfg.roadmap,
+            active_sprint: active,
+            next_sprint: next,
+        }
+    }
+
+    /// The session rail: the team's action items (no epics) grouped by epic, in stage order.
     pub fn session_queues(&self) -> Vec<EpicQueue<'_>> {
-        grooming::epic_queues(&crate::filter::action_items(&self.store.list(ListId::TeamOpen)), &self.cfg.scope.team_label, &self.cfg.grooming)
+        let ctx = self.stage_context();
+        grooming::epic_queues(&crate::filter::action_items(&self.store.list(ListId::TeamOpen)), &self.cfg.scope.team_label, &self.cfg.grooming, &ctx)
+    }
+
+    /// The cursor index of the selected epic's first candidate, where a freshly entered epic starts.
+    fn session_start_cursor(&self) -> usize {
+        self.session_queues().get(self.grooming.epic_index).map_or(0, |q| q.first_candidate())
     }
 
     /// The team's action items in `Ready for Work`, for the ceiling pill.
@@ -88,19 +106,20 @@ impl App {
         if self.grooming.mode == mode {
             return;
         }
+        let cursor = if mode == GroomMode::Session { self.session_start_cursor() } else { 0 };
         let g = &mut self.grooming;
         g.mode = mode;
-        g.cursor = 0;
+        g.cursor = cursor;
         g.placement = None;
         g.bounce_text = None;
         g.focused_since = Some(Instant::now());
     }
 
-    /// Pre-check: rows plus the summary (cursor == rows). Session: the selected epic's Planning candidates.
+    /// Pre-check: rows plus the summary (cursor == rows). Session: the selected epic's Ready rows and candidates.
     pub(super) fn groom_move(&mut self, delta: i32) {
         let last = match self.grooming.mode {
             GroomMode::PreCheck => self.pre_check_candidates().len(),
-            GroomMode::Session => self.session_queues().get(self.grooming.epic_index).map_or(0, |q| q.planning.len().saturating_sub(1)),
+            GroomMode::Session => self.session_queues().get(self.grooming.epic_index).map_or(0, |q| q.rows().len().saturating_sub(1)),
         };
         let to = (self.grooming.cursor as i64 + delta as i64).clamp(0, last as i64) as usize;
         if to != self.grooming.cursor {
@@ -111,12 +130,13 @@ impl App {
     }
 
     pub(super) fn groom_epic(&mut self, delta: i32, skip_empty: bool) {
-        let planning: Vec<usize> = self.session_queues().iter().map(|q| q.planning.len()).collect();
-        let to = step_epic(&planning, self.grooming.epic_index, delta, skip_empty);
+        let counts: Vec<usize> = self.session_queues().iter().map(|q| q.candidates().len()).collect();
+        let to = step_epic(&counts, self.grooming.epic_index, delta, skip_empty);
         if to != self.grooming.epic_index {
+            let start = self.session_queues().get(to).map_or(0, |q| q.first_candidate());
             let g = &mut self.grooming;
             g.epic_index = to;
-            g.cursor = 0;
+            g.cursor = start;
             g.placement = None;
             g.bounce_text = None;
             g.focused_since = Some(Instant::now());
@@ -382,10 +402,21 @@ pub fn transition_to(c: &Client, key: &str, target_status: &str) -> jira::Result
 
 /// The session's decisions: accept with placement, bounce with a comment, park.
 impl App {
-    /// Session: the focused Planning candidate.
+    /// Session: the candidate under the cursor. A Ready row under the cursor is not a candidate.
     pub fn session_focus(&self) -> Option<&Issue> {
+        let queues = self.session_queues();
+        let q = queues.get(self.grooming.epic_index)?;
+        let at = self.grooming.cursor.checked_sub(q.first_candidate())?;
+        q.candidates().get(at).copied()
+    }
+
+    /// Session: the Ready row under the cursor, as (index in the Ready queue, key).
+    #[cfg_attr(not(test), expect(dead_code, reason = "the view and the decisions use it from task 2"))]
+    pub fn session_ready_focus(&self) -> Option<(usize, String)> {
+        let queues = self.session_queues();
+        let q = queues.get(self.grooming.epic_index)?;
         let at = self.grooming.cursor;
-        self.session_queues().get(self.grooming.epic_index).and_then(|q| q.planning.get(at).copied())
+        q.ready.get(at).map(|i| (at, i.key.clone()))
     }
 
     /// The selected epic's Ready for Work keys, in rank order.
@@ -530,7 +561,7 @@ impl App {
         }
         let queues = self.session_queues();
         let at = epic.and_then(|k| queues.iter().position(|q| q.epic == k)).unwrap_or(self.grooming.epic_index).min(queues.len().saturating_sub(1));
-        let n = queues.get(at).map_or(0, |q| q.planning.len());
+        let n = queues.get(at).map_or(0, |q| q.rows().len());
         drop(queues);
         self.grooming.epic_index = at;
         self.grooming.cursor = self.grooming.cursor.min(n.saturating_sub(1));
@@ -698,7 +729,7 @@ mod tests {
         assert_eq!(cands, [("CI-1".to_string(), 1), ("CI-2".to_string(), 3)], "the epic is not a candidate, but it is numbered before it is dropped");
         let queues = app.session_queues();
         assert_eq!(queues.len(), 1);
-        assert_eq!(queues[0].new_count, 2, "the epic in New is in no session queue");
+        assert_eq!(queues[0].new.len(), 2, "the epic in New is in no session queue");
         assert_eq!(queues[0].ready.iter().map(|i| i.key.as_str()).collect::<Vec<_>>(), ["CI-9"]);
         assert_eq!(app.ready_total(), 1, "the epic in Ready for Work is not counted");
     }
@@ -844,6 +875,7 @@ mod tests {
         let mut app = App::for_test(cfg, Some(client));
         app.screen = super::super::Screen::Grooming;
         app.grooming.mode = GroomMode::Session;
+        app.grooming.cursor = 2; // past the two Ready rows, on the first candidate
         app.store.absorb(
             ListId::TeamOpen,
             vec![
@@ -1035,7 +1067,7 @@ mod tests {
         let w = writes(&rx);
         assert_eq!(w.len(), 1, "{w:?}");
         assert_eq!(w[0].2, serde_json::json!({"transition": {"id": "51"}}));
-        assert_eq!(app.grooming.cursor, 0, "the next candidate takes the focus");
+        assert_eq!(app.grooming.cursor, 2, "the next candidate takes the focus");
         assert_eq!(app.session_focus().map(|i| i.key.clone()).as_deref(), Some("CI-2"));
     }
 
@@ -1085,5 +1117,68 @@ mod tests {
         assert_eq!(app.grooming.verdicts.len(), 1, "the summary row takes no verdict");
         app.apply(super::super::Action::OpenSummary, &ctx);
         assert!(app.grooming.summary_open);
+    }
+
+    #[test]
+    fn entering_the_session_focuses_the_first_candidate() {
+        let (base, _rx) = crate::jira::tests::stub_server(vec![]);
+        let mut app = session_app(&base);
+        app.grooming.mode = GroomMode::PreCheck;
+        app.groom_mode(GroomMode::Session);
+        assert_eq!(app.grooming.cursor, 2, "past the two Ready rows");
+        assert_eq!(app.session_focus().map(|i| i.key.as_str()), Some("CI-1"));
+        assert_eq!(app.session_ready_focus(), None);
+    }
+
+    #[test]
+    fn the_cursor_walks_ready_rows_then_candidates() {
+        let (base, _rx) = crate::jira::tests::stub_server(vec![]);
+        let mut app = session_app(&base);
+        app.grooming.cursor = 2;
+        app.groom_move(-1);
+        assert_eq!(app.session_ready_focus(), Some((1, "CI-6".to_string())));
+        assert!(app.session_focus().is_none(), "a Ready row is not a candidate");
+        app.groom_move(-5);
+        assert_eq!(app.grooming.cursor, 0);
+        app.groom_move(9);
+        assert_eq!(app.grooming.cursor, 3, "the last candidate");
+        assert_eq!(app.session_focus().map(|i| i.key.as_str()), Some("CI-2"));
+    }
+
+    #[test]
+    fn stepping_epics_lands_on_the_first_candidate_and_skips_epics_without_one() {
+        let (base, _rx) = crate::jira::tests::stub_server(vec![]);
+        let mut app = session_app(&base);
+        let mut only_ready = session_issue("CI-20", "Ready for Work");
+        only_ready.parent_key = Some("CI-80".into());
+        only_ready.parent_summary = Some("Epic CI-80".into());
+        let mut with_new = session_issue("CI-30", "New");
+        with_new.parent_key = Some("CI-81".into());
+        with_new.parent_summary = Some("Epic CI-81".into());
+        let mut ready_81 = session_issue("CI-31", "Ready for Work");
+        ready_81.parent_key = Some("CI-81".into());
+        ready_81.parent_summary = Some("Epic CI-81".into());
+        // `absorb` replaces the list, so the session's four tickets go in again with the new ones.
+        app.store.absorb(
+            ListId::TeamOpen,
+            vec![
+                session_issue("CI-5", "Ready for Work"),
+                session_issue("CI-1", "Planning"),
+                session_issue("CI-6", "Ready for Work"),
+                session_issue("CI-2", "Planning"),
+                only_ready,
+                with_new,
+                ready_81,
+            ],
+        );
+        // Unlisted epics sort by key: CI-79, CI-80, CI-81.
+        app.grooming.epic_index = 0;
+        app.groom_epic(1, true);
+        assert_eq!(app.grooming.epic_index, 2, "CI-80 has no candidate and is skipped");
+        assert_eq!(app.grooming.cursor, 1, "past CI-81's one Ready row");
+        assert_eq!(app.session_focus().map(|i| i.key.as_str()), Some("CI-30"), "a New ticket is a candidate");
+        app.groom_epic(-1, false);
+        assert_eq!(app.grooming.epic_index, 1, "Shift lands on the empty epic");
+        assert!(app.session_focus().is_none());
     }
 }
