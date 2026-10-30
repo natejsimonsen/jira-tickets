@@ -258,10 +258,16 @@ impl App {
             Action::StartAccept => self.start_accept(),
             Action::PlacementMove(d) => self.placement_move(d),
             Action::Accept => self.accept(),
-            Action::CancelPlacement => self.grooming.placement = None,
+            Action::CancelPlacement => {
+                self.grooming.placement = None;
+                self.grooming.decision_for = None;
+            }
             Action::StartBounce => self.start_bounce(),
             Action::Bounce => self.bounce(),
-            Action::CancelBounce => self.grooming.bounce_text = None,
+            Action::CancelBounce => {
+                self.grooming.bounce_text = None;
+                self.grooming.decision_for = None;
+            }
             Action::Park => self.park(),
             Action::RankReady(d) => self.rank_ready(d),
             Action::TeamMove(d) => self.team_move(0, d),

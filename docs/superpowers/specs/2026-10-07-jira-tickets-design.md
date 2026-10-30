@@ -335,11 +335,12 @@ attention. The report format is the contract; the command is not modified.
 An epic-by-epic walk in four stages, so the meeting spends its time on
 the roadmap first:
 
-1. **Roadmap**: epics carrying `initiative_label` (`roadmap`), in the
-   Roadmap screen's order: horizon Now, then Next, then Later (the same
-   derivation as §9: `horizon:` label, else `horizon_by_status`, else the
-   status category); within a horizon `P0` before `P1` before unlabelled;
-   then the epics' rank.
+1. **Roadmap**: the initiative epics, ordered by horizon Now, then Next,
+   then Later (the same derivation as §9: `horizon:` label, else
+   `horizon_by_status`, else the status category), then `P0` before `P1`
+   before unlabelled, then the epics' rank. Which epics are initiatives
+   follows §9: those carrying `initiative_label` (`roadmap`), or, when no
+   epic carries it, every epic not marked "(ongoing)".
 2. **No epic**: the team's tickets with no parent, as one row.
 3. **Ongoing**: epics whose summary contains "(ongoing)" and that are not
    initiatives, in rank order.

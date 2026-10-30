@@ -63,7 +63,7 @@ impl App {
 
     /// The cursor index of the selected epic's first candidate, where a freshly entered epic starts.
     fn session_start_cursor(&self) -> usize {
-        self.session_queues().get(self.grooming.epic_index).map_or(0, |q| q.first_candidate())
+        self.session_queues().get(self.grooming.epic_index).map_or(0, |q| q.start_cursor())
     }
 
     /// The team's action items in `Ready for Work`, for the ceiling pill.
@@ -112,6 +112,7 @@ impl App {
         g.cursor = cursor;
         g.placement = None;
         g.bounce_text = None;
+        g.decision_for = None;
         g.focused_since = Some(Instant::now());
     }
 
@@ -125,6 +126,9 @@ impl App {
         if to != self.grooming.cursor {
             self.grooming.cursor = to;
             self.grooming.placement = None;
+            if self.grooming.bounce_text.is_none() {
+                self.grooming.decision_for = None;
+            }
             self.grooming.focused_since = Some(Instant::now());
         }
     }
@@ -133,12 +137,13 @@ impl App {
         let counts: Vec<usize> = self.session_queues().iter().map(|q| q.candidates().len()).collect();
         let to = step_epic(&counts, self.grooming.epic_index, delta, skip_empty);
         if to != self.grooming.epic_index {
-            let start = self.session_queues().get(to).map_or(0, |q| q.first_candidate());
+            let start = self.session_queues().get(to).map_or(0, |q| q.start_cursor());
             let g = &mut self.grooming;
             g.epic_index = to;
             g.cursor = start;
             g.placement = None;
             g.bounce_text = None;
+            g.decision_for = None;
             g.focused_since = Some(Instant::now());
         }
     }
@@ -431,12 +436,34 @@ impl App {
         ok.then(|| self.session_focus().map(|i| i.key.clone())).flatten()
     }
 
+    /// The open placement or bounce box was opened for `key`, the ticket under the cursor now. When the list moved
+    /// under the cursor in between, both close and nothing is sent.
+    fn decision_still_for(&mut self, key: &str) -> bool {
+        if self.grooming.decision_for.as_deref() == Some(key) {
+            return true;
+        }
+        self.grooming.placement = None;
+        self.grooming.bounce_text = None;
+        self.grooming.decision_for = None;
+        self.toast("The list changed under the cursor; nothing was sent", true);
+        false
+    }
+
+    /// Runs a change to the lists or sprints and keeps the session on the same epic and ticket through it.
+    pub(super) fn keeping_session<R>(&mut self, f: impl FnOnce(&mut Self) -> R) -> R {
+        let anchor = (self.grooming.mode == GroomMode::Session).then(|| self.session_anchor());
+        let r = f(self);
+        if let Some((epic, focus)) = anchor {
+            self.session_keep(epic, focus);
+        }
+        r
+    }
+
     /// `y`: the ghost starts under the Ready queue.
     pub(super) fn start_accept(&mut self) {
-        if self.decidable().is_none() {
-            return;
-        }
+        let Some(key) = self.decidable() else { return };
         self.grooming.bounce_text = None;
+        self.grooming.decision_for = Some(key);
         self.grooming.placement = Some(self.session_ready_keys().len());
     }
 
@@ -452,8 +479,12 @@ impl App {
     pub(super) fn accept(&mut self) {
         let Some(at) = self.grooming.placement else { return };
         let Some(key) = self.decidable() else { return };
+        if !self.decision_still_for(&key) {
+            return;
+        }
         let (before, after) = grooming::placement_target(&self.session_ready_keys(), at);
         self.grooming.placement = None;
+        self.grooming.decision_for = None;
         self.grooming.deciding = Some(key.clone());
         let status = self.cfg.grooming.status_ready.clone();
         self.spawn_write(move |c, tx| {
@@ -473,10 +504,9 @@ impl App {
 
     /// `b`: the comment box opens, empty, and takes focus.
     pub(super) fn start_bounce(&mut self) {
-        if self.decidable().is_none() {
-            return;
-        }
+        let Some(key) = self.decidable() else { return };
         self.grooming.placement = None;
+        self.grooming.decision_for = Some(key);
         self.grooming.bounce_text = Some(String::new());
         self.grooming.bounce_focus = true;
     }
@@ -486,9 +516,13 @@ impl App {
     pub(super) fn bounce(&mut self) {
         let Some(text) = self.grooming.bounce_text.clone().filter(|t| grooming::bounce_comment_ok(t)) else { return };
         let Some(key) = self.decidable() else { return };
+        if !self.decision_still_for(&key) {
+            return;
+        }
         let status = self.cfg.grooming.status_new.clone();
         // A New ticket gets the comment only; there is nothing to move it back to.
         let already_new = self.session_focus().is_some_and(|i| i.status.name == status);
+        self.grooming.decision_for = None;
         self.grooming.deciding = Some(key.clone());
         self.spawn_write(move |c, tx| {
             // A move that fails after the comment posted is its own answer ("Bounce move"): the box must close so
@@ -510,6 +544,7 @@ impl App {
         let Some(key) = self.decidable() else { return };
         self.grooming.placement = None;
         self.grooming.bounce_text = None;
+        self.grooming.decision_for = None;
         self.grooming.deciding = Some(key.clone());
         let status = self.cfg.grooming.status_backlog.clone();
         self.spawn_write(move |c, tx| {
@@ -560,31 +595,50 @@ impl App {
             // The comment is on the ticket; only the move is left to retry.
             self.grooming.bounce_text = None;
         }
-        // The move to Ready for Work happened even though its rank did not.
-        if result.is_err() && what != "Accept rank" {
+        // The move to Ready for Work happened even though its rank did not; the bounce's comment is on the ticket
+        // even though its move failed.
+        if result.is_err() && !matches!(what, "Accept rank" | "Bounce move") {
             return;
         }
         let g = &self.cfg.grooming;
-        let (status, category) = match what {
-            "Accept" | "Accept rank" => (g.status_ready.clone(), "indeterminate"),
-            "Bounce" => (g.status_new.clone(), "new"),
-            _ => (g.status_backlog.clone(), "new"),
+        let moved = match what {
+            "Accept" | "Accept rank" => Some((g.status_ready.clone(), "indeterminate")),
+            "Bounce" => Some((g.status_new.clone(), "new")),
+            "Bounce move" => None,
+            _ => Some((g.status_backlog.clone(), "new")),
         };
         match what {
-            "Accept" | "Accept rank" => self.grooming.placement = None,
-            "Bounce" => self.grooming.bounce_text = None,
+            "Accept" | "Accept rank" => {
+                self.grooming.placement = None;
+                self.grooming.decision_for = None;
+            }
+            "Bounce" | "Bounce move" => {
+                self.grooming.bounce_text = None;
+                self.grooming.decision_for = None;
+            }
             _ => {}
         }
         let (epic, focus) = self.session_anchor();
-        if let Some(i) = self.store.issues.get_mut(key) {
+        if let Some((status, category)) = moved
+            && let Some(i) = self.store.issues.get_mut(key)
+        {
             i.status.name = status;
             i.status.category = category.into();
         }
+        let acted_on_focus = focus.as_deref() == Some(key);
         // The accepted ticket joined the Ready rows, so the candidate that followed it sits one row further on.
-        if matches!(what, "Accept" | "Accept rank") && focus.as_deref() == Some(key) {
+        if acted_on_focus && matches!(what, "Accept" | "Accept rank") {
             self.grooming.cursor += 1;
         }
-        self.session_keep(epic, focus);
+        // An accepted or bounced ticket stays among the rows, so the cursor keeps its index rather than following it.
+        let follow = if acted_on_focus && matches!(what, "Accept" | "Accept rank" | "Bounce" | "Bounce move") { None } else { focus };
+        self.session_keep(epic, follow);
+        // A bounced ticket is still a candidate (it joined New or stayed there): move past it.
+        if acted_on_focus && matches!(what, "Bounce" | "Bounce move") && self.session_focus().is_some_and(|i| i.key == key) {
+            let n = self.session_queues().get(self.grooming.epic_index).map_or(0, |q| q.rows().len());
+            self.grooming.cursor = (self.grooming.cursor + 1).min(n.saturating_sub(1));
+            self.grooming.focused_since = Some(Instant::now());
+        }
     }
 
     /// The selected epic's key and the focused candidate's, taken before the lists change.
@@ -602,13 +656,16 @@ impl App {
         let queues = self.session_queues();
         let at = epic.and_then(|k| queues.iter().position(|q| q.epic == k)).unwrap_or(self.grooming.epic_index).min(queues.len().saturating_sub(1));
         let n = queues.get(at).map_or(0, |q| q.rows().len());
+        // The focused ticket keeps the cursor wherever it moved to; without it, the old index clamps.
+        let follow = focus.as_ref().and_then(|f| queues.get(at)?.rows().iter().position(|i| &i.key == f));
         drop(queues);
         self.grooming.epic_index = at;
-        self.grooming.cursor = self.grooming.cursor.min(n.saturating_sub(1));
+        self.grooming.cursor = follow.unwrap_or_else(|| self.grooming.cursor.min(n.saturating_sub(1)));
         if self.session_focus().map(|i| i.key.clone()) != focus {
             // A placement or bounce box was for the ticket that left.
             self.grooming.placement = None;
             self.grooming.bounce_text = None;
+            self.grooming.decision_for = None;
             self.grooming.focused_since = Some(Instant::now());
         }
     }
@@ -955,6 +1012,7 @@ mod tests {
         ]);
         let mut app = session_app(&base);
         app.grooming.placement = Some(0);
+        app.grooming.decision_for = Some("CI-1".into());
         app.actions.push(super::super::Action::Accept);
         app.drain();
         assert_eq!(app.grooming.deciding.as_deref(), Some("CI-1"), "in flight");
@@ -981,6 +1039,7 @@ mod tests {
         ]);
         let mut app = session_app(&base);
         app.grooming.placement = Some(0);
+        app.grooming.decision_for = Some("CI-1".into());
         app.actions.push(super::super::Action::Accept);
         drain_until(&mut app, |a| a.grooming.deciding.is_none());
         assert_eq!(app.grooming.cursor, 3, "the Ready queue grew by one");
@@ -996,6 +1055,7 @@ mod tests {
         ]);
         let mut app = session_app(&base);
         app.grooming.placement = Some(0);
+        app.grooming.decision_for = Some("CI-1".into());
         app.actions.push(super::super::Action::Accept);
         drain_until(&mut app, |a| a.grooming.deciding.is_none());
         let w = writes(&rx);
@@ -1043,6 +1103,7 @@ mod tests {
         app.drain();
         assert_eq!(app.grooming.bounce_text.as_deref(), Some(""));
         app.grooming.bounce_text = Some("Which clusters?".into());
+        app.grooming.decision_for = Some("CI-1".into());
         app.actions.push(super::super::Action::Bounce);
         drain_until(&mut app, |a| a.grooming.deciding.is_none());
         let w = writes(&rx);
@@ -1078,6 +1139,7 @@ mod tests {
         let (base, rx) = crate::jira::tests::stub_server(vec![("GET", "/rest/api/3/issue/CI-1/transitions", transitions_json())]);
         let mut app = session_app(&base);
         app.grooming.bounce_text = Some("Which clusters?".into());
+        app.grooming.decision_for = Some("CI-1".into());
         app.actions.push(super::super::Action::Bounce);
         drain_until(&mut app, |a| a.grooming.deciding.is_none());
         assert_eq!(app.grooming.bounce_text.as_deref(), Some("Which clusters?"));
@@ -1095,6 +1157,7 @@ mod tests {
         ]);
         let mut app = session_app(&base);
         app.grooming.bounce_text = Some("Which clusters?".into());
+        app.grooming.decision_for = Some("CI-1".into());
         app.actions.push(super::super::Action::Bounce);
         drain_until(&mut app, |a| a.grooming.deciding.is_none());
         let w = writes(&rx);
@@ -1294,6 +1357,7 @@ mod tests {
         );
         app.grooming.cursor = 4;
         app.grooming.bounce_text = Some("Which clusters?".into());
+        app.grooming.decision_for = Some("CI-7".into());
         app.bounce();
         drain_until(&mut app, |a| a.grooming.deciding.is_none());
         let w = writes(&rx);
@@ -1341,5 +1405,202 @@ mod tests {
         drain_until(&mut app, |a| a.pending_ranks.is_empty());
         let ready: Vec<String> = app.session_queues()[0].ready.iter().map(|i| i.key.clone()).collect();
         assert_eq!(ready, ["CI-5", "CI-6"]);
+    }
+
+    fn in_epic(mut i: crate::jira::Issue, epic: &str) -> crate::jira::Issue {
+        i.parent_key = Some(epic.into());
+        i.parent_summary = Some(format!("Epic {epic}"));
+        i
+    }
+
+    fn toast_text(app: &App) -> String {
+        app.toast.as_ref().map(|t| t.text.clone()).unwrap_or_default()
+    }
+
+    #[test]
+    fn a_placement_for_a_ticket_that_left_the_list_sends_nothing() {
+        let _g = crate::jira::tests::WRITE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (base, rx) = crate::jira::tests::stub_server(vec![]);
+        let mut app = session_app(&base);
+        app.start_accept();
+        assert_eq!(app.grooming.decision_for.as_deref(), Some("CI-1"));
+        // CI-1 is gone; CI-2 now sits under the cursor.
+        app.store.absorb(
+            ListId::TeamOpen,
+            vec![session_issue("CI-5", "Ready for Work"), session_issue("CI-6", "Ready for Work"), session_issue("CI-2", "Planning")],
+        );
+        app.accept();
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        assert!(writes(&rx).is_empty());
+        assert!(app.grooming.placement.is_none() && app.grooming.decision_for.is_none() && app.grooming.deciding.is_none());
+        assert!(toast_text(&app).contains("nothing was sent"));
+    }
+
+    #[test]
+    fn a_bounce_box_for_a_ticket_that_left_the_list_sends_nothing() {
+        let _g = crate::jira::tests::WRITE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (base, rx) = crate::jira::tests::stub_server(vec![]);
+        let mut app = session_app(&base);
+        app.start_bounce();
+        app.grooming.bounce_text = Some("Which clusters?".into());
+        app.store.absorb(
+            ListId::TeamOpen,
+            vec![session_issue("CI-5", "Ready for Work"), session_issue("CI-6", "Ready for Work"), session_issue("CI-2", "Planning")],
+        );
+        app.bounce();
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        assert!(writes(&rx).is_empty());
+        assert!(app.grooming.bounce_text.is_none() && app.grooming.decision_for.is_none() && app.grooming.deciding.is_none());
+        assert!(toast_text(&app).contains("nothing was sent"));
+    }
+
+    #[test]
+    fn cancelling_clears_the_decision_key() {
+        let (base, _rx) = crate::jira::tests::stub_server(vec![]);
+        let mut app = session_app(&base);
+        app.start_accept();
+        app.apply(super::super::Action::CancelPlacement, &egui::Context::default());
+        assert!(app.grooming.decision_for.is_none());
+        app.start_bounce();
+        app.apply(super::super::Action::CancelBounce, &egui::Context::default());
+        assert!(app.grooming.decision_for.is_none());
+    }
+
+    #[test]
+    fn session_keep_follows_the_focused_ticket() {
+        let (base, _rx) = crate::jira::tests::stub_server(vec![]);
+        let mut app = session_app(&base);
+        app.grooming.cursor = 3; // CI-2
+        let (epic, focus) = app.session_anchor();
+        // A new Ready ticket lands before CI-2.
+        app.store.absorb(
+            ListId::TeamOpen,
+            vec![
+                session_issue("CI-5", "Ready for Work"),
+                session_issue("CI-8", "Ready for Work"),
+                session_issue("CI-1", "Planning"),
+                session_issue("CI-6", "Ready for Work"),
+                session_issue("CI-2", "Planning"),
+            ],
+        );
+        app.session_keep(epic, focus);
+        assert_eq!(app.grooming.cursor, 4, "one row further on");
+        assert_eq!(app.session_focus().map(|i| i.key.as_str()), Some("CI-2"));
+    }
+
+    #[test]
+    fn an_epics_landing_keeps_the_focus_when_the_rail_reorders() {
+        let (base, _rx) = crate::jira::tests::stub_server(vec![]);
+        let mut app = session_app(&base);
+        app.store.absorb(
+            ListId::TeamOpen,
+            vec![
+                session_issue("CI-5", "Ready for Work"),
+                session_issue("CI-1", "Planning"),
+                session_issue("CI-6", "Ready for Work"),
+                session_issue("CI-2", "Planning"),
+                in_epic(session_issue("CI-20", "Planning"), "CI-80"),
+            ],
+        );
+        app.grooming.cursor = 3; // CI-2 in CI-79
+        assert_eq!(app.session_focus().map(|i| i.key.as_str()), Some("CI-2"));
+        let before: Vec<Option<String>> = app.session_queues().iter().map(|q| q.epic.clone()).collect();
+        let mut roadmap = session_issue("CI-80", "In Progress");
+        roadmap.labels = vec!["roadmap".into()];
+        let ctx_epic = app.session_anchor().0;
+        app.handle(super::super::Msg::List { id: ListId::Epics, result: Ok(vec![roadmap]), seq: None, with_members: false });
+        let after: Vec<Option<String>> = app.session_queues().iter().map(|q| q.epic.clone()).collect();
+        assert_ne!(before, after, "the rail reordered");
+        assert_eq!(app.session_queues()[app.grooming.epic_index].epic, ctx_epic.unwrap());
+        assert_eq!(app.session_focus().map(|i| i.key.as_str()), Some("CI-2"));
+    }
+
+    #[test]
+    fn accepting_the_last_candidate_leaves_the_cursor_on_the_new_last_row() {
+        let _g = crate::jira::tests::WRITE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (base, _rx) = crate::jira::tests::stub_server(vec![
+            ("GET", "/rest/api/3/issue/CI-1/transitions", transitions_json()),
+            ("POST", "/rest/api/3/issue/CI-1/transitions", serde_json::json!({})),
+            ("PUT", "/rest/agile/1.0/issue/rank", serde_json::json!({})),
+        ]);
+        let mut app = session_app(&base);
+        // Only CI-1 is left to decide; the cursor is on it.
+        app.store.absorb(
+            ListId::TeamOpen,
+            vec![session_issue("CI-5", "Ready for Work"), session_issue("CI-6", "Ready for Work"), session_issue("CI-1", "Planning")],
+        );
+        app.start_accept();
+        app.accept();
+        drain_until(&mut app, |a| a.grooming.deciding.is_none());
+        assert_eq!(app.session_queues()[0].rows().len(), 3);
+        assert_eq!(app.grooming.cursor, 2, "clamped to the last row, which is the accepted ticket in Ready");
+        assert!(app.session_focus().is_none());
+    }
+
+    #[test]
+    fn bouncing_the_last_proposed_ticket_moves_on_to_the_next_row() {
+        let _g = crate::jira::tests::WRITE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut new_ticket = session_issue("CI-7", "New");
+        new_ticket.status.category = "new".into();
+        let (base, _rx) = crate::jira::tests::stub_server(vec![
+            ("POST", "/rest/api/3/issue/CI-1/comment", serde_json::json!({})),
+            ("GET", "/rest/api/3/issue/CI-1/transitions", transitions_json()),
+            ("POST", "/rest/api/3/issue/CI-1/transitions", serde_json::json!({})),
+        ]);
+        let mut app = session_app(&base);
+        // Rows: CI-5, CI-6 (Ready), CI-1 (Planning), then New: CI-1 is ranked ahead of CI-7 once bounced.
+        app.store.absorb(
+            ListId::TeamOpen,
+            vec![session_issue("CI-5", "Ready for Work"), session_issue("CI-1", "Planning"), session_issue("CI-6", "Ready for Work"), new_ticket],
+        );
+        app.grooming.cursor = 2;
+        app.start_bounce();
+        app.grooming.bounce_text = Some("Which clusters?".into());
+        app.bounce();
+        drain_until(&mut app, |a| a.grooming.deciding.is_none());
+        assert_eq!(app.store.get("CI-1").map(|i| i.status.name.as_str()), Some("New"));
+        assert_eq!(app.session_focus().map(|i| i.key.as_str()), Some("CI-7"), "past the bounced ticket");
+        assert!(app.grooming.focused_since.is_some());
+    }
+
+    #[test]
+    fn bouncing_a_new_ticket_moves_to_the_next_new_ticket() {
+        let _g = crate::jira::tests::WRITE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut a = session_issue("CI-7", "New");
+        a.status.category = "new".into();
+        let mut b = session_issue("CI-8", "New");
+        b.status.category = "new".into();
+        let (base, rx) = crate::jira::tests::stub_server(vec![("POST", "/rest/api/3/issue/CI-7/comment", serde_json::json!({"id": "1"}))]);
+        let mut app = session_app(&base);
+        app.store.absorb(ListId::TeamOpen, vec![session_issue("CI-5", "Ready for Work"), a, b]);
+        app.grooming.cursor = 1;
+        assert_eq!(app.session_focus().map(|i| i.key.as_str()), Some("CI-7"));
+        app.start_bounce();
+        app.grooming.bounce_text = Some("Which clusters?".into());
+        app.bounce();
+        drain_until(&mut app, |a| a.grooming.deciding.is_none());
+        assert_eq!(writes(&rx).len(), 1);
+        assert_eq!(app.session_focus().map(|i| i.key.as_str()), Some("CI-8"));
+    }
+
+    #[test]
+    fn entering_a_ready_only_epic_lands_on_its_last_ready_row() {
+        let (base, _rx) = crate::jira::tests::stub_server(vec![]);
+        let mut app = session_app(&base);
+        app.store.absorb(
+            ListId::TeamOpen,
+            vec![
+                session_issue("CI-5", "Ready for Work"),
+                session_issue("CI-6", "Ready for Work"),
+                session_issue("CI-1", "Planning"),
+                in_epic(session_issue("CI-20", "Ready for Work"), "CI-80"),
+                in_epic(session_issue("CI-21", "Ready for Work"), "CI-80"),
+            ],
+        );
+        app.grooming.epic_index = 0;
+        app.groom_epic(1, false);
+        assert_eq!(app.grooming.epic_index, 1);
+        assert_eq!(app.grooming.cursor, 1);
+        assert_eq!(app.session_ready_focus(), Some((1, "CI-21".to_string())));
     }
 }

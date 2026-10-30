@@ -360,6 +360,11 @@ impl<'a> EpicQueue<'a> {
         self.ready.iter().chain(&self.planning).chain(&self.new).copied().collect()
     }
 
+    /// Where a freshly entered epic starts: its first candidate, or its last row when it has only Ready rows.
+    pub fn start_cursor(&self) -> usize {
+        self.first_candidate().min(self.rows().len().saturating_sub(1))
+    }
+
     /// The cursor index of the first candidate (just past the Ready rows).
     pub fn first_candidate(&self) -> usize {
         self.ready.len()

@@ -81,6 +81,8 @@ pub struct GroomingState {
     pub epic_index: usize,
     /// Session: the ghost row's index in the Ready queue while accepting.
     pub placement: Option<usize>,
+    /// Session: the key the open placement or bounce box is for.
+    pub decision_for: Option<String>,
     /// Session: the open bounce box's text.
     pub bounce_text: Option<String>,
     /// Session: the bounce box takes keyboard focus on its next frame.

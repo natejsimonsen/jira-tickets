@@ -846,6 +846,7 @@ fn bounce_box(app: &mut App, ui: &mut Ui, p: &Palette) {
     let id = egui::Id::new("groom-bounce");
     let focus_now = std::mem::take(&mut app.grooming.bounce_focus);
     let status_new = app.cfg.grooming.status_new.clone();
+    let already_new = app.session_focus().is_some_and(|i| i.status.name == status_new);
     let Some(text) = app.grooming.bounce_text.as_mut() else { return };
     let focused = ui.memory(|m| m.has_focus(id));
     Frame::new()
@@ -867,14 +868,16 @@ fn bounce_box(app: &mut App, ui: &mut Ui, p: &Palette) {
                 r.request_focus();
             }
         });
-    let (note, warn) = bounce_note(text, &status_new);
+    let (note, warn) = bounce_note(text, &status_new, already_new);
     ui.add_space(4.0);
     ui.label(RichText::new(note).color(if warn { p.at_risk } else { p.muted }).size(12.0));
 }
 
 /// The line under the bounce box, and whether it warns.
-pub fn bounce_note(text: &str, status_new: &str) -> (String, bool) {
-    if grooming::bounce_comment_ok(text) {
+pub fn bounce_note(text: &str, status_new: &str, already_new: bool) -> (String, bool) {
+    if grooming::bounce_comment_ok(text) && already_new {
+        (format!("⌘Enter posts the comment; the ticket stays in {status_new}"), false)
+    } else if grooming::bounce_comment_ok(text) {
         (format!("⌘Enter posts the comment, then moves the ticket to {status_new}"), false)
     } else if text.trim().is_empty() {
         ("A one- or two-line comment is required".to_string(), false)
@@ -1175,9 +1178,10 @@ mod tests {
             "a key-only epic shows the key once; zero sprint counts are left out"
         );
         assert_eq!(rail_line(None, "(no epic)", &counts(0, 3, 0, 1, 0)), "(no epic) · Nx 3 · R 0 · P 1 · N 0");
-        assert_eq!(bounce_note("Which clusters?", "New"), ("⌘Enter posts the comment, then moves the ticket to New".to_string(), false));
-        assert_eq!(bounce_note(" ", "New").0, "A one- or two-line comment is required");
-        assert_eq!(bounce_note("a\nb\nc", "New"), ("Two lines at most".to_string(), true));
+        assert_eq!(bounce_note("Which clusters?", "New", false), ("⌘Enter posts the comment, then moves the ticket to New".to_string(), false));
+        assert_eq!(bounce_note("Which clusters?", "New", true), ("⌘Enter posts the comment; the ticket stays in New".to_string(), false));
+        assert_eq!(bounce_note(" ", "New", false).0, "A one- or two-line comment is required");
+        assert_eq!(bounce_note("a\nb\nc", "New", false), ("Two lines at most".to_string(), true));
         let p = &theme::LIGHT;
         assert_eq!(timer_color(Level::Ok, p), p.text);
         assert_eq!(timer_color(Level::Amber, p), p.at_risk);

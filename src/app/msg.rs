@@ -131,14 +131,13 @@ impl App {
                         entry.error = None;
                         entry.fetched = Some(Instant::now());
                         self.offline = false;
-                        let session = (id == ListId::TeamOpen).then(|| self.session_anchor());
-                        if id == ListId::TeamOpen {
-                            self.team_open_landed(&issues);
-                        }
-                        self.store.absorb(id, issues);
-                        if let Some((epic, focus)) = session {
-                            self.session_keep(epic, focus);
-                        }
+                        // Every list can change the rail's order or the queues (epics, statuses), so each landing re-anchors.
+                        self.keeping_session(|app| {
+                            if id == ListId::TeamOpen {
+                                app.team_open_landed(&issues);
+                            }
+                            app.store.absorb(id, issues);
+                        });
                         self.store.fetched_at = Some(chrono::Utc::now().timestamp());
                         if self.persist_cache {
                             let store = self.store.clone();
@@ -296,7 +295,7 @@ impl App {
                 if self.persist_cache {
                     crate::cache::store(&sprints_cache_key(self.cfg.scope.board_id), &sprints);
                 }
-                self.sprints = sprints;
+                self.keeping_session(|app| app.sprints = sprints);
                 let next = crate::filter::sprint_scope_on_answer(&self.filter.sprint, self.sprint_default_applied, &self.sprints);
                 self.sprint_default_applied = true;
                 if next != self.filter.sprint {
