@@ -522,7 +522,7 @@ impl App {
         let status = self.cfg.grooming.status_new.clone();
         // A New ticket gets the comment only; there is nothing to move it back to.
         let already_new = self.session_focus().is_some_and(|i| i.status.name == status);
-        self.grooming.decision_for = None;
+        // `decision_for` stays set until the bounce completes (`session_done`), so a failed comment can be retried.
         self.grooming.deciding = Some(key.clone());
         self.spawn_write(move |c, tx| {
             // A move that fails after the comment posted is its own answer ("Bounce move"): the box must close so
@@ -1145,6 +1145,37 @@ mod tests {
         assert_eq!(app.grooming.bounce_text.as_deref(), Some("Which clusters?"));
         assert!(!writes(&rx).iter().any(|(_, p, _)| p.ends_with("/transitions")));
         assert_eq!(app.store.get("CI-1").map(|i| i.status.name.as_str()), Some("Planning"));
+    }
+
+    #[test]
+    fn a_failed_bounce_can_be_retried() {
+        let _g = crate::jira::tests::WRITE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // Phase one: the comment has no route, so the POST fails.
+        let (base, _rx) = crate::jira::tests::stub_server(vec![("GET", "/rest/api/3/issue/CI-1/transitions", transitions_json())]);
+        let mut app = session_app(&base);
+        app.actions.push(super::super::Action::StartBounce);
+        app.drain();
+        app.grooming.bounce_text = Some("Which clusters?".into());
+        app.actions.push(super::super::Action::Bounce);
+        drain_until(&mut app, |a| a.grooming.deciding.is_none());
+        assert_eq!(app.grooming.bounce_text.as_deref(), Some("Which clusters?"));
+        assert_eq!(app.grooming.decision_for.as_deref(), Some("CI-1"), "the failure keeps the box bound to its ticket");
+        // Phase two: a stub cannot change its replies, so a fresh server and App take over in exactly the state
+        // the failure left (box open, text kept, decision_for set); the guard must let the retry through.
+        let (base, rx) = crate::jira::tests::stub_server(vec![
+            ("POST", "/rest/api/3/issue/CI-1/comment", serde_json::json!({})),
+            ("GET", "/rest/api/3/issue/CI-1/transitions", transitions_json()),
+            ("POST", "/rest/api/3/issue/CI-1/transitions", serde_json::json!({})),
+        ]);
+        let mut app = session_app(&base);
+        app.grooming.bounce_text = Some("Which clusters?".into());
+        app.grooming.decision_for = Some("CI-1".into());
+        app.actions.push(super::super::Action::Bounce);
+        drain_until(&mut app, |a| a.grooming.deciding.is_none());
+        let w = writes(&rx);
+        assert_eq!(w.iter().filter(|(_, p, _)| p.ends_with("/comment")).count(), 1, "{w:?}");
+        assert!(w[0].2.to_string().contains("Which clusters?"));
+        assert!(app.grooming.bounce_text.is_none() && app.grooming.decision_for.is_none(), "the box closes once the bounce lands");
     }
 
     #[test]
