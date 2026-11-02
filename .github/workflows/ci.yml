@@ -54,3 +54,5 @@ jobs:
       - run: nix flake check --no-build
       - run: nix build --print-build-logs
       - run: test -x result/bin/jira-tickets
+      - if: runner.os == 'macOS'
+        run: test -x "result/Applications/Jira Tickets.app/Contents/MacOS/jira-tickets"
