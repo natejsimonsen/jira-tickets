@@ -8,9 +8,17 @@ rustPlatform.buildRustPackage {
   version = manifest.version;
   src = lib.fileset.toSource {
     root = ../.;
-    fileset = lib.fileset.unions [ ../Cargo.toml ../Cargo.lock ../README.md ../src ../tests ];
+    fileset = lib.fileset.unions [ ../Cargo.toml ../Cargo.lock ../README.md ../macos ../src ../tests ];
   };
   cargoLock.lockFile = ../Cargo.lock;
+  # On macOS, ship an app bundle so launchers and Finder see it; bin/ links to the binary inside.
+  postInstall = lib.optionalString stdenv.hostPlatform.isDarwin ''
+    app="$out/Applications/Jira Tickets.app"
+    mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
+    substitute macos/Info.plist "$app/Contents/Info.plist" --replace-fail @version@ ${manifest.version}
+    mv $out/bin/jira-tickets "$app/Contents/MacOS/jira-tickets"
+    ln -s "$app/Contents/MacOS/jira-tickets" $out/bin/jira-tickets
+  '';
   postFixup = lib.optionalString stdenv.hostPlatform.isLinux ''
     patchelf --add-rpath ${lib.makeLibraryPath runtimeLibs} $out/bin/jira-tickets
   '';

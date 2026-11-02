@@ -9,6 +9,8 @@ A fast native desktop app for working through Jira tickets, built with Rust and 
     nix run github:ssoriche/jira-tickets
     nix profile install github:ssoriche/jira-tickets
 
+On macOS the package also contains `Applications/Jira Tickets.app`, so app launchers that index a nix or flox profile's `Applications` folder can find it.
+
 ### Cargo
 
     cargo install --git https://github.com/ssoriche/jira-tickets
