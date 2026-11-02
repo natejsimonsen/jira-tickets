@@ -95,8 +95,8 @@ Only a token you paste is saved. Signing out deletes that file.
 | `w/n/e` | Unclear what, unclear when, or empty |
 | `u` | Undo the last verdict |
 | `Enter` | Pre-check summary and Promote |
-| `y` | Accept into Ready for Work from Planning or New: ↑/↓ to place, Enter to commit |
-| `b` | Bounce with a comment (⌘Enter posts); a Planning ticket goes back to New |
+| `y` | Accept into Ready for Work (↑/↓ place, Enter commits) |
+| `b` | Bounce with a comment (⌘Enter posts) |
 | `p` | Park in Backlog |
 | `J/K` | Move a Ready for Work ticket down or up in rank |
 | `l` | Add the team label to the focused ticket |
@@ -275,7 +275,7 @@ Screenshots need the `snapshot` feature:
     nix develop --command cargo build --release --features snapshot
     JIRA_TICKETS_SCREENSHOT=out.png JIRA_TICKETS_VIEW=issues JIRA_TICKETS_ROW=2 ./target/release/jira-tickets
 
-`JIRA_TICKETS_SCREENSHOT` is the output path and switches the app to an offscreen render at 1440x900, 2x. `JIRA_TICKETS_VIEW` picks `issues`, `grooming`, `team`, `roadmap`, `me`, or `standup`. `JIRA_TICKETS_ROW=<n>` moves the selection by n rows, `JIRA_TICKETS_THEME` picks `light` or `dark` and `JIRA_TICKETS_DENSITY` picks `compact` or `comfortable`; unset, both follow `[appearance]` and the saved choice, and the `system` theme renders light here. Writes are always blocked in this mode. If nothing has loaded after 20 seconds (for example, no token), the picture shows whatever is on screen.
+`JIRA_TICKETS_SCREENSHOT` is the output path and switches the app to an offscreen render at 1440x900, 2x. `JIRA_TICKETS_VIEW` picks `issues`, `grooming`, `team`, `roadmap`, `me`, or `standup` (which runs a review first if none is saved, and waits for it). `JIRA_TICKETS_ROW=<n>` moves the selection by n rows, `JIRA_TICKETS_THEME` picks `light` or `dark` and `JIRA_TICKETS_DENSITY` picks `compact` or `comfortable`; unset, both follow `[appearance]` and the saved choice, and the `system` theme renders light here. Writes are always blocked in this mode. If nothing has loaded after 20 seconds (for example, no token), the picture shows whatever is on screen.
 
 ## How it works
 

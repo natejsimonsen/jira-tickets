@@ -262,7 +262,7 @@ fn card(ui: &mut Ui, p: &Palette, s: &Suggestion, title: &mut String, st: CardSt
                 }
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if crate::views::tooltip(ui.add(button("✕", p)), "Dismiss for good (x)").clicked() {
+                if crate::views::tooltip(ui.add(button("Dismiss", p)), "Dismiss for good (x)").clicked() {
                     acts.push(Action::StandupFocus(i));
                     acts.push(Action::StandupDismiss);
                 }
