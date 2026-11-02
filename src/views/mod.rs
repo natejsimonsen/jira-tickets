@@ -7,6 +7,7 @@ pub mod grooming_guide;
 pub mod help;
 pub mod icons;
 pub mod issues;
+pub mod me;
 pub mod pickers;
 pub mod roadmap;
 pub mod team;
@@ -28,6 +29,7 @@ pub fn main(app: &mut App, ui: &mut Ui) {
         Screen::Grooming => grooming::show(app, ui),
         Screen::Team => team::show(app, ui),
         Screen::Roadmap => roadmap::show(app, ui),
+        Screen::Me => me::show(app, ui),
     }
     // One 1 px rule, the header panel's own last point under its 48 px bar (egui's separator line is off, so
     // nothing stacks on it), then the active tab's 2 px accent bar over the rule's y-range. Painted after the
@@ -74,8 +76,9 @@ fn centred(ui: &mut Ui, id: &str, content: impl FnOnce(&mut Ui)) {
     });
 }
 
-/// The tabs, in ⌘1–⌘4 order.
-const TABS: [(Screen, &str); 4] = [(Screen::Issues, "Issues"), (Screen::Grooming, "Grooming"), (Screen::Team, "Team"), (Screen::Roadmap, "Roadmap")];
+/// The tabs, in ⌘1–⌘5 order.
+const TABS: [(Screen, &str); 5] =
+    [(Screen::Issues, "Issues"), (Screen::Grooming, "Grooming"), (Screen::Team, "Team"), (Screen::Roadmap, "Roadmap"), (Screen::Me, "Me")];
 
 /// Each tab's origin x for a title whose galley starts at `left`: TITLE_GAP from the title's ink to the first
 /// tab's ink, TAB_GAP between the tabs' ink (round 13 A1 / A2: gaps between the boxes read 33.5 and 24.5–25.5).

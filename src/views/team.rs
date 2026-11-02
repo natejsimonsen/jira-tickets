@@ -185,7 +185,7 @@ fn header(ui: &mut Ui, p: &Palette, col: &Column, known: bool) {
 }
 
 /// A card: key (mono), summary (bold, wrapped), then status and epic pills and the days since the status category changed.
-fn card(app: &App, ui: &mut Ui, p: &Palette, id: (usize, usize), c: &Card, sel: bool) -> egui::Response {
+pub(crate) fn card(app: &App, ui: &mut Ui, p: &Palette, id: (usize, usize), c: &Card, sel: bool) -> egui::Response {
     let i = c.issue;
     let bg = ui.painter().add(egui::Shape::Noop);
     let r = Frame::new().stroke(Stroke::new(1.0, p.border)).corner_radius(theme::RADIUS).inner_margin(Margin::same(CARD_PAD)).show(ui, |ui| {

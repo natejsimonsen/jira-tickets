@@ -64,7 +64,7 @@ Only a token you paste is saved. Signing out deletes that file.
 | Keys | Action |
 | --- | --- |
 | **Global** | |
-| `⌘1` to `⌘4` | Issues, Grooming, Team, Roadmap |
+| `⌘1` to `⌘5` | Issues, Grooming, Team, Roadmap, Me |
 | `⌘R` | Refresh |
 | `⌘W` | Close the window |
 | `Esc` | Cancel or close |
@@ -108,13 +108,17 @@ Only a token you paste is saved. Signing out deletes that file.
 | `1` to `4` | Now / Next / Later, Timeline, Status review, Outcomes |
 | `j/k` or `↑/↓` | Next or previous initiative |
 | `Enter` | Open in Issues |
+| **Me** | |
+| `j/k` or `↑/↓` | Next or previous ticket |
+| `Enter` | Open in Issues |
+| `⌘O` | Open in Jira |
 | **Pickers and Edit** | |
 | `j/k` or `↑/↓` | Move |
 | `Tab/⇧Tab` | Next or previous field |
 | `Enter` | Confirm |
 <!-- keys:end -->
 
-Only the Global keys work on every screen: `⌘1`–`⌘4`, `⌘R`, `⌘W`, `?`, and `Esc`, which cancels or closes whatever is open on the current screen. The Issues keys (`⌘K` and `⌘O` among them) apply on the Issues screen only, and the Grooming keys on the Grooming screen only. Plain keys (letters, `/`, `?`) do nothing while a text field has focus. While a picker is open, only `Esc`, the arrow keys (and `j` / `k`, except in the Assign picker), and `Enter` apply (in the Edit dialog, `Tab` and `⇧Tab` move between fields and `Enter` confirms); `?` also works while a picker without a text field is open. Selecting a row shows its detail. `?` (or the "?" button in the header) opens this list in the app, and a bar at the bottom of every screen shows the keys that apply right now. While the help is open only the global keys apply; `?` or `Esc` closes it.
+Only the Global keys work on every screen: `⌘1`–`⌘5`, `⌘R`, `⌘W`, `?`, and `Esc`, which cancels or closes whatever is open on the current screen. The Issues keys (`⌘K` and `⌘O` among them) apply on the Issues screen only, and the Grooming keys on the Grooming screen only. Plain keys (letters, `/`, `?`) do nothing while a text field has focus. While a picker is open, only `Esc`, the arrow keys (and `j` / `k`, except in the Assign picker), and `Enter` apply (in the Edit dialog, `Tab` and `⇧Tab` move between fields and `Enter` confirms); `?` also works while a picker without a text field is open. Selecting a row shows its detail. `?` (or the "?" button in the header) opens this list in the app, and a bar at the bottom of every screen shows the keys that apply right now. While the help is open only the global keys apply; `?` or `Esc` closes it.
 
 Above the Issues list are a team picker, an epic picker, a sprint picker, the config's quick filters, a Mine toggle, a Roadmap toggle, and the search box. The Roadmap toggle (`m`) shows only tickets under epics labelled `roadmap`; epics themselves are containers and never appear in the list. The sprint picker offers All sprints, the board's active and future sprints, and Backlog (issues in no active or future sprint, including ones only ever in closed sprints, as on the Jira board). It starts on the active sprint, or All sprints if the board has none.
 
@@ -232,7 +236,7 @@ Screenshots need the `snapshot` feature:
     nix develop --command cargo build --release --features snapshot
     JIRA_TICKETS_SCREENSHOT=out.png JIRA_TICKETS_VIEW=issues JIRA_TICKETS_ROW=2 ./target/release/jira-tickets
 
-`JIRA_TICKETS_SCREENSHOT` is the output path and switches the app to an offscreen render at 1440x900, 2x. `JIRA_TICKETS_VIEW` picks `issues`, `grooming`, `team`, or `roadmap`. `JIRA_TICKETS_ROW=<n>` moves the selection by n rows, and `JIRA_TICKETS_THEME` picks `light` or `dark`; unset means light here, not the system theme. Writes are always blocked in this mode. If nothing has loaded after 20 seconds (for example, no token), the picture shows whatever is on screen.
+`JIRA_TICKETS_SCREENSHOT` is the output path and switches the app to an offscreen render at 1440x900, 2x. `JIRA_TICKETS_VIEW` picks `issues`, `grooming`, `team`, `roadmap`, or `me`. `JIRA_TICKETS_ROW=<n>` moves the selection by n rows, and `JIRA_TICKETS_THEME` picks `light` or `dark`; unset means light here, not the system theme. Writes are always blocked in this mode. If nothing has loaded after 20 seconds (for example, no token), the picture shows whatever is on screen.
 
 ## How it works
 
