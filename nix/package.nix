@@ -8,7 +8,7 @@ rustPlatform.buildRustPackage {
   version = manifest.version;
   src = lib.fileset.toSource {
     root = ../.;
-    fileset = lib.fileset.unions [ ../Cargo.toml ../Cargo.lock ../README.md ../macos ../src ../tests ];
+    fileset = lib.fileset.unions [ ../Cargo.toml ../Cargo.lock ../README.md ../macos ../prompts ../src ../tests ];
   };
   cargoLock.lockFile = ../Cargo.lock;
   # On macOS, ship an app bundle so launchers and Finder see it; bin/ links to the binary inside.
