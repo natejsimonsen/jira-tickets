@@ -233,6 +233,7 @@ pub fn run(out: Option<&str>, cfg: Config) {
         Ok("grooming") => Screen::Grooming,
         Ok("team") => Screen::Team,
         Ok("roadmap") => Screen::Roadmap,
+        Ok("standup") => Screen::Standup,
         _ => Screen::Issues,
     };
     let start = Instant::now();

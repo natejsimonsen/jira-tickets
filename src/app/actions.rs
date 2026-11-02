@@ -106,6 +106,22 @@ pub enum Action {
     RoadmapMove(i32),
     /// Opens the focused Roadmap initiative's epic on the Issues screen.
     RoadmapOpen,
+    /// Runs the standup review now (Run again).
+    StandupRun,
+    /// Moves the Standup cursor down (or up) the suggested tickets.
+    StandupMove(i32),
+    /// Puts the Standup cursor on this card.
+    StandupFocus(usize),
+    /// Dismisses the focused suggestion for good.
+    StandupDismiss,
+    /// Creates the focused suggestion's ticket and moves it into the target's sprint.
+    StandupAdd(crate::standup::Target),
+    /// The focused card's title field takes focus.
+    StandupEditTitle,
+    /// Copies the standup summary as text.
+    StandupCopy,
+    /// Opens the focused suggestion's source.
+    StandupOpenSource,
 }
 
 impl App {
@@ -280,6 +296,22 @@ impl App {
             Action::RoadmapTab(t) => self.roadmap_tab(t),
             Action::RoadmapMove(d) => self.roadmap_move(d),
             Action::RoadmapOpen => self.roadmap_open(ctx),
+            Action::StandupRun => self.standup_run(),
+            Action::StandupMove(d) => self.standup_move(d),
+            Action::StandupFocus(i) => self.standup_focus(i),
+            Action::StandupDismiss => self.standup_dismiss(),
+            Action::StandupAdd(t) => self.standup_add(t),
+            Action::StandupEditTitle => self.standup.focus_title = !self.standup_keys().is_empty(),
+            Action::StandupCopy => {
+                if let Some(text) = self.standup_text() {
+                    self.apply(Action::Copy(text), ctx);
+                }
+            }
+            Action::StandupOpenSource => {
+                if let Some(u) = self.standup_source_url() {
+                    open_url(&u);
+                }
+            }
             Action::GroomMode(m) => self.groom_mode(m),
             Action::GroomMove(d) => self.groom_move(d),
             Action::GroomEpic { delta, skip_empty } => self.groom_epic(delta, skip_empty),

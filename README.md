@@ -65,6 +65,7 @@ Only a token you paste is saved. Signing out deletes that file.
 | --- | --- |
 | **Global** | |
 | `⌘1` to `⌘4` | Issues, Grooming, Team, Roadmap |
+| `⌘6` | Standup |
 | `⌘R` | Refresh |
 | `⌘W` | Close the window |
 | `Esc` | Cancel or close |
@@ -108,13 +109,23 @@ Only a token you paste is saved. Signing out deletes that file.
 | `1` to `4` | Now / Next / Later, Timeline, Status review, Outcomes |
 | `j/k` or `↑/↓` | Next or previous initiative |
 | `Enter` | Open in Issues |
+| **Standup** | |
+| `j/k` or `↑/↓` | Next or previous suggested ticket |
+| `c` | Add to the current sprint |
+| `n` | Add to the next sprint |
+| `b` | Add to the backlog |
+| `x` | Dismiss for good |
+| `e` | Edit the title before adding |
+| `o` | Open the source |
+| `y` | Copy the standup |
+| `r` | Run the review again |
 | **Pickers and Edit** | |
 | `j/k` or `↑/↓` | Move |
 | `Tab/⇧Tab` | Next or previous field |
 | `Enter` | Confirm |
 <!-- keys:end -->
 
-Only the Global keys work on every screen: `⌘1`–`⌘4`, `⌘R`, `⌘W`, `?`, and `Esc`, which cancels or closes whatever is open on the current screen. The Issues keys (`⌘K` and `⌘O` among them) apply on the Issues screen only, and the Grooming keys on the Grooming screen only. Plain keys (letters, `/`, `?`) do nothing while a text field has focus. While a picker is open, only `Esc`, the arrow keys (and `j` / `k`, except in the Assign picker), and `Enter` apply (in the Edit dialog, `Tab` and `⇧Tab` move between fields and `Enter` confirms); `?` also works while a picker without a text field is open. Selecting a row shows its detail. `?` (or the "?" button in the header) opens this list in the app, and a bar at the bottom of every screen shows the keys that apply right now. While the help is open only the global keys apply; `?` or `Esc` closes it.
+Only the Global keys work on every screen: `⌘1`–`⌘4`, `⌘6`, `⌘R`, `⌘W`, `?`, and `Esc`, which cancels or closes whatever is open on the current screen. The Issues keys (`⌘K` and `⌘O` among them) apply on the Issues screen only, and the Grooming keys on the Grooming screen only. Plain keys (letters, `/`, `?`) do nothing while a text field has focus. While a picker is open, only `Esc`, the arrow keys (and `j` / `k`, except in the Assign picker), and `Enter` apply (in the Edit dialog, `Tab` and `⇧Tab` move between fields and `Enter` confirms); `?` also works while a picker without a text field is open. Selecting a row shows its detail. `?` (or the "?" button in the header) opens this list in the app, and a bar at the bottom of every screen shows the keys that apply right now. While the help is open only the global keys apply; `?` or `Esc` closes it.
 
 Above the Issues list are a team picker, an epic picker, a sprint picker, the config's quick filters, a Mine toggle, a Roadmap toggle, and the search box. The Roadmap toggle (`m`) shows only tickets under epics labelled `roadmap`; epics themselves are containers and never appear in the list. The sprint picker offers All sprints, the board's active and future sprints, and Backlog (issues in no active or future sprint, including ones only ever in closed sprints, as on the Jira board). It starts on the active sprint, or All sprints if the board has none.
 

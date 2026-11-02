@@ -9,6 +9,7 @@ pub mod icons;
 pub mod issues;
 pub mod pickers;
 pub mod roadmap;
+pub mod standup;
 pub mod team;
 
 use crate::app::{Action, App, Screen};
@@ -28,6 +29,7 @@ pub fn main(app: &mut App, ui: &mut Ui) {
         Screen::Grooming => grooming::show(app, ui),
         Screen::Team => team::show(app, ui),
         Screen::Roadmap => roadmap::show(app, ui),
+        Screen::Standup => standup::show(app, ui),
     }
     // One 1 px rule, the header panel's own last point under its 48 px bar (egui's separator line is off, so
     // nothing stacks on it), then the active tab's 2 px accent bar over the rule's y-range. Painted after the
@@ -74,8 +76,20 @@ fn centred(ui: &mut Ui, id: &str, content: impl FnOnce(&mut Ui)) {
     });
 }
 
-/// The tabs, in ⌘1–⌘4 order.
-const TABS: [(Screen, &str); 4] = [(Screen::Issues, "Issues"), (Screen::Grooming, "Grooming"), (Screen::Team, "Team"), (Screen::Roadmap, "Roadmap")];
+/// The tabs, in their ⌘-digit order (`tab_key`).
+const TABS: [(Screen, &str); 5] =
+    [(Screen::Issues, "Issues"), (Screen::Grooming, "Grooming"), (Screen::Team, "Team"), (Screen::Roadmap, "Roadmap"), (Screen::Standup, "Standup")];
+
+/// The digit that, with ⌘, switches to `s` (`App::shortcuts`).
+pub fn tab_key(s: Screen) -> u8 {
+    match s {
+        Screen::Issues => 1,
+        Screen::Grooming => 2,
+        Screen::Team => 3,
+        Screen::Roadmap => 4,
+        Screen::Standup => 6,
+    }
+}
 
 /// Each tab's origin x for a title whose galley starts at `left`: TITLE_GAP from the title's ink to the first
 /// tab's ink, TAB_GAP between the tabs' ink (round 13 A1 / A2: gaps between the boxes read 33.5 and 24.5–25.5).
@@ -250,7 +264,7 @@ fn header(app: &mut App, ui: &mut Ui, p: &Palette) -> (egui::Rect, Option<egui::
                     active_tab = Some(tab_underline_x(rect.left(), &galley));
                 }
                 ui.painter().galley(pos, galley, p.text);
-                let r = tooltip(r, format!("{name} (⌘{})", i + 1));
+                let r = tooltip(r, format!("{name} (⌘{})", tab_key(s)));
                 if r.clicked() {
                     app.actions.push(Action::SetScreen(s));
                 }
@@ -1738,6 +1752,12 @@ mod widget_tests {
             });
             o.textures_delta.clear();
         }
+    }
+
+    #[test]
+    fn tab_keys_match_the_tab_order_and_leave_five_free() {
+        let keys: Vec<u8> = TABS.iter().map(|(s, _)| tab_key(*s)).collect();
+        assert_eq!(keys, [1, 2, 3, 4, 6]);
     }
 
     #[test]

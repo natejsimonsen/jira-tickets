@@ -325,16 +325,29 @@ impl Client {
 
     /// Up to `max_pages` pages (tests use 1).
     pub fn search_pages(&self, jql: &str, fields: &[&str], max_pages: usize) -> Result<Vec<Issue>> {
+        Ok(self.search_raw(jql, fields, None, max_pages)?.iter().map(parse_issue).collect())
+    }
+
+    /// Every page of a JQL search with each issue's changelog, as Jira's raw JSON (the Standup screen reads the
+    /// status changes and comments out of it).
+    pub fn search_with_changelog(&self, jql: &str, fields: &[&str]) -> Result<Vec<Value>> {
+        self.search_raw(jql, fields, Some("changelog"), usize::MAX)
+    }
+
+    fn search_raw(&self, jql: &str, fields: &[&str], expand: Option<&str>, max_pages: usize) -> Result<Vec<Value>> {
         let mut out = Vec::new();
         let mut token: Option<String> = None;
         for _ in 0..max_pages {
             let mut body = json!({ "jql": jql, "fields": fields, "maxResults": 100 });
+            if let Some(e) = expand {
+                body["expand"] = json!(e);
+            }
             if let Some(t) = &token {
                 body["nextPageToken"] = json!(t);
             }
             let v = self.send("POST", "/rest/api/3/search/jql", &body)?;
             let page = v["issues"].as_array().map(Vec::as_slice).unwrap_or_default();
-            out.extend(page.iter().map(parse_issue));
+            out.extend(page.iter().cloned());
             let next = v["nextPageToken"].as_str().map(String::from);
             // Guard against a misbehaving server: stop on an empty page or a repeated token.
             if next.is_none() || page.is_empty() || next == token {
@@ -447,6 +460,13 @@ impl Client {
         check_writable()?;
         self.send("PUT", &format!("/rest/api/3/issue/{key}"), &json!({ "update": { "labels": [{ "add": label }] } }))?;
         Ok(())
+    }
+
+    /// Creates an issue and returns its key. `fields` is Jira's create `fields` object.
+    pub fn create_issue(&self, fields: Value) -> Result<String> {
+        check_writable()?;
+        let v = self.send("POST", "/rest/api/3/issue", &json!({ "fields": fields }))?;
+        str_at(&v, &["key"]).ok_or_else(|| Error::Other("create issue: Jira returned no key".into()))
     }
 
     pub fn add_comment(&self, key: &str, text: &str) -> Result<()> {
@@ -832,6 +852,42 @@ pub mod tests {
             assert!(err.to_string().contains("read-only"), "{err}");
         }
         assert!(rx.try_recv().is_err(), "nothing was sent");
+    }
+
+    #[test]
+    fn create_issue_posts_fields_and_returns_the_key() {
+        let _g = WRITE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (base, rx) = stub_server(vec![("POST", "/rest/api/3/issue", serde_json::json!({ "id": "10001", "key": "CI-42" }))]);
+        let c = client(&base);
+        {
+            let _ro = ReadOnlyGuard::new();
+            assert!(is_read_only(&c.create_issue(serde_json::json!({})).unwrap_err()));
+        }
+        assert!(rx.try_recv().is_err(), "read-only sent nothing");
+        let fields = serde_json::json!({ "project": { "key": "CI" }, "summary": "Do it", "issuetype": { "name": "Task" }, "labels": ["PLAT"] });
+        assert_eq!(c.create_issue(fields.clone()).unwrap(), "CI-42");
+        let r = rx.recv().unwrap();
+        assert_eq!((r.method.as_str(), r.path.as_str()), ("POST", "/rest/api/3/issue"));
+        assert_eq!(serde_json::from_str::<serde_json::Value>(&r.body).unwrap(), serde_json::json!({ "fields": fields }));
+    }
+
+    #[test]
+    fn create_issue_without_a_key_is_an_error() {
+        let _g = WRITE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (base, _rx) = stub_server(vec![("POST", "/rest/api/3/issue", serde_json::json!({ "id": "10001" }))]);
+        assert!(client(&base).create_issue(serde_json::json!({})).unwrap_err().to_string().contains("no key"));
+    }
+
+    #[test]
+    fn search_with_changelog_asks_for_the_changelog_and_keeps_raw_json() {
+        let page = serde_json::json!({ "issues": [{ "key": "CI-1", "changelog": { "histories": [] }, "fields": { "summary": "a" } }] });
+        let (base, rx) = stub_server(vec![("POST", "/rest/api/3/search/jql", page)]);
+        let got = client(&base).search_with_changelog("updated >= \"2026-10-30\"", &["summary"]).unwrap();
+        assert_eq!(got.len(), 1);
+        assert!(got[0]["changelog"]["histories"].is_array());
+        let body: serde_json::Value = serde_json::from_str(&rx.recv().unwrap().body).unwrap();
+        assert_eq!(body["expand"], "changelog");
+        assert_eq!(body["fields"][0], "summary");
     }
 
     #[test]
