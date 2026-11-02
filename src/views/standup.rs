@@ -9,11 +9,16 @@ use egui::{Frame, Margin, RichText, Stroke, Ui, vec2};
 
 /// The page's reading width: wider reads poorly.
 const MAX_W: f32 = 880.0;
-/// Between sections, and between cards.
-const GAP: f32 = 16.0;
-const CARD_GAP: f32 = 8.0;
-const CARD_PAD: i8 = 12;
-const LINE_GAP: f32 = 6.0;
+
+/// Between sections: two card gaps (16 in compact).
+fn section_gap(sp: &theme::Spacing) -> f32 {
+    2.0 * sp.card_gap
+}
+
+/// Between the page's lines: half again a card's line gap (6 in compact), since summary bullets are prose.
+fn line_gap(sp: &theme::Spacing) -> f32 {
+    1.5 * sp.line_gap
+}
 
 /// "0:07", "1:24".
 pub fn elapsed_text(secs: u64) -> String {
@@ -68,16 +73,17 @@ pub fn show(app: &mut App, ui: &mut Ui) {
         .frame(Frame::new().fill(p.bg).inner_margin(Margin { left: 16, right: 16, top: crate::views::issues::PANE_TOP as i8, bottom: 0 }))
         .show(ui, |ui| {
             egui::ScrollArea::vertical().id_salt("standup").auto_shrink([false, false]).show(ui, |ui| {
+                let sp = theme::spacing(ui.ctx());
                 ui.set_max_width(MAX_W.min(ui.available_width()));
-                ui.spacing_mut().item_spacing.y = LINE_GAP;
+                ui.spacing_mut().item_spacing.y = line_gap(sp);
                 heading(app, ui, p, &mut acts);
-                ui.add_space(GAP);
+                ui.add_space(section_gap(sp));
                 if let Some(review) = app.standup.saved.review.clone() {
                     summary(ui, p, &review, &mut acts);
-                    ui.add_space(GAP);
+                    ui.add_space(section_gap(sp));
                 }
                 cards(app, ui, p, &mut acts);
-                ui.add_space(GAP);
+                ui.add_space(section_gap(sp));
             });
         });
     app.actions.extend(acts);
@@ -114,9 +120,10 @@ fn heading(app: &App, ui: &mut Ui, p: &Palette, acts: &mut Vec<Action>) {
 
 /// The summary's three lists, a Copy button, and the review's own notes.
 fn summary(ui: &mut Ui, p: &Palette, review: &standup::Review, acts: &mut Vec<Action>) {
-    Frame::new().fill(p.surface).stroke(Stroke::new(1.0, p.border)).corner_radius(theme::RADIUS).inner_margin(Margin::same(CARD_PAD)).show(ui, |ui| {
+    let sp = theme::spacing(ui.ctx());
+    Frame::new().fill(p.surface).stroke(Stroke::new(1.0, p.border)).corner_radius(theme::RADIUS).inner_margin(Margin::same(sp.card_pad as i8)).show(ui, |ui| {
         ui.set_width(ui.available_width());
-        ui.spacing_mut().item_spacing.y = LINE_GAP;
+        ui.spacing_mut().item_spacing.y = line_gap(sp);
         let s = &review.summary;
         for (i, (title, items)) in [("Since the last standup", &s.done), ("Today", &s.today), ("Blockers", &s.blockers)].into_iter().enumerate() {
             ui.horizontal(|ui| {
@@ -135,7 +142,7 @@ fn summary(ui: &mut Ui, p: &Palette, review: &standup::Review, acts: &mut Vec<Ac
             for item in items.iter() {
                 ui.add(egui::Label::new(RichText::new(format!("•  {item}")).color(p.text).size(13.5)).wrap());
             }
-            ui.add_space(LINE_GAP);
+            ui.add_space(line_gap(sp));
         }
         if !review.notes.is_empty() {
             ui.add(egui::Label::new(RichText::new(&review.notes).italics().color(p.muted).size(12.0)).wrap());
@@ -160,7 +167,7 @@ fn cards(app: &mut App, ui: &mut Ui, p: &Palette, acts: &mut Vec<Action>) {
     let last_id = egui::Id::new("standup-last-cursor");
     let moved = ui.data(|d| d.get_temp::<usize>(last_id)) != Some(cursor);
     ui.data_mut(|d| d.insert_temp(last_id, cursor));
-    ui.spacing_mut().item_spacing.y = CARD_GAP;
+    ui.spacing_mut().item_spacing.y = theme::spacing(ui.ctx()).card_gap;
     for (i, s) in visible.iter().enumerate() {
         let key = standup::dismiss_key(s);
         let sel = i == cursor;
@@ -190,11 +197,12 @@ struct CardState<'a> {
 fn card(ui: &mut Ui, p: &Palette, s: &Suggestion, title: &mut String, st: CardState, i: usize, acts: &mut Vec<Action>) -> egui::Response {
     let fill = if st.sel { p.selected_row } else { p.surface };
     let edge = if st.sel { p.accent } else { p.border };
-    let r = Frame::new().fill(fill).stroke(Stroke::new(1.0, edge)).corner_radius(theme::RADIUS).inner_margin(Margin::same(CARD_PAD)).show(ui, |ui| {
+    let sp = theme::spacing(ui.ctx());
+    let r = Frame::new().fill(fill).stroke(Stroke::new(1.0, edge)).corner_radius(theme::RADIUS).inner_margin(Margin::same(sp.card_pad as i8)).show(ui, |ui| {
         ui.set_width(ui.available_width());
-        ui.spacing_mut().item_spacing.y = LINE_GAP;
+        ui.spacing_mut().item_spacing.y = line_gap(sp);
         ui.horizontal_wrapped(|ui| {
-            ui.spacing_mut().item_spacing = vec2(8.0, LINE_GAP);
+            ui.spacing_mut().item_spacing = vec2(8.0, line_gap(sp));
             outline_pill(ui, s.source_kind.name(), p, PILL_MARGIN);
             outline_pill(ui, &s.issue_type, p, PILL_MARGIN);
             outline_pill(ui, &confidence_text(s.confidence), p, PILL_MARGIN);

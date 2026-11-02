@@ -8,12 +8,10 @@ use crate::teamview::Card;
 use crate::theme::{self, Palette};
 use egui::{Frame, Margin, RichText, Ui};
 
-/// Between sections, and under a section's header.
-const SECTION_GAP: f32 = 16.0;
-/// Between cards.
-const CARD_GAP: f32 = 8.0;
-/// Under a section title, before its count.
-const LINE_GAP: f32 = 4.0;
+/// Between sections, and twice under a section's header: two card gaps (16 in compact).
+fn section_gap(sp: &theme::Spacing) -> f32 {
+    2.0 * sp.card_gap
+}
 
 /// A section's header count: "2 tickets".
 pub fn count_text(n: usize) -> String {
@@ -72,15 +70,16 @@ fn list(app: &App, ui: &mut Ui, p: &Palette, acts: &mut Vec<Action>) {
     let last_id = egui::Id::new("me-last-cursor");
     let moved = ui.data(|d| d.get_temp::<usize>(last_id)) != Some(cursor);
     ui.data_mut(|d| d.insert_temp(last_id, cursor));
+    let sp = theme::spacing(ui.ctx());
     egui::ScrollArea::vertical().id_salt("me-sections").auto_shrink([false, false]).show(ui, |ui| {
         let mut row = 0;
         for (si, (s, cards)) in sections.iter().enumerate() {
             if si > 0 {
-                ui.add_space(SECTION_GAP);
+                ui.add_space(section_gap(sp));
             }
             header(ui, p, *s, cards.len());
-            ui.add_space(SECTION_GAP / 2.0);
-            ui.spacing_mut().item_spacing.y = CARD_GAP;
+            ui.add_space(section_gap(sp) / 2.0);
+            ui.spacing_mut().item_spacing.y = sp.card_gap;
             if cards.is_empty() {
                 ui.label(RichText::new(s.empty()).italics().color(p.muted).size(12.0));
             }
@@ -104,7 +103,8 @@ fn list(app: &App, ui: &mut Ui, p: &Palette, acts: &mut Vec<Action>) {
 
 fn header(ui: &mut Ui, p: &Palette, s: Section, n: usize) {
     ui.label(RichText::new(s.title()).font(theme::bold(13.5)).color(p.text));
-    ui.add_space(LINE_GAP - ui.spacing().item_spacing.y);
+    // Under the title: the density's line gap.
+    ui.add_space(theme::spacing(ui.ctx()).line_gap - ui.spacing().item_spacing.y);
     ui.label(RichText::new(count_text(n)).color(p.muted).size(12.0));
 }
 
