@@ -61,9 +61,23 @@ fn header(app: &mut App, ui: &mut Ui, p: &Palette) {
     ui.add(egui::Label::new(RichText::new(purpose).color(p.muted).size(14.0)).wrap());
 }
 
-/// The list column's share of the body, between these widths.
+/// The list column's default share of the body sits between these widths. A drag may go past LIST_MAX: it only
+/// has to leave the focused ticket RIGHT_MIN.
 const LIST_MIN: f32 = 360.0;
 const LIST_MAX: f32 = 560.0;
+/// The focused ticket's narrowest, beside a dragged list.
+const RIGHT_MIN: f32 = 360.0;
+
+/// The list column's width in `avail`: the dragged width saved under `split`, else `share` held to LIST_MIN–LIST_MAX.
+fn list_width(ui: &Ui, split: egui::Id, share: f32, avail: f32) -> f32 {
+    crate::views::split_width(crate::views::saved_split(ui, split), share.clamp(LIST_MIN, LIST_MAX), avail, LIST_MIN, PANE_GAP + RIGHT_MIN)
+}
+
+/// The drag handle in the PANE_GAP right of a list that starts at `left` and is `list_w` wide.
+fn list_splitter(ui: &mut Ui, split: egui::Id, left: f32, list_w: f32, top: f32, h: f32) {
+    let gap = egui::Rect::from_x_y_ranges(left + list_w..=left + list_w + PANE_GAP, top..=top + h);
+    crate::views::splitter(ui, split, left, gap);
+}
 /// The gap between the list and the focused ticket, and the cards' inner padding.
 const PANE_GAP: f32 = 16.0;
 /// A list row's padding.
@@ -113,14 +127,18 @@ fn pre_check_body(app: &mut App, ui: &mut Ui, p: &Palette) {
         return;
     }
     let cursor = app.grooming.cursor.min(n);
-    let list_w = (ui.available_width() * 0.42).clamp(LIST_MIN, LIST_MAX).min(ui.available_width());
+    let split = egui::Id::new("groom-pre-check-split");
+    let avail = ui.available_width();
+    let list_w = list_width(ui, split, avail * 0.42, avail);
     ui.horizontal_top(|ui| {
         ui.spacing_mut().item_spacing.x = PANE_GAP;
         let h = ui.available_height();
+        let origin = ui.cursor().min;
         ui.allocate_ui_with_layout(vec2(list_w, h), egui::Layout::top_down(egui::Align::Min), |ui| {
             ui.set_width(list_w);
             candidate_list(app, ui, p, cursor);
         });
+        list_splitter(ui, split, origin.x, list_w, origin.y, h);
         let right_w = ui.available_width();
         ui.allocate_ui_with_layout(vec2(right_w, h), egui::Layout::top_down(egui::Align::Min), |ui| {
             ui.set_width(right_w);
@@ -592,7 +610,10 @@ fn session_body(app: &mut App, ui: &mut Ui, p: &Palette) {
         view.sprint.iter().chain(&view.next_sprint).chain(&view.ready).chain(&view.planning).chain(&view.new).chain(&view.unclaimed).nth(cursor).cloned();
     // An epic with Ready rows only has nothing to groom, whatever the cursor is on.
     let nothing_to_groom = view.planning.is_empty() && view.new.is_empty() && view.unclaimed.is_empty();
-    let list_w = (ui.available_width() * 0.36).clamp(LIST_MIN, LIST_MAX).min(ui.available_width());
+    let split = egui::Id::new("groom-session-split");
+    let avail = ui.available_width();
+    // The default share is of the whole body, as before; the drag range is what the rail leaves.
+    let list_w = list_width(ui, split, avail * 0.36, (avail - RAIL_W - PANE_GAP).max(0.0));
     ui.horizontal_top(|ui| {
         ui.spacing_mut().item_spacing.x = PANE_GAP;
         let h = ui.available_height();
@@ -600,10 +621,12 @@ fn session_body(app: &mut App, ui: &mut Ui, p: &Palette) {
             ui.set_width(RAIL_W);
             epic_rail(app, ui, p, &rail, at, active.as_deref(), next.as_deref());
         });
+        let origin = ui.cursor().min;
         ui.allocate_ui_with_layout(vec2(list_w, h), egui::Layout::top_down(egui::Align::Min), |ui| {
             ui.set_width(list_w);
             epic_queue(app, ui, p, &view, cursor);
         });
+        list_splitter(ui, split, origin.x, list_w, origin.y, h);
         let right_w = ui.available_width();
         ui.allocate_ui_with_layout(vec2(right_w, h), egui::Layout::top_down(egui::Align::Min), |ui| {
             ui.set_width(right_w);
