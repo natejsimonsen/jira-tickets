@@ -1,6 +1,6 @@
 # Jira Tickets
 
-A fast native desktop app for working through Jira tickets, built with Rust and egui. It keeps a local cache so it opens instantly, searches and filters the team's issues from the keyboard, and shows each issue's description and comments with Jira's rich text rendered. The Grooming screen walks the New column and runs grooming sessions, the Team screen shows what each member is working on, and the Roadmap screen turns the project's epics into a Now / Next / Later board, a quarter timeline, a status review, and outcomes by metric.
+A fast native desktop app for working through Jira tickets, built with Rust and egui. It keeps a local cache so it opens instantly, searches and filters the team's issues from the keyboard, and shows each issue's description and comments with Jira's rich text rendered. The Grooming screen walks the New column and runs grooming sessions, the Team screen shows what each member is working on, the Me screen shows your own tickets, and the Roadmap screen turns the project's epics into a Now / Next / Later board, a quarter timeline, a status review, and outcomes by metric.
 
 ## Install
 
@@ -222,6 +222,16 @@ Labels are the lightweight way to fill the roadmap in from Jira: add `roadmap`, 
 - The Outcomes tab says so when no epic has a `metric:` label, which is the case today.
 - The TOOLS board includes unlabelled tickets by assignee; Team columns only cover members listed in `[team].members`.
 
+## Me
+
+The Me screen (`⌘5`) shows the tickets assigned to you, found by `currentUser()`, so it needs no config. It opens on your in-progress work, in three sections:
+
+- In progress: your tickets in the In Progress status category, in rank order.
+- To do in open sprints: your To Do tickets in an active or future sprint, in rank order.
+- Done in the last 7 days: what you resolved this past week, newest first.
+
+The cards match the Team screen's. The focused ticket's detail shows on the right. `j`/`k` or `↑`/`↓` move, `Enter` (or a double click) opens the ticket on the Issues screen, and `⌘O` opens it in Jira.
+
 ## Developer switches
 
 - `JIRA_TICKETS_READONLY` blocks every write to Jira.
@@ -265,7 +275,7 @@ The window is egui drawn on the GPU (wgpu), with no web view. All Jira traffic (
 | `.github/workflows/` | CI, and the semantic-release and release-build workflows |
 | `scripts/set-version.sh` | Stamps a release version into `Cargo.toml` and `Cargo.lock` |
 
-Grooming lives in `src/views/grooming.rs`, `src/app/groom.rs`, `src/grooming.rs`, and `src/report.rs`. Team lives in `src/teamview.rs` (the columns, pure) and `src/views/team.rs`. Roadmap lives in `src/roadmap.rs` (initiatives and the field mapping, pure), `src/views/roadmap.rs` (tabs 1 and 3), and `src/views/roadmap/timeline.rs` and `outcomes.rs` (tabs 2 and 4).
+Grooming lives in `src/views/grooming.rs`, `src/app/groom.rs`, `src/grooming.rs`, and `src/report.rs`. Team lives in `src/teamview.rs` (the columns, pure) and `src/views/team.rs`. Me lives in `src/me.rs` (the query and sections, pure) and `src/views/me.rs`. Roadmap lives in `src/roadmap.rs` (initiatives and the field mapping, pure), `src/views/roadmap.rs` (tabs 1 and 3), and `src/views/roadmap/timeline.rs` and `outcomes.rs` (tabs 2 and 4).
 
 ## Licence
 
