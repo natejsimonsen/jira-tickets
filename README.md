@@ -68,7 +68,7 @@ Only a token you paste is saved. Signing out deletes that file.
 | Keys | Action |
 | --- | --- |
 | **Global** | |
-| `⌘1` to `⌘5` | Issues, Grooming, Team, Roadmap, Me |
+| `⌘1` to `⌘6` | Issues, Grooming, Team, Roadmap, Me, Standup |
 | `⌘R` | Refresh |
 | `⌘⇧T` | Theme: System, Light, or Dark |
 | `⌘⇧D` | Density: Compact or Comfortable |
@@ -118,13 +118,23 @@ Only a token you paste is saved. Signing out deletes that file.
 | `j/k` or `↑/↓` | Next or previous ticket |
 | `Enter` | Open in Issues |
 | `⌘O` | Open in Jira |
+| **Standup** | |
+| `j/k` or `↑/↓` | Next or previous suggested ticket |
+| `c` | Add to the current sprint |
+| `n` | Add to the next sprint |
+| `b` | Add to the backlog |
+| `x` | Dismiss for good |
+| `e` | Edit the title before adding |
+| `o` | Open the source |
+| `y` | Copy the standup |
+| `r` | Run the review again |
 | **Pickers and Edit** | |
 | `j/k` or `↑/↓` | Move |
 | `Tab/⇧Tab` | Next or previous field |
 | `Enter` | Confirm |
 <!-- keys:end -->
 
-Only the Global keys work on every screen: `⌘1`–`⌘5`, `⌘R`, `⌘W`, `?`, and `Esc`, which cancels or closes whatever is open on the current screen. The Issues keys (`⌘K` and `⌘O` among them) apply on the Issues screen only, and the Grooming keys on the Grooming screen only. Plain keys (letters, `/`, `?`) do nothing while a text field has focus. While a picker is open, only `Esc`, the arrow keys (and `j` / `k`, except in the Assign picker), and `Enter` apply (in the Edit dialog, `Tab` and `⇧Tab` move between fields and `Enter` confirms); `?` also works while a picker without a text field is open. Selecting a row shows its detail. `?` (or the "?" button in the header) opens this list in the app, and a bar at the bottom of every screen shows the keys that apply right now. While the help is open only the global keys apply; `?` or `Esc` closes it.
+Only the Global keys work on every screen: `⌘1`–`⌘6`, `⌘R`, `⌘W`, `?`, and `Esc`, which cancels or closes whatever is open on the current screen. The Issues keys (`⌘K` and `⌘O` among them) apply on the Issues screen only, and the Grooming keys on the Grooming screen only. Plain keys (letters, `/`, `?`) do nothing while a text field has focus. While a picker is open, only `Esc`, the arrow keys (and `j` / `k`, except in the Assign picker), and `Enter` apply (in the Edit dialog, `Tab` and `⇧Tab` move between fields and `Enter` confirms); `?` also works while a picker without a text field is open. Selecting a row shows its detail. `?` (or the "?" button in the header) opens this list in the app, and a bar at the bottom of every screen shows the keys that apply right now. While the help is open only the global keys apply; `?` or `Esc` closes it.
 
 Above the Issues list are a team picker, an epic picker, a sprint picker, the config's quick filters, a Mine toggle, a Roadmap toggle, and the search box. The Roadmap toggle (`m`) shows only tickets under epics labelled `roadmap`; epics themselves are containers and never appear in the list. The sprint picker offers All sprints, the board's active and future sprints, and Backlog (issues in no active or future sprint, including ones only ever in closed sprints, as on the Jira board). It starts on the active sprint, or All sprints if the board has none.
 
@@ -238,6 +248,19 @@ The Me screen (`⌘5`) shows the tickets assigned to you, found by `currentUser(
 
 The cards match the Team screen's. The focused ticket's detail shows on the right. `j`/`k` or `↑`/`↓` move, `Enter` (or a double click) opens the ticket on the Issues screen, and `⌘O` opens it in Jira.
 
+## Standup
+
+The Standup screen (`⌘6`) prepares your standup and finds work no ticket tracks yet. The team meets Monday, Wednesday and Friday, so the review covers everything since the previous standup day: Monday looks back to Friday, Wednesday to Monday, Friday to Wednesday. On other days it looks back to the latest standup day (Tuesday to Monday, Thursday to Wednesday, the weekend to Friday).
+
+On a standup day the review runs by itself once, when the app is open. **Run again** (`r`) runs it on demand any day. A run has two steps:
+
+1. The app reads your Jira activity in the window: issues assigned to you, reported by you, or updated by you, with the status changes, assignments and comments you made.
+2. It runs Claude Code headless (`claude -p --model <model> --output-format json`) with the prompt in [`prompts/standup-review.md`](prompts/standup-review.md) and that activity. Claude may only run read-only `gh` commands (search, `pr list`, `pr view`) and the Slack MCP readers; edits and Slack writes are refused. It finds your pull requests, reviews and Slack threads, and answers with a standup and a list of suggested tickets.
+
+The screen shows the standup (Since the last standup, Today, Blockers; **Copy** or `y` copies it as text) and a card per suggestion with its source, type, confidence and reason. Edit the title (`e`), then add it to the **Current sprint** (`c`), **Next sprint** (`n`) or **Backlog** (`b`): the ticket is created in `scope.project` with `scope.team_label` and moved into the active or first future sprint of `scope.board_id`. `x` dismisses a suggestion for good; the same source never comes back on a rerun. The last review, the dismissals and the added tickets are kept between launches.
+
+Configure the CLI under `[standup]`: `claude` is a path or a name (default `claude`, looked up on PATH and in `~/.local/bin`, `~/.claude/local`, `~/.npm-global/bin`, the flox default environment, the nix profiles, `/opt/homebrew/bin` and `/usr/local/bin`, since an app launched from the Dock has a minimal PATH), `model` (default `claude-opus-5-5`), and `timeout_secs` (default 900). Claude Code must already be signed in, with `gh` authenticated and the Slack MCP server set up for Slack to count.
+
 ## Developer switches
 
 - `JIRA_TICKETS_READONLY` blocks every write to Jira.
@@ -282,6 +305,7 @@ The window is egui drawn on the GPU (wgpu), with no web view. All Jira traffic (
 | `scripts/set-version.sh` | Stamps a release version into `Cargo.toml` and `Cargo.lock` |
 
 Grooming lives in `src/views/grooming.rs`, `src/app/groom.rs`, `src/grooming.rs`, and `src/report.rs`. Team lives in `src/teamview.rs` (the columns, pure) and `src/views/team.rs`. Me lives in `src/me.rs` (the query and sections, pure) and `src/views/me.rs`. Roadmap lives in `src/roadmap.rs` (initiatives and the field mapping, pure), `src/views/roadmap.rs` (tabs 1 and 3), and `src/views/roadmap/timeline.rs` and `outcomes.rs` (tabs 2 and 4).
+Standup lives in `src/standup.rs` (the window, the Jira activity, the `claude` run and its answer), `src/app/standup.rs`, `src/views/standup.rs`, and the prompt in `prompts/standup-review.md`.
 
 ## Licence
 

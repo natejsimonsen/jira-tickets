@@ -9,8 +9,14 @@ use egui::{Key, KeyboardShortcut, Modifiers};
 impl App {
     pub(super) fn shortcuts(&mut self, ctx: &egui::Context) {
         let cmd = Modifiers::COMMAND;
-        let screens =
-            [(Key::Num1, Screen::Issues), (Key::Num2, Screen::Grooming), (Key::Num3, Screen::Team), (Key::Num4, Screen::Roadmap), (Key::Num5, Screen::Me)];
+        let screens = [
+            (Key::Num1, Screen::Issues),
+            (Key::Num2, Screen::Grooming),
+            (Key::Num3, Screen::Team),
+            (Key::Num4, Screen::Roadmap),
+            (Key::Num5, Screen::Me),
+            (Key::Num6, Screen::Standup),
+        ];
         for (k, s) in screens {
             if ctx.input_mut(|i| i.consume_shortcut(&KeyboardShortcut::new(cmd, k))) {
                 self.actions.push(Action::SetScreen(s));
@@ -78,9 +84,13 @@ impl App {
             self.me_shortcuts(ctx);
             return;
         }
-        // Roadmap's plain 1 to 4 are its tabs; ⌘1 to ⌘5 were taken above.
+        // Roadmap's plain 1 to 4 are its tabs; ⌘1 to ⌘6 were taken above.
         if self.screen == Screen::Roadmap {
             self.roadmap_shortcuts(ctx);
+            return;
+        }
+        if self.screen == Screen::Standup {
+            self.standup_shortcuts(ctx);
             return;
         }
         if self.screen != Screen::Issues {
@@ -338,6 +348,35 @@ impl App {
         }
         if key(Key::Enter) {
             self.actions.push(Action::MeOpen);
+        }
+    }
+
+    /// The Standup screen's keys (`keys::Group::Standup`).
+    fn standup_shortcuts(&mut self, ctx: &egui::Context) {
+        if ctx.text_edit_focused() {
+            return;
+        }
+        let key = |k: Key| ctx.input_mut(|i| bare_key(i, k));
+        let arrow = |k: Key| ctx.input_mut(|i| i.consume_shortcut(&KeyboardShortcut::new(Modifiers::NONE, k)));
+        if key(Key::J) | arrow(Key::ArrowDown) {
+            self.actions.push(Action::StandupMove(1));
+        }
+        if key(Key::K) | arrow(Key::ArrowUp) {
+            self.actions.push(Action::StandupMove(-1));
+        }
+        for (k, a) in [
+            (Key::X, Action::StandupDismiss),
+            (Key::C, Action::StandupAdd(crate::standup::Target::CurrentSprint)),
+            (Key::N, Action::StandupAdd(crate::standup::Target::NextSprint)),
+            (Key::B, Action::StandupAdd(crate::standup::Target::Backlog)),
+            (Key::E, Action::StandupEditTitle),
+            (Key::O, Action::StandupOpenSource),
+            (Key::Y, Action::StandupCopy),
+            (Key::R, Action::StandupRun),
+        ] {
+            if key(k) {
+                self.actions.push(a);
+            }
         }
     }
 }

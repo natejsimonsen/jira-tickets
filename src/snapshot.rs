@@ -234,6 +234,7 @@ pub fn run(out: Option<&str>, cfg: Config) {
         Ok("team") => Screen::Team,
         Ok("roadmap") => Screen::Roadmap,
         Ok("me") => Screen::Me,
+        Ok("standup") => Screen::Standup,
         _ => Screen::Issues,
     };
     let start = Instant::now();

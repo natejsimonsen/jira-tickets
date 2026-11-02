@@ -17,18 +17,16 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
         app.actions.push(Action::ToggleHelp);
     }
     egui::Area::new(egui::Id::new("help")).order(egui::Order::Tooltip).anchor(egui::Align2::CENTER_CENTER, vec2(0.0, 0.0)).show(ctx, |ui| {
-        // Issues, Roadmap, Me then Pickers on the left; Grooming, Team then Global on the right (`COLUMNS`). Each column is as
-        // wide as its widest key cell plus 16 plus its widest action, so the panel has 24 px on every side and no
-        // dead space.
-        let [left, right] = COLUMNS;
+        // Three columns (`COLUMNS`). Each is as wide as its widest key cell plus 16 plus its widest action, so the
+        // panel has 24 px on every side and no dead space.
         let measure = |groups: &[Group]| {
             let rows = BINDINGS.iter().filter(|k| groups.contains(&k.group));
             let keys: Vec<f32> = rows.clone().map(|k| keys_width(ui, k.keys, p)).collect();
             let actions: Vec<f32> = rows.map(|k| ui.painter().layout_no_wrap(k.what.to_string(), theme::body(14.0), p.text).size().x).collect();
             (keys.iter().copied().fold(0.0, f32::max), column_width(&keys, &actions))
         };
-        let (lk, lw) = measure(left);
-        let (rk, rw) = measure(right);
+        let cols = COLUMNS.map(|gs| (gs, measure(gs)));
+        let total = cols.iter().map(|(_, (_, w))| w).sum::<f32>() + COL_GAP * (cols.len() - 1) as f32;
         Frame::new()
             .fill(crate::views::dialog_fill(p))
             .stroke(crate::views::dialog_stroke(p))
@@ -37,7 +35,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
             // they sit HALF_PX tighter (round 15 H3: they read 24.5 to the ink against the left's 24).
             .inner_margin(Margin { left: PAD as i8, right: PAD as i8 - 1, top: TITLE_TOP as i8 - 1, bottom: PAD as i8 - 1 })
             .show(ui, |ui| {
-                ui.set_width(lw + COL_GAP + rw + 1.0 - HALF_PX);
+                ui.set_width(total + 1.0 - HALF_PX);
                 ui.spacing_mut().item_spacing.y = 0.0;
                 ui.add_space(1.0 - HALF_PX);
                 let title = ui.painter().layout_no_wrap("Keyboard".to_string(), theme::bold(15.0), p.text);
@@ -47,22 +45,22 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                 ui.add_space(TITLE_TO_HEADINGS - below - heading_ink(ui, p, row, header).0);
                 ui.horizontal_top(|ui| {
                     ui.spacing_mut().item_spacing.x = COL_GAP;
-                    ui.allocate_ui_with_layout(vec2(lw, 0.0), egui::Layout::top_down(egui::Align::Min), |ui| {
-                        ui.set_width(lw);
-                        groups(ui, p, left, lk, row, header);
-                    });
-                    ui.allocate_ui_with_layout(vec2(rw, 0.0), egui::Layout::top_down(egui::Align::Min), |ui| {
-                        ui.set_width(rw);
-                        groups(ui, p, right, rk, row, header);
-                    });
+                    for (gs, (key_w, w)) in cols {
+                        ui.allocate_ui_with_layout(vec2(w, 0.0), egui::Layout::top_down(egui::Align::Min), |ui| {
+                            ui.set_width(w);
+                            groups(ui, p, gs, key_w, row, header);
+                        });
+                    }
                 });
                 ui.add_space(1.0 - HALF_PX);
             });
     });
 }
 
-/// The help's two columns, top to bottom: the closest balance of the groups (26 and 27 rows with headers).
-pub const COLUMNS: [&[Group]; 2] = [&[Group::Issues, Group::Roadmap, Group::Me, Group::Pickers], &[Group::Grooming, Group::Team, Group::Global]];
+/// The help's three columns, top to bottom: the closest balance of the groups (22, 21 and 22 rows with headers),
+/// so the panel fits a 900 pt window.
+pub const COLUMNS: [&[Group]; 3] =
+    [&[Group::Global, Group::Issues], &[Group::Grooming, Group::Team], &[Group::Roadmap, Group::Me, Group::Standup, Group::Pickers]];
 
 /// A column's groups, each a section gap under the last.
 fn groups(ui: &mut egui::Ui, p: &Palette, gs: &[Group], key_w: f32, row: f32, header: f32) {
@@ -391,12 +389,11 @@ mod tests {
         use crate::keys::{BINDINGS, Group};
         let n = |g: Group| BINDINGS.iter().filter(|k| k.group == g).count();
         // One header row per group. Every group shows once, and the columns are within two rows of each other.
-        let rows = |gs: &[Group]| gs.iter().map(|g| n(*g) + 1).sum::<usize>();
-        let [l, r] = super::COLUMNS;
-        let (left, right) = (rows(l), rows(r));
-        assert!(left.abs_diff(right) <= 2, "left {left} rows, right {right}");
-        for g in [Group::Global, Group::Issues, Group::Grooming, Group::Team, Group::Roadmap, Group::Me, Group::Pickers] {
-            assert_eq!(l.iter().chain(r).filter(|x| **x == g).count(), 1, "{}", g.name());
+        let rows: Vec<usize> = super::COLUMNS.iter().map(|gs| gs.iter().map(|g| n(*g) + 1).sum()).collect();
+        let (lo, hi) = (rows.iter().min().unwrap(), rows.iter().max().unwrap());
+        assert!(hi - lo <= 2, "rows per column {rows:?}");
+        for g in [Group::Global, Group::Issues, Group::Grooming, Group::Team, Group::Roadmap, Group::Me, Group::Standup, Group::Pickers] {
+            assert_eq!(super::COLUMNS.iter().flat_map(|c| c.iter()).filter(|x| **x == g).count(), 1, "{}", g.name());
         }
     }
 

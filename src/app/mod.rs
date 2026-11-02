@@ -7,6 +7,7 @@ mod loads;
 mod msg;
 mod pickers;
 mod shortcuts;
+mod standup;
 
 pub use actions::Action;
 pub use msg::Msg;
@@ -14,6 +15,8 @@ pub use pickers::{
     ASSIGN_USERS, POINTS_HINT, PRIORITY_HINT, Picker, assign_current_row, assign_cursor_after_filter, assign_matches, assign_note, assign_rows,
     sprint_current_row, sprint_row_label, transition_row,
 };
+
+pub use standup::{StandupPhase, StandupState};
 
 use shortcuts::close_shortcut;
 
@@ -43,6 +46,7 @@ pub enum Screen {
     Team,
     Roadmap,
     Me,
+    Standup,
 }
 
 #[derive(Default)]
@@ -264,6 +268,9 @@ pub struct App {
     /// The colour scheme and density in use (`theme::effective_appearance`, then ⌘⇧T / ⌘⇧D).
     pub appearance: Appearance,
     pub me_view: MeState,
+    pub standup: StandupState,
+    /// Runs the Standup review's `claude`; tests swap in a stand-in.
+    pub(crate) review_runner: standup::ReviewRunner,
     /// How many report reads were started, for tests.
     #[cfg(test)]
     pub(crate) report_reads: usize,
@@ -368,6 +375,8 @@ impl App {
             roadmap: RoadmapState::default(),
             appearance: Appearance::default(),
             me_view: MeState::default(),
+            standup: StandupState::default(),
+            review_runner: crate::standup::run_review,
             #[cfg(test)]
             report_reads: 0,
             client: None,
@@ -403,6 +412,7 @@ impl App {
         }
         app.sprints_cached = launch_scope.is_some();
         app.sprints = cached_sprints;
+        app.standup.saved = crate::cache::load(crate::standup::CACHE_KEY).unwrap_or_default();
         // Finding the token may run `op read`, which can block; keep it off the UI thread.
         let (tx, ctx) = (app.tx.clone(), app.ctx.clone());
         std::thread::spawn(move || {
@@ -582,6 +592,9 @@ impl eframe::App for App {
         self.was_focused = focused;
         if self.client.is_some() && (back || self.last_refresh.elapsed() > AUTO_REFRESH) {
             self.refresh_all();
+        }
+        if self.client.is_some() {
+            self.standup_auto_run();
         }
         ctx.request_repaint_after(AUTO_REFRESH);
 
