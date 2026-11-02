@@ -478,6 +478,13 @@ pub fn detail_columns(window_w: f32, available: f32) -> (f32, f32) {
 /// The fields column below a 1200 px window: 132, so the description keeps 400 with the 24 gutter (K1).
 pub const NARROW_FIELDS: f32 = 132.0;
 
+/// The narrowest the detail pane gets beside a dragged list: its 16 + 16 margins and `detail_columns`' floor (a
+/// 300 description column, the gutter and the fields column's minimum), so neither column overflows the pane.
+pub fn min_pane_width(window_w: f32) -> f32 {
+    let fields_min = if window_w < 1200.0 { NARROW_FIELDS } else { 220.0 };
+    32.0 + 300.0 + FIELDS_GUTTER + fields_min
+}
+
 /// Composer box → Comment button.
 const BOX_TO_BUTTON: f32 = 12.0;
 
@@ -506,6 +513,14 @@ mod tests {
         assert_eq!(detail_columns(1000.0, crate::views::issues::NARROW_DETAIL_MIN - 32.0), (400.0, NARROW_FIELDS));
         assert_eq!(detail_columns(1000.0, 300.0).0, 300.0, "floor");
         assert_eq!(detail_columns(2560.0, 1800.0).0, MAIN_MAX);
+    }
+
+    #[test]
+    fn min_pane_holds_both_columns() {
+        for w in [1000.0, 1440.0] {
+            let (main, fields) = detail_columns(w, min_pane_width(w) - 32.0);
+            assert_eq!(main + FIELDS_GUTTER + fields, min_pane_width(w) - 32.0, "window {w}");
+        }
     }
 
     #[test]

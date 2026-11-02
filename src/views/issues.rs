@@ -363,16 +363,17 @@ const NARROW: f32 = 1200.0;
 /// column, the 24 px gutter and the 132 px fields column (`detail::detail_columns`).
 pub const NARROW_DETAIL_MIN: f32 = 32.0 + 400.0 + 24.0 + 132.0;
 
-/// The list pane's default width and the range it may be dragged in: 42% of the window (360–720) when
-/// wide; below NARROW 45% of the window, but never so wide that the description column drops under 400.
+/// The list pane's narrowest drag.
+const LIST_PANE_MIN: f32 = 320.0;
+
+/// The list pane's default width and the range it may be dragged in. The default is 42% of the window
+/// (360–720) when wide; below NARROW 45% of the window, but never so wide that the description column drops
+/// under 400. The drag has no cap of its own: only the detail pane's minimum (`detail::min_pane_width`) bounds
+/// it. egui clamps a saved width to this range every frame, so one saved in a wider window fits this one.
 pub fn list_pane_width(window_w: f32) -> (f32, std::ops::RangeInclusive<f32>) {
-    if window_w < NARROW {
-        let w = (window_w * 0.45).min(window_w - NARROW_DETAIL_MIN).max(320.0).floor();
-        (w, 320.0..=w)
-    } else {
-        let w = (window_w * 0.42).clamp(360.0, 720.0);
-        (w, 320.0..=w)
-    }
+    let w =
+        if window_w < NARROW { (window_w * 0.45).min(window_w - NARROW_DETAIL_MIN).max(LIST_PANE_MIN).floor() } else { (window_w * 0.42).clamp(360.0, 720.0) };
+    (w, super::split_range(window_w, LIST_PANE_MIN, super::detail::min_pane_width(window_w)))
 }
 
 /// Gap between filter controls in a row.
@@ -2300,12 +2301,29 @@ mod tests {
 
     #[test]
     fn narrow_windows_share_the_list_pane() {
-        assert_eq!(list_pane_width(1000.0), (412.0, 320.0..=412.0), "45% held back so the description keeps 400");
+        assert_eq!(list_pane_width(1000.0).0, 412.0, "45% held back so the description keeps 400");
         assert_eq!(list_pane_width(1199.0).0, (1199.0f32 * 0.45).floor());
         assert!(list_pane_width(700.0).0 >= 320.0);
-        let (w, r) = list_pane_width(1440.0);
+        let (w, _) = list_pane_width(1440.0);
         assert_eq!(w, (1440.0f32 * 0.42).clamp(360.0, 720.0));
-        assert_eq!(r, 320.0..=w);
+    }
+
+    #[test]
+    fn list_pane_drags_as_wide_as_the_detail_allows() {
+        use super::super::detail::min_pane_width;
+        // Wide windows: no 720 cap, the detail pane keeps its minimum.
+        assert_eq!(list_pane_width(1440.0).1, 320.0..=1440.0 - min_pane_width(1440.0));
+        assert_eq!(*list_pane_width(3840.0).1.end(), 3840.0 - min_pane_width(3840.0));
+        assert!(*list_pane_width(3840.0).1.end() > 720.0);
+        // Narrow: past the default, down to the detail's floor.
+        assert_eq!(list_pane_width(1000.0).1, 320.0..=1000.0 - min_pane_width(1000.0));
+        // Too narrow for both: the range stays valid at the list's minimum.
+        assert_eq!(list_pane_width(500.0).1, 320.0..=320.0);
+        // The default always sits inside the range.
+        for win in [500.0, 800.0, 1000.0, 1199.0, 1200.0, 1440.0, 2560.0] {
+            let (w, r) = list_pane_width(win);
+            assert!(r.contains(&w), "window {win}: {w} in {r:?}");
+        }
     }
 
     #[test]
