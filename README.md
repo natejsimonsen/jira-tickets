@@ -19,7 +19,7 @@ On Linux you need a C compiler and the X11 or Wayland libraries.
 
 ### Download
 
-The [Releases page](https://github.com/ssoriche/jira-tickets/releases) has a macOS app (a universal zip) and a Linux x86_64 tarball, each with a `.sha256` checksum file. Check one with `shasum -a 256 -c <file>.sha256`.
+The [Releases page](https://github.com/ssoriche/jira-tickets/releases) has a macOS app for Apple Silicon (a zip) and a Linux x86_64 tarball, each with a `.sha256` checksum file. Check one with `shasum -a 256 -c <file>.sha256`.
 
 The macOS app is ad-hoc signed, not notarised, so Gatekeeper blocks it on first launch. Either unzip it and clear the quarantine flag with `xattr -dr com.apple.quarantine "Jira Tickets.app"` (or download with a tool that sets no quarantine flag, such as `curl`), or open it once, then allow it under System Settings, Privacy & Security, "Open Anyway". The app has no icon yet.
 

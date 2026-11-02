@@ -5,7 +5,7 @@
 # Environment:
 #   CARGO  the cargo command (default: nix develop --command cargo)
 #   BIN    a prebuilt binary to bundle (default: target/release/jira-tickets);
-#          when set, the cargo build is skipped (used for the universal CI build)
+#          when set, the cargo build is skipped
 set -eu
 cd "$(dirname "$0")/.."
 CARGO="${CARGO:-nix develop --command cargo}"

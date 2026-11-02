@@ -48,7 +48,7 @@ jobs:
         run: npx --yes -p semantic-release@25 -p @semantic-release/exec@7 -p @semantic-release/git@10 semantic-release
 
   macos:
-    name: macOS app (universal)
+    name: macOS app (Apple Silicon)
     runs-on: macos-latest
     needs: version
     if: needs.version.outputs.version != ''
@@ -59,20 +59,10 @@ jobs:
         with:
           ref: v${{ env.VERSION }}
       - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-apple-darwin, x86_64-apple-darwin
       - uses: Swatinem/rust-cache@v2
-      - name: Build both architectures
-        run: |
-          cargo build --release --target aarch64-apple-darwin
-          cargo build --release --target x86_64-apple-darwin
-          mkdir -p target/universal
-          lipo -create \
-            target/aarch64-apple-darwin/release/jira-tickets \
-            target/x86_64-apple-darwin/release/jira-tickets \
-            -output target/universal/jira-tickets
-      - name: Bundle the app
-        run: CARGO=cargo BIN=target/universal/jira-tickets scripts/bundle-macos.sh --no-install
+      # The runner is Apple Silicon, so one native build is the whole job; Intel Macs are not a target.
+      - name: Build and bundle the app
+        run: CARGO=cargo scripts/bundle-macos.sh --no-install
       - name: Package
         run: |
           ditto -c -k --keepParent "target/release/Jira Tickets.app" "Jira-Tickets-$VERSION-macos.zip"
