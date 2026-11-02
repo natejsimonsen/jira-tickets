@@ -17,6 +17,8 @@ pub struct Config {
     pub team: Team,
     pub issues: Issues,
     pub roadmap: Roadmap,
+    /// Colour scheme and spacing density; a choice made in the app (⌘⇧T, ⌘⇧D) wins until this table changes.
+    pub appearance: crate::theme::Appearance,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -385,6 +387,11 @@ horizon_by_status = { "In Progress" = "now", "Work in Progress" = "now", "Ready 
 # confidence_field = "customfield_XXXXX"
 # next_milestone_field = "customfield_XXXXX"
 # definition_of_done_field = "customfield_XXXXX"
+
+[appearance]
+# Changing a value here replaces a choice made in the app (⌘⇧T theme, ⌘⇧D density).
+theme = "system"       # "system" follows macOS; or "light", "dark"
+density = "compact"    # or "comfortable": taller rows, more padding, larger text
 "##;
 
 #[cfg(test)]
@@ -444,6 +451,7 @@ email = "me@example.com"
         assert_eq!(parsed.scope.parent_board_id, 100);
         assert_eq!(parsed.scope.teams, Scope::default().teams);
         assert!(parsed.issues.status_colors.is_empty() && parsed.issues.epic_colors.is_empty());
+        assert_eq!(parsed.appearance, crate::theme::Appearance::default());
         assert!(c.is_err());
     }
 
@@ -521,6 +529,19 @@ email = "me@example.com"
         let c: Config = toml::from_str(&text).unwrap();
         assert_eq!(c.scope.teams.len(), 1);
         assert_eq!(c.scope.members_of("TOOLS", &c.team.members), ["x"]);
+    }
+
+    #[test]
+    fn appearance_table_parses_and_defaults() {
+        use crate::theme::{Appearance, Density, Scheme};
+        let c: Config = toml::from_str(MINIMAL).unwrap();
+        assert_eq!(c.appearance, Appearance { theme: Scheme::System, density: Density::Compact });
+        let c: Config = toml::from_str(&format!("{MINIMAL}\n[appearance]\ndensity = \"comfortable\"\n")).unwrap();
+        assert_eq!(c.appearance, Appearance { theme: Scheme::System, density: Density::Comfortable });
+        let c: Config = toml::from_str(&format!("{MINIMAL}\n[appearance]\ntheme = \"dark\"\n")).unwrap();
+        assert_eq!(c.appearance.theme, Scheme::Dark);
+        let e = toml::from_str::<Config>(&format!("{MINIMAL}\n[appearance]\ntheme = \"sepia\"\n")).unwrap_err().to_string();
+        assert!(e.contains("sepia"), "{e}");
     }
 
     #[test]

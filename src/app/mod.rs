@@ -21,6 +21,7 @@ use crate::auth::{self, Login};
 use crate::config::Config;
 use crate::jira::{self, Client, Sprint, User};
 use crate::store::{ListId, Store};
+use crate::theme::{Appearance, SavedAppearance};
 use crate::{theme, views};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
@@ -29,6 +30,8 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::{Duration, Instant};
 
 const AUTO_REFRESH: Duration = Duration::from_secs(5 * 60);
+/// The disk cache key of the appearance chosen in the app (`SavedAppearance`).
+const APPEARANCE_KEY: &str = "appearance";
 
 /// A write run on the ordered write worker.
 type WriteJob = Box<dyn FnOnce(&Client, &Sender<Msg>) + Send>;
@@ -250,6 +253,8 @@ pub struct App {
     pub grooming: GroomingState,
     pub team: TeamState,
     pub roadmap: RoadmapState,
+    /// The colour scheme and density in use (`theme::effective_appearance`, then ⌘⇧T / ⌘⇧D).
+    pub appearance: Appearance,
     /// How many report reads were started, for tests.
     #[cfg(test)]
     pub(crate) report_reads: usize,
@@ -349,6 +354,7 @@ impl App {
             grooming: GroomingState::default(),
             team: TeamState::default(),
             roadmap: RoadmapState::default(),
+            appearance: Appearance::default(),
             #[cfg(test)]
             report_reads: 0,
             client: None,
@@ -365,11 +371,9 @@ impl App {
 
     pub fn new(cc: &eframe::CreationContext<'_>, cfg: Config) -> Self {
         theme::apply(&cc.egui_ctx);
-        match std::env::var("JIRA_TICKETS_THEME").as_deref() {
-            Ok("dark") => cc.egui_ctx.set_theme(egui::Theme::Dark),
-            Ok("light") => cc.egui_ctx.set_theme(egui::Theme::Light),
-            _ => cc.egui_ctx.set_theme(egui::ThemePreference::System),
-        }
+        let saved: Option<SavedAppearance> = crate::cache::load(APPEARANCE_KEY);
+        let appearance = launch_appearance(cfg.appearance, saved, std::env::var("JIRA_TICKETS_THEME").ok(), std::env::var("JIRA_TICKETS_DENSITY").ok());
+        apply_appearance(&cc.egui_ctx, appearance);
         if std::env::var_os("JIRA_TICKETS_READONLY").is_some() {
             jira::READ_ONLY.store(true, std::sync::atomic::Ordering::Relaxed);
         }
@@ -377,6 +381,7 @@ impl App {
         let cfg = Arc::new(cfg);
         let mut app = App::empty(cfg.clone(), tx, rx, cc.egui_ctx.clone());
         app.persist_cache = true;
+        app.appearance = appearance;
         app.store = Store::for_launch(Store::load_cached());
         let cached_sprints: Vec<Sprint> = crate::cache::load(&sprints_cache_key(cfg.scope.board_id)).unwrap_or_default();
         let launch_scope = crate::filter::launch_sprint_scope(&cached_sprints);
@@ -478,6 +483,15 @@ impl App {
         self.toast = Some(Toast { text: text.into(), kind, until: Instant::now() + Duration::from_secs(secs) });
     }
 
+    /// Uses `a` from now on and saves it (with the config value it replaces) for the next launch.
+    pub(super) fn set_appearance(&mut self, a: Appearance, ctx: &egui::Context) {
+        self.appearance = a;
+        apply_appearance(ctx, a);
+        if self.persist_cache {
+            crate::cache::store(APPEARANCE_KEY, &SavedAppearance { config: self.cfg.appearance, chosen: a });
+        }
+    }
+
     fn connect(&mut self, login: Login) {
         self.client = Some(Arc::new(Client::new(&self.cfg.site, &login)));
         self.login = Some(login);
@@ -487,6 +501,24 @@ impl App {
         });
         self.refresh_all();
     }
+}
+
+/// The launch's appearance: the config's, or the choice saved in the app while the config is unchanged
+/// (`theme::effective_appearance`); `JIRA_TICKETS_THEME` and `JIRA_TICKETS_DENSITY` override both (snapshots).
+fn launch_appearance(config: Appearance, saved: Option<SavedAppearance>, env_theme: Option<String>, env_density: Option<String>) -> Appearance {
+    let mut a = theme::effective_appearance(config, saved);
+    if let Some(t) = env_theme.as_deref().and_then(theme::Scheme::parse) {
+        a.theme = t;
+    }
+    if let Some(d) = env_density.as_deref().and_then(theme::Density::parse) {
+        a.density = d;
+    }
+    a
+}
+
+fn apply_appearance(ctx: &egui::Context, a: Appearance) {
+    ctx.set_theme(a.theme.preference());
+    theme::set_density(ctx, a.density);
 }
 
 /// The cache key of a board's sprint list (the first frame's sprint scope, `filter::launch_sprint_scope`).
@@ -859,6 +891,30 @@ mod tests {
         app.screen = Screen::Team;
         press(&mut app, egui::Key::Num3, egui::Modifiers::NONE);
         assert!(!app.actions.iter().any(|a| matches!(a, Action::RoadmapTab(_))), "only on Roadmap");
+    }
+
+    #[test]
+    fn launch_appearance_env_overrides_config_and_saved() {
+        use crate::theme::{Density, Scheme};
+        let config = Appearance::default();
+        let chosen = Appearance { theme: Scheme::Light, density: Density::Comfortable };
+        let saved = Some(SavedAppearance { config, chosen });
+        assert_eq!(launch_appearance(config, saved, None, None), chosen);
+        assert_eq!(launch_appearance(config, saved, Some("dark".into()), None), Appearance { theme: Scheme::Dark, ..chosen });
+        assert_eq!(launch_appearance(config, None, None, Some("comfortable".into())).density, Density::Comfortable);
+        assert_eq!(launch_appearance(config, None, Some("bogus".into()), Some("".into())), config, "unknown values are ignored");
+    }
+
+    #[test]
+    fn theme_and_density_actions_switch_the_context() {
+        let mut app = App::for_test(cfg(), None);
+        let ctx = egui::Context::default();
+        app.apply(Action::CycleTheme, &ctx);
+        assert_eq!(app.appearance.theme, crate::theme::Scheme::Light);
+        assert_eq!(ctx.options(|o| o.theme_preference), egui::ThemePreference::Light);
+        app.apply(Action::ToggleDensity, &ctx);
+        assert_eq!(ctx.style_of(egui::Theme::Light).spacing.item_spacing, crate::theme::COMFORTABLE.item);
+        assert!(app.toast.as_ref().is_some_and(|t| t.text == "Density: Comfortable"));
     }
 
     #[test]

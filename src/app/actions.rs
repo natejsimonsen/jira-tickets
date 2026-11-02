@@ -49,6 +49,10 @@ pub enum Action {
     Rank(i32),
     /// Shows or hides the keyboard help overlay (`?`).
     ToggleHelp,
+    /// Steps the colour scheme: System, Light, Dark (⌘⇧T).
+    CycleTheme,
+    /// Switches between Compact and Comfortable spacing (⌘⇧D).
+    ToggleDensity,
     /// Switches the Grooming screen between Pre-check and Session.
     GroomMode(super::GroomMode),
     /// Moves the Grooming cursor: a pre-check row, or a session candidate.
@@ -502,6 +506,16 @@ impl App {
             Action::OpenEdit => self.open_edit(),
             Action::PickerMove(d) => self.picker_move(d),
             Action::ToggleHelp => self.help_open = !self.help_open,
+            Action::CycleTheme => {
+                let next = super::Appearance { theme: self.appearance.theme.next(), ..self.appearance };
+                self.set_appearance(next, ctx);
+                self.toast_kind(format!("Theme: {}", next.theme.name()), ToastKind::Info);
+            }
+            Action::ToggleDensity => {
+                let next = super::Appearance { density: self.appearance.density.toggled(), ..self.appearance };
+                self.set_appearance(next, ctx);
+                self.toast_kind(format!("Density: {}", next.density.name()), ToastKind::Info);
+            }
             Action::PickerCancel => self.picker = None,
             Action::PickerConfirm => self.confirm_picker(),
             Action::Rank(delta) => {

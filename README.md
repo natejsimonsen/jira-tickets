@@ -45,6 +45,8 @@ The Issues view loads every sub-team of the parent team listed under `[[scope.te
 
 Status pills are coloured by status name (falling back to the status category) and each epic gets a stable colour derived from its key, shown on its pills and as the left edge of each list row. Override either with `[issues.status_colors]` (status name, case-insensitive) or `[issues.epic_colors]` (epic key), mapping to `"#rrggbb"`.
 
+`[appearance]` sets the look: `theme` is `system` (follow macOS, the default), `light`, or `dark`, and `density` is `compact` (the default) or `comfortable` (taller rows, more padding, slightly larger text). Switch either in the app with `⌘⇧T` and `⌘⇧D`. The app remembers that choice across restarts until you edit `[appearance]`; then the config wins again.
+
 Roadmap settings name custom fields by id, such as `customfield_12345`. To find them, open `<site>/rest/api/3/field` in a browser while signed in to Jira and look for the field names.
 
 ## Signing in
@@ -66,6 +68,8 @@ Only a token you paste is saved. Signing out deletes that file.
 | **Global** | |
 | `⌘1` to `⌘4` | Issues, Grooming, Team, Roadmap |
 | `⌘R` | Refresh |
+| `⌘⇧T` | Theme: System, Light, or Dark |
+| `⌘⇧D` | Density: Compact or Comfortable |
 | `⌘W` | Close the window |
 | `Esc` | Cancel or close |
 | `?` or `Esc` | Close this help |
@@ -225,14 +229,14 @@ Labels are the lightweight way to fill the roadmap in from Jira: add `roadmap`, 
 - `JIRA_TICKETS_CONFIG` points at another config file.
 - `JIRA_TICKETS_TOKEN_FILE` points at another saved-token file.
 - `JIRA_TICKETS_CACHE_DIR` points at another cache folder.
-- `JIRA_TICKETS_THEME` is `light` or `dark`; the default follows the system.
+- `JIRA_TICKETS_THEME` is `system`, `light`, or `dark`, and `JIRA_TICKETS_DENSITY` is `compact` or `comfortable`; each overrides `[appearance]` and the saved choice.
 
 Screenshots need the `snapshot` feature:
 
     nix develop --command cargo build --release --features snapshot
     JIRA_TICKETS_SCREENSHOT=out.png JIRA_TICKETS_VIEW=issues JIRA_TICKETS_ROW=2 ./target/release/jira-tickets
 
-`JIRA_TICKETS_SCREENSHOT` is the output path and switches the app to an offscreen render at 1440x900, 2x. `JIRA_TICKETS_VIEW` picks `issues`, `grooming`, `team`, or `roadmap`. `JIRA_TICKETS_ROW=<n>` moves the selection by n rows, and `JIRA_TICKETS_THEME` picks `light` or `dark`; unset means light here, not the system theme. Writes are always blocked in this mode. If nothing has loaded after 20 seconds (for example, no token), the picture shows whatever is on screen.
+`JIRA_TICKETS_SCREENSHOT` is the output path and switches the app to an offscreen render at 1440x900, 2x. `JIRA_TICKETS_VIEW` picks `issues`, `grooming`, `team`, or `roadmap`. `JIRA_TICKETS_ROW=<n>` moves the selection by n rows, `JIRA_TICKETS_THEME` picks `light` or `dark` and `JIRA_TICKETS_DENSITY` picks `compact` or `comfortable`; unset, both follow `[appearance]` and the saved choice, and the `system` theme renders light here. Writes are always blocked in this mode. If nothing has loaded after 20 seconds (for example, no token), the picture shows whatever is on screen.
 
 ## How it works
 

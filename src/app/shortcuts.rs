@@ -18,6 +18,13 @@ impl App {
         if ctx.input_mut(|i| i.consume_shortcut(&KeyboardShortcut::new(cmd, Key::R))) {
             self.actions.push(Action::Refresh);
         }
+        // Global like ⌘R: ⌘ keeps them off the plain `t` and `d` keys.
+        if ctx.input_mut(|i| i.consume_shortcut(&KeyboardShortcut::new(cmd | Modifiers::SHIFT, Key::T))) {
+            self.actions.push(Action::CycleTheme);
+        }
+        if ctx.input_mut(|i| i.consume_shortcut(&KeyboardShortcut::new(cmd | Modifiers::SHIFT, Key::D))) {
+            self.actions.push(Action::ToggleDensity);
+        }
         let shortcut = |m: Modifiers, k: Key| ctx.input_mut(|i| i.consume_shortcut(&KeyboardShortcut::new(m, k)));
         // Help owns the keyboard while open, ahead of pickers and the Issues keys.
         if self.help_open {

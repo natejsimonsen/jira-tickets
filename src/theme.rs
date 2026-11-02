@@ -486,19 +486,187 @@ pub fn over(fg: Color32, bg: Color32) -> Color32 {
     Color32::from_rgb(m(r, bg.r()), m(g, bg.g()), m(b, bg.b()))
 }
 
+/// Visuals, fonts and the Compact spacing. `set_density` switches the spacing later.
 pub fn apply(ctx: &egui::Context) {
     ctx.set_visuals_of(egui::Theme::Light, visuals(&LIGHT));
     ctx.set_visuals_of(egui::Theme::Dark, visuals(&DARK));
+    set_density(ctx, Density::Compact);
+    ctx.set_fonts(fonts());
+}
+
+/// Which palette the app draws with: the macOS appearance, or one fixed theme.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Scheme {
+    #[default]
+    System,
+    Light,
+    Dark,
+}
+
+impl Scheme {
+    pub fn parse(s: &str) -> Option<Scheme> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "system" => Some(Scheme::System),
+            "light" => Some(Scheme::Light),
+            "dark" => Some(Scheme::Dark),
+            _ => None,
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Scheme::System => "System",
+            Scheme::Light => "Light",
+            Scheme::Dark => "Dark",
+        }
+    }
+
+    /// System, then Light, then Dark, then System again.
+    pub fn next(self) -> Scheme {
+        match self {
+            Scheme::System => Scheme::Light,
+            Scheme::Light => Scheme::Dark,
+            Scheme::Dark => Scheme::System,
+        }
+    }
+
+    pub fn preference(self) -> egui::ThemePreference {
+        match self {
+            Scheme::System => egui::ThemePreference::System,
+            Scheme::Light => egui::ThemePreference::Light,
+            Scheme::Dark => egui::ThemePreference::Dark,
+        }
+    }
+}
+
+/// How much room rows, cards and controls get. Compact is the tuned layout every metric test measures.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Density {
+    #[default]
+    Compact,
+    Comfortable,
+}
+
+impl Density {
+    pub fn parse(s: &str) -> Option<Density> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "compact" => Some(Density::Compact),
+            "comfortable" => Some(Density::Comfortable),
+            _ => None,
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Density::Compact => "Compact",
+            Density::Comfortable => "Comfortable",
+        }
+    }
+
+    pub fn toggled(self) -> Density {
+        match self {
+            Density::Compact => Density::Comfortable,
+            Density::Comfortable => Density::Compact,
+        }
+    }
+
+    pub fn spacing(self) -> &'static Spacing {
+        match self {
+            Density::Compact => &COMPACT,
+            Density::Comfortable => &COMFORTABLE,
+        }
+    }
+}
+
+/// Every density-dependent size in one place, in points.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Spacing {
+    /// egui's gap between widgets.
+    pub item: egui::Vec2,
+    /// egui's button padding.
+    pub button_padding: egui::Vec2,
+    /// The Body and Button text styles.
+    pub body: f32,
+    /// Added above and below the content of every list row (Issues, Grooming, the roadmap table).
+    pub row_extra: f32,
+    /// A card's padding (Team and Roadmap cards, Grooming rows' sides, detail comment cards).
+    pub card_pad: f32,
+    /// Between cards in a column or list.
+    pub card_gap: f32,
+    /// Between a card's or row's lines.
+    pub line_gap: f32,
+    /// The detail pane's ink gap between sections (pills → Description → Comments).
+    pub section_gap: f32,
+}
+
+/// The layout as tuned and measured; must not change (the glyph metric tests pin it).
+pub const COMPACT: Spacing = Spacing {
+    item: egui::vec2(8.0, 6.0),
+    button_padding: egui::vec2(12.0, 4.0),
+    body: 14.0,
+    row_extra: 0.0,
+    card_pad: 12.0,
+    card_gap: 8.0,
+    line_gap: 4.0,
+    section_gap: 32.0,
+};
+
+/// More air: taller rows, roomier cards, a point more body text.
+pub const COMFORTABLE: Spacing = Spacing {
+    item: egui::vec2(10.0, 8.0),
+    button_padding: egui::vec2(14.0, 6.0),
+    body: 15.0,
+    row_extra: 4.0,
+    card_pad: 16.0,
+    card_gap: 12.0,
+    line_gap: 6.0,
+    section_gap: 40.0,
+};
+
+fn density_id() -> egui::Id {
+    egui::Id::new("jira-tickets-density")
+}
+
+/// Stores `d` on `ctx` and sets egui's spacing and text styles to match.
+pub fn set_density(ctx: &egui::Context, d: Density) {
+    ctx.data_mut(|m| m.insert_temp(density_id(), d));
+    let sp = d.spacing();
     ctx.all_styles_mut(|s| {
-        s.spacing.item_spacing = egui::vec2(8.0, 6.0);
-        s.spacing.button_padding = egui::vec2(12.0, 4.0);
-        s.text_styles.insert(egui::TextStyle::Body, body(14.0));
-        s.text_styles.insert(egui::TextStyle::Button, body(14.0));
+        s.spacing.item_spacing = sp.item;
+        s.spacing.button_padding = sp.button_padding;
+        s.text_styles.insert(egui::TextStyle::Body, body(sp.body));
+        s.text_styles.insert(egui::TextStyle::Button, body(sp.body));
         s.text_styles.insert(egui::TextStyle::Small, body(12.0));
         s.text_styles.insert(egui::TextStyle::Monospace, mono(12.5));
         s.text_styles.insert(egui::TextStyle::Heading, bold(20.0));
     });
-    ctx.set_fonts(fonts());
+}
+
+/// The appearance the user asked for: config's `[appearance]` table, or a choice made in the app.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct Appearance {
+    pub theme: Scheme,
+    pub density: Density,
+}
+
+/// A choice made in the app, saved with the config value it replaced.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct SavedAppearance {
+    /// The config's `[appearance]` when the choice was made.
+    pub config: Appearance,
+    pub chosen: Appearance,
+}
+
+/// What a launch uses: the saved choice while the config still says what it said when the choice was made;
+/// once the config's `[appearance]` is edited, the config wins.
+pub fn effective_appearance(config: Appearance, saved: Option<SavedAppearance>) -> Appearance {
+    match saved {
+        Some(s) if s.config == config => s.chosen,
+        _ => config,
+    }
 }
 
 /// The painted ink box of a galley, relative to its origin: the union of its glyphs' raster boxes (what a
@@ -704,6 +872,39 @@ mod tests {
 
     fn none() -> BTreeMap<String, String> {
         BTreeMap::new()
+    }
+
+    #[test]
+    fn scheme_and_density_parse_and_cycle() {
+        assert_eq!(Scheme::parse(" Dark "), Some(Scheme::Dark));
+        assert_eq!(Scheme::parse("system"), Some(Scheme::System));
+        assert_eq!(Scheme::parse("sepia"), None);
+        assert_eq!(Scheme::System.next().next().next(), Scheme::System);
+        assert_eq!(Scheme::Light.next(), Scheme::Dark);
+        assert_eq!(Density::parse("COMFORTABLE"), Some(Density::Comfortable));
+        assert_eq!(Density::parse("cozy"), None);
+        assert_eq!(Density::Compact.toggled(), Density::Comfortable);
+        assert_eq!(Density::Comfortable.toggled(), Density::Compact);
+    }
+
+    #[test]
+    fn compact_is_the_tuned_layout_and_comfortable_is_roomier() {
+        let (c, m) = (Density::Compact.spacing(), Density::Comfortable.spacing());
+        assert_eq!((c.item, c.button_padding, c.body), (egui::vec2(8.0, 6.0), egui::vec2(12.0, 4.0), 14.0));
+        assert_eq!((c.row_extra, c.card_pad, c.card_gap, c.line_gap, c.section_gap), (0.0, 12.0, 8.0, 4.0, 32.0));
+        assert!(m.item.x > c.item.x && m.item.y > c.item.y && m.button_padding.y > c.button_padding.y);
+        assert!(m.body > c.body && m.row_extra > 0.0 && m.card_pad > c.card_pad);
+        assert!(m.card_gap > c.card_gap && m.line_gap > c.line_gap && m.section_gap > c.section_gap);
+    }
+
+    #[test]
+    fn a_saved_choice_holds_until_the_config_changes() {
+        let config = Appearance::default();
+        let chosen = Appearance { theme: Scheme::Dark, density: Density::Comfortable };
+        assert_eq!(effective_appearance(config, None), config);
+        assert_eq!(effective_appearance(config, Some(SavedAppearance { config, chosen })), chosen);
+        let edited = Appearance { theme: Scheme::Light, ..config };
+        assert_eq!(effective_appearance(edited, Some(SavedAppearance { config, chosen })), edited, "an edited config wins");
     }
 
     #[test]
