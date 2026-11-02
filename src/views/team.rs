@@ -12,12 +12,6 @@ use egui::{Color32, Frame, Margin, RichText, Sense, Stroke, Ui, vec2};
 pub const COL_MIN: f32 = 260.0;
 /// Between columns, and under a column's header.
 const COL_GAP: f32 = 16.0;
-/// Between cards.
-const CARD_GAP: f32 = 8.0;
-/// A card's padding.
-const CARD_PAD: i8 = 12;
-/// Between a card's lines, and under the header's name.
-const LINE_GAP: f32 = 4.0;
 /// Between a card's pills.
 const PILL_GAP: f32 = 8.0;
 
@@ -145,7 +139,9 @@ fn column(
     header(ui, p, col, known);
     ui.add_space(COL_GAP - ui.spacing().item_spacing.y);
     egui::ScrollArea::vertical().id_salt(("team-col", ci)).auto_shrink([false, false]).show(ui, |ui| {
-        ui.spacing_mut().item_spacing.y = CARD_GAP;
+        // Between cards: the density's card gap.
+        let card_gap = theme::spacing(ui.ctx()).card_gap;
+        ui.spacing_mut().item_spacing.y = card_gap;
         if col.member.is_some() && col.in_progress.is_empty() {
             ui.label(RichText::new("nothing in progress").italics().color(p.muted).size(12.0));
         }
@@ -162,7 +158,7 @@ fn column(
             }
         }
         if let Some(f) = footer {
-            ui.add_space(COL_GAP - CARD_GAP);
+            ui.add_space(COL_GAP - card_gap);
             if done_footer(ui, p, &f) {
                 click = Some(Click::Footer);
             }
@@ -175,7 +171,8 @@ fn column(
 fn header(ui: &mut Ui, p: &Palette, col: &Column, known: bool) {
     let name = col.member.as_ref().map_or("Unassigned", |m| m.display.as_str());
     ui.label(RichText::new(name).font(theme::bold(13.5)).color(p.text));
-    ui.add_space(LINE_GAP - ui.spacing().item_spacing.y);
+    // Under the name: the density's line gap.
+    ui.add_space(theme::spacing(ui.ctx()).line_gap - ui.spacing().item_spacing.y);
     let line = match &col.member {
         Some(_) if col.none_found && known => RichText::new("no tickets found").color(p.off_track),
         Some(_) => RichText::new(counts_line(col.in_progress.len(), col.ready.len())).color(p.muted),
@@ -188,13 +185,14 @@ fn header(ui: &mut Ui, p: &Palette, col: &Column, known: bool) {
 fn card(app: &App, ui: &mut Ui, p: &Palette, id: (usize, usize), c: &Card, sel: bool) -> egui::Response {
     let i = c.issue;
     let bg = ui.painter().add(egui::Shape::Noop);
-    let r = Frame::new().stroke(Stroke::new(1.0, p.border)).corner_radius(theme::RADIUS).inner_margin(Margin::same(CARD_PAD)).show(ui, |ui| {
+    let sp = theme::spacing(ui.ctx());
+    let r = Frame::new().stroke(Stroke::new(1.0, p.border)).corner_radius(theme::RADIUS).inner_margin(Margin::same(sp.card_pad as i8)).show(ui, |ui| {
         ui.set_width(ui.available_width());
-        ui.spacing_mut().item_spacing.y = LINE_GAP;
+        ui.spacing_mut().item_spacing.y = sp.line_gap;
         ui.label(RichText::new(&i.key).font(theme::mono(12.5)).color(crate::views::issues::row_key_color(sel, p)));
         ui.add(egui::Label::new(RichText::new(&i.summary).font(theme::bold(13.5)).color(p.text)).wrap());
         ui.horizontal_wrapped(|ui| {
-            ui.spacing_mut().item_spacing = vec2(PILL_GAP, LINE_GAP);
+            ui.spacing_mut().item_spacing = vec2(PILL_GAP, sp.line_gap);
             let st = theme::status_tint(&i.status.name, &i.status.category, p, &app.cfg.issues.status_colors);
             crate::views::pill(ui, &i.status.name, crate::views::issues::status_fill(&st, p, sel), st.fg);
             let muted = if sel { crate::views::selected_pill_text(p) } else { p.muted };

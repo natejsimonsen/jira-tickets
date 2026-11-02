@@ -1067,6 +1067,8 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
     let out = egui::ScrollArea::vertical().auto_shrink([false, false]).scroll_bar_rect(track).show(ui, |ui| {
         crate::views::restore_fills(ui, saved);
         ui.spacing_mut().item_spacing.y = ROW_GAP;
+        // Comfortable's room above and below each row's content; 0 in Compact, so the tuned grid is untouched.
+        let extra = theme::spacing(ui.ctx()).row_extra;
         for (idx, i) in rows.iter().enumerate() {
             let is_sel = selected.as_deref() == Some(&i.key);
             let epic = i.parent_key.as_deref().map(|k| theme::epic_tint_in(k, &slots, p, epic_colors));
@@ -1083,7 +1085,7 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
                     ui.set_width(ui.available_width());
                     // The row's outer top edge (the content starts inside the 1 px border and the top margin).
                     let row_top = ui.cursor().top() - ROW_STROKE - f32::from(ROW_PAD_TOP);
-                    ui.add_space(ROW_PAD_TOP_EXTRA);
+                    ui.add_space(ROW_PAD_TOP_EXTRA + extra);
                     ui.spacing_mut().item_spacing.y = ROW_LINE_GAP;
                     ui.horizontal(|ui| {
                         let key_color = row_key_color(is_sel, p);
@@ -1130,7 +1132,7 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
                     pills.sort_by_key(|(k, _, _)| pill_rank(*k));
                     // The pill line at one fixed, pixel-rounded y from the row's top (C1), whatever the title row
                     // laid out to (its slot follows the inherited interact height and the galley).
-                    let line = pill_line_y(row_top, ui.ctx().pixels_per_point());
+                    let line = pill_line_y(row_top + extra, ui.ctx().pixels_per_point());
                     ui.add_space(line - ui.cursor().top());
                     ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing = vec2(PILL_GAP, 4.0);
@@ -1167,7 +1169,7 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
                             }
                         }
                     });
-                    ui.add_space(ROW_PAD_BOTTOM_EXTRA);
+                    ui.add_space(ROW_PAD_BOTTOM_EXTRA + extra);
                 });
             let rect = r.response.rect;
             row_spans.push((rect.top(), rect.bottom()));

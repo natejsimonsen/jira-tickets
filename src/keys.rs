@@ -40,6 +40,8 @@ const fn b(group: Group, keys: &'static str, what: &'static str) -> KeyBinding {
 pub const BINDINGS: &[KeyBinding] = &[
     b(Group::Global, "⌘1 to ⌘4", "Issues, Grooming, Team, Roadmap"),
     b(Group::Global, "⌘R", "Refresh"),
+    b(Group::Global, "⌘⇧T", "Theme: System, Light, or Dark"),
+    b(Group::Global, "⌘⇧D", "Density: Compact or Comfortable"),
     b(Group::Global, "⌘W", "Close the window"),
     // Esc is global: it cancels a picker or the Edit bar and closes go-to (round 13 H3).
     b(Group::Global, "Esc", "Cancel or close"),
@@ -419,7 +421,7 @@ mod tests {
         assert!(t.contains("| `J/K` | Move a Ready for Work ticket down or up in rank |\n"));
         assert!(t.contains("| `j/k` or `↑/↓` | Move |\n"), "one alternatives order, no keys in prose");
         let global = BINDINGS.iter().filter(|k| k.group == Group::Global).count();
-        assert_eq!(global, 5, "only the keys that work on every screen live in Global; ⌘K and ⌘O are Issues keys");
+        assert_eq!(global, 7, "only the keys that work on every screen live in Global; ⌘K and ⌘O are Issues keys");
         assert!(t.contains("| **Issues** | |\n| `⌘K` | Go to an issue by key, number, or link |\n| `⌘O` | Open in Jira |\n"));
         assert!(t.contains("| `Esc` | Cancel or close |\n| `?` or `Esc` | Close this help |\n"), "Esc right above the help row");
         assert!(t.contains("| `?` or `Esc` | Close this help |\n| **Issues** | |\n"), "one help row, the last of Global");
