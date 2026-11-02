@@ -580,7 +580,7 @@ impl Density {
     }
 }
 
-/// Every density-dependent size in one place, in points.
+/// Every density-dependent size in one place, in points. Views read it through `spacing(ctx)`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Spacing {
     /// egui's gap between widgets.
@@ -627,6 +627,16 @@ pub const COMFORTABLE: Spacing = Spacing {
 
 fn density_id() -> egui::Id {
     egui::Id::new("jira-tickets-density")
+}
+
+/// The density last set on `ctx`; Compact until `set_density` says otherwise.
+pub fn density(ctx: &egui::Context) -> Density {
+    ctx.data(|d| d.get_temp::<Density>(density_id())).unwrap_or_default()
+}
+
+/// The spacing of `ctx`'s density.
+pub fn spacing(ctx: &egui::Context) -> &'static Spacing {
+    density(ctx).spacing()
 }
 
 /// Stores `d` on `ctx` and sets egui's spacing and text styles to match.
@@ -895,6 +905,17 @@ mod tests {
         assert!(m.item.x > c.item.x && m.item.y > c.item.y && m.button_padding.y > c.button_padding.y);
         assert!(m.body > c.body && m.row_extra > 0.0 && m.card_pad > c.card_pad);
         assert!(m.card_gap > c.card_gap && m.line_gap > c.line_gap && m.section_gap > c.section_gap);
+    }
+
+    #[test]
+    fn density_lives_on_the_context() {
+        let ctx = egui::Context::default();
+        assert_eq!(density(&ctx), Density::Compact, "Compact until set");
+        set_density(&ctx, Density::Comfortable);
+        assert_eq!(spacing(&ctx), &COMFORTABLE);
+        assert_eq!(ctx.style_of(egui::Theme::Dark).spacing.item_spacing, COMFORTABLE.item);
+        set_density(&ctx, Density::Compact);
+        assert_eq!(ctx.style_of(egui::Theme::Dark).spacing.item_spacing, egui::vec2(8.0, 6.0));
     }
 
     #[test]

@@ -267,7 +267,9 @@ fn now_next_later(ui: &mut Ui, p: &Palette, items: &[Initiative], ongoing: &[Str
                 ui.add_space(LINE_GAP);
                 ui.add(egui::Label::new(RichText::new(sub).size(12.0).color(p.muted)).wrap());
                 ui.add_space(PAD as f32);
-                ui.spacing_mut().item_spacing.y = CARD_GAP;
+                // Between cards: the density's card gap (CARD_GAP in Compact).
+                let card_gap = theme::spacing(ui.ctx()).card_gap;
+                ui.spacing_mut().item_spacing.y = card_gap;
                 if col.is_empty() {
                     ui.label(RichText::new("None").size(12.0).color(p.muted));
                 }
@@ -279,7 +281,7 @@ fn now_next_later(ui: &mut Ui, p: &Palette, items: &[Initiative], ongoing: &[Str
                 if ci == 0
                     && let Some(line) = ktlo_line(ongoing)
                 {
-                    ui.add_space(PAD as f32 - CARD_GAP);
+                    ui.add_space(PAD as f32 - card_gap);
                     ui.add(egui::Label::new(RichText::new(line).size(12.0).color(p.muted)).wrap());
                 }
             });
@@ -297,9 +299,10 @@ fn card(ui: &mut Ui, p: &Palette, i: &Initiative, now: bool, sel: bool, at: usiz
     // The chips sit one step off the card's fill, which follows last frame's hover.
     let hovered = ui.ctx().read_response(id).is_some_and(|r| r.hovered());
     let fill = crate::views::issues::row_fill(sel, hovered, p);
-    let r = Frame::new().stroke(Stroke::new(1.0, p.border)).corner_radius(theme::RADIUS).inner_margin(Margin::same(PAD)).show(ui, |ui| {
+    let sp = theme::spacing(ui.ctx());
+    let r = Frame::new().stroke(Stroke::new(1.0, p.border)).corner_radius(theme::RADIUS).inner_margin(Margin::same(sp.card_pad as i8)).show(ui, |ui| {
         ui.set_width(ui.available_width());
-        ui.spacing_mut().item_spacing.y = LINE_GAP;
+        ui.spacing_mut().item_spacing.y = sp.line_gap;
         ui.horizontal_top(|ui| {
             ui.spacing_mut().item_spacing.x = CARD_GAP;
             if now {
@@ -473,10 +476,12 @@ fn table(ui: &mut Ui, p: &Palette, rows: &[&Initiative], focus: Focus, acts: &mu
     }
 }
 
-/// One table cell `w` wide: 12 in from its left (and the last column's right), 8 above and below.
+/// One table cell `w` wide: 12 in from its left (and the last column's right), 8 above and below plus the
+/// density's row room.
 fn cell(ui: &mut Ui, w: f32, col: usize, content: impl FnOnce(&mut Ui)) -> Rect {
     let right = if col == HEADS.len() - 1 { PAD } else { 0 };
-    let r = Frame::new().inner_margin(Margin { left: PAD, right, top: 8, bottom: 8 }).show(ui, |ui| {
+    let y = (8.0 + theme::spacing(ui.ctx()).row_extra) as i8;
+    let r = Frame::new().inner_margin(Margin { left: PAD, right, top: y, bottom: y }).show(ui, |ui| {
         let inner = w - PAD as f32 - right as f32;
         ui.set_width(inner);
         ui.spacing_mut().item_spacing.y = LINE_GAP;

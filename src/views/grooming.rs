@@ -66,10 +66,15 @@ const LIST_MIN: f32 = 360.0;
 const LIST_MAX: f32 = 560.0;
 /// The gap between the list and the focused ticket, and the cards' inner padding.
 const PANE_GAP: f32 = 16.0;
-/// A list row's padding.
-const ROW_PAD: Margin = Margin { left: 12, right: 12, top: 8, bottom: 8 };
-/// Between a row's title line and its pill line, and between pills.
-const LINE_GAP: f32 = 4.0;
+/// A list row's padding: 12 at the sides, 8 above and below, plus the density's row room.
+fn row_pad(ui: &Ui) -> Margin {
+    let y = (8.0 + theme::spacing(ui.ctx()).row_extra) as i8;
+    Margin { left: 12, right: 12, top: y, bottom: y }
+}
+/// Between a row's title line and its pill line (the density's line gap, 4 in Compact).
+fn line_gap(ui: &Ui) -> f32 {
+    theme::spacing(ui.ctx()).line_gap
+}
 const PILL_GAP: f32 = 6.0;
 /// The Issues list's row overlap.
 const ROW_GAP: f32 = -1.0;
@@ -159,7 +164,7 @@ fn candidate_list(app: &mut App, ui: &mut Ui, p: &Palette, cursor: usize) {
             });
             let resp = row_frame(ui, p, "groom-row", sel, idx, total, |ui| {
                 title_line(ui, p, &i.key, &i.summary, sel);
-                ui.add_space(LINE_GAP);
+                ui.add_space(line_gap(ui));
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = PILL_GAP;
                     match (&badge, verdict) {
@@ -199,7 +204,7 @@ fn candidate_list(app: &mut App, ui: &mut Ui, p: &Palette, cursor: usize) {
         let resp = row_frame(ui, p, "groom-row", sel, idx, total, |ui| {
             let g = ui.painter().layout_no_wrap(summary_line(&plan, unjudged), theme::bold(13.5), p.text);
             ui.label(g);
-            ui.add_space(LINE_GAP);
+            ui.add_space(line_gap(ui));
             ui.label(RichText::new("Enter opens the promotion plan").color(p.muted).size(12.0));
         });
         if resp.clicked() {
@@ -230,7 +235,7 @@ fn row_id(salt: &str, idx: usize) -> egui::Id {
 fn row_frame(ui: &mut Ui, p: &Palette, salt: &str, sel: bool, idx: usize, n: usize, content: impl FnOnce(&mut Ui)) -> egui::Response {
     let corners = super::issues::row_corners(idx, n);
     let bg = ui.painter().add(egui::Shape::Noop);
-    let r = Frame::new().stroke(Stroke::new(1.0, p.border)).corner_radius(corners).inner_margin(ROW_PAD).show(ui, |ui| {
+    let r = Frame::new().stroke(Stroke::new(1.0, p.border)).corner_radius(corners).inner_margin(row_pad(ui)).show(ui, |ui| {
         ui.set_width(ui.available_width());
         content(ui);
     });
@@ -762,7 +767,7 @@ fn candidate_row(
 ) -> egui::Response {
     row_frame(ui, p, salt, sel, idx, n, |ui| {
         title_line(ui, p, &i.key, &i.summary, sel);
-        ui.add_space(LINE_GAP);
+        ui.add_space(line_gap(ui));
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = PILL_GAP;
             if let Some((d, b)) = report.and_then(|(d, r)| r.badge_for(&i.key).map(|b| (d, b))) {
@@ -873,11 +878,11 @@ fn ghost_row(ui: &mut Ui, p: &Palette, c: &jira::Issue, idx: usize, n: usize) {
         .fill(super::issues::row_fill(true, false, p))
         .stroke(Stroke::new(1.0, p.muted))
         .corner_radius(super::issues::row_corners(idx, n))
-        .inner_margin(ROW_PAD)
+        .inner_margin(row_pad(ui))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
             title_line(ui, p, &c.key, &c.summary, true);
-            ui.add_space(LINE_GAP);
+            ui.add_space(line_gap(ui));
             ui.label(RichText::new("Lands here · Enter to place").color(p.muted).size(12.0));
         });
 }
