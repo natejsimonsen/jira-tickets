@@ -42,6 +42,7 @@ pub enum Screen {
     Grooming,
     Team,
     Roadmap,
+    Me,
 }
 
 #[derive(Default)]
@@ -131,6 +132,13 @@ pub struct TeamState {
     pub done: HashMap<String, Vec<jira::Issue>>,
     /// Member ids with a done load in flight.
     pub done_loading: HashSet<String>,
+}
+
+/// Everything the Me screen keeps between frames.
+#[derive(Default)]
+pub struct MeState {
+    /// The focused row, counting down through the sections (`me::issue_at`).
+    pub cursor: usize,
 }
 
 /// Everything the Roadmap screen keeps between frames.
@@ -255,6 +263,7 @@ pub struct App {
     pub roadmap: RoadmapState,
     /// The colour scheme and density in use (`theme::effective_appearance`, then ⌘⇧T / ⌘⇧D).
     pub appearance: Appearance,
+    pub me_view: MeState,
     /// How many report reads were started, for tests.
     #[cfg(test)]
     pub(crate) report_reads: usize,
@@ -274,13 +283,16 @@ pub struct App {
 
 impl App {
     /// True once the lists `screen` draws have loaded; snapshots wait for it. Every screen needs the first team
-    /// list; the Roadmap also needs the epics and, when any epic is an initiative, their children (the progress).
+    /// list; Me needs its own list; the Roadmap also needs the epics and, when any epic is an initiative, their children (the progress).
     #[cfg(feature = "snapshot")]
     pub fn shot_ready(&self, screen: Screen) -> bool {
         use crate::store::ListId;
         let fetched = |id: ListId| self.lists.get(&id).is_some_and(|l| l.fetched.is_some());
         if !fetched(ListId::TeamOpen) {
             return false;
+        }
+        if screen == Screen::Me {
+            return fetched(ListId::Me);
         }
         if screen != Screen::Roadmap {
             return true;
@@ -355,6 +367,7 @@ impl App {
             team: TeamState::default(),
             roadmap: RoadmapState::default(),
             appearance: Appearance::default(),
+            me_view: MeState::default(),
             #[cfg(test)]
             report_reads: 0,
             client: None,
@@ -430,6 +443,18 @@ impl App {
         let in_progress = self.store.list(ListId::TeamInProgress);
         let team_open = self.store.list(ListId::TeamOpen);
         crate::teamview::columns(&self.cfg.team.members, &in_progress, &team_open, &self.cfg.grooming.status_ready, chrono::Utc::now())
+    }
+
+    /// The Me screen's sections, from the Me list in the store.
+    pub fn me_sections(&self) -> Vec<(crate::me::Section, Vec<crate::teamview::Card<'_>>)> {
+        crate::me::sections(&self.store.list(ListId::Me), chrono::Utc::now())
+    }
+
+    /// The issue under the Me cursor, clamped to the rows there are.
+    pub fn me_focused(&self) -> Option<String> {
+        let s = self.me_sections();
+        let row = crate::me::moved(self.me_view.cursor, 0, crate::me::row_count(&s));
+        crate::me::issue_at(&s, row).map(|i| i.key.clone())
     }
 
     /// The roadmap's initiatives, derived from the epics in the store and their children, and the summaries of the
@@ -867,6 +892,61 @@ mod tests {
         assert_eq!(app.roadmap.cursor, 0, "a tab without rows keeps the cursor at 0");
         app.apply(Action::RoadmapOpen, &ctx);
         assert_eq!(app.screen, Screen::Roadmap, "nothing to open");
+    }
+
+    fn me_app() -> App {
+        let mut app = App::for_test(cfg(), None);
+        app.screen = Screen::Me;
+        let issue = |key: &str, cat: &str, rank: &str| crate::jira::Issue {
+            key: key.into(),
+            status: crate::jira::Status { name: "x".into(), category: cat.into() },
+            rank: rank.into(),
+            ..Default::default()
+        };
+        app.store.absorb(ListId::Me, vec![issue("CI-3", "done", ""), issue("CI-2", "new", "0|a"), issue("CI-1", "indeterminate", "0|b")]);
+        app
+    }
+
+    #[test]
+    fn me_move_selects_and_open_goes_to_issues() {
+        let mut app = me_app();
+        let ctx = egui::Context::default();
+        assert_eq!(app.me_focused().as_deref(), Some("CI-1"), "opens on the in-progress ticket");
+        app.apply(Action::MeMove(1), &ctx);
+        assert_eq!((app.me_view.cursor, app.selected.as_deref()), (1, Some("CI-2")), "then To do");
+        app.apply(Action::MeMove(9), &ctx);
+        assert_eq!((app.me_view.cursor, app.selected.as_deref()), (2, Some("CI-3")), "clamped to the last done ticket");
+        app.apply(Action::MeMove(-9), &ctx);
+        assert_eq!(app.me_view.cursor, 0);
+        app.apply(Action::MeOpen, &ctx);
+        assert_eq!((app.screen, app.selected.as_deref()), (Screen::Issues, Some("CI-1")));
+    }
+
+    #[test]
+    fn me_list_loads_only_with_a_client() {
+        let mut app = App::for_test(cfg(), None);
+        app.refresh_all();
+        assert!(!app.lists.get(&ListId::Me).is_some_and(|l| l.loading), "no client: nothing would clear the flag");
+        let (base, _rx) = crate::jira::tests::stub_server(vec![]);
+        let login = crate::auth::Login { email: "a@b.c".into(), token: "t".into(), source: crate::auth::Source::Env };
+        app.client = Some(std::sync::Arc::new(crate::jira::Client::new(&base, &login)));
+        app.refresh_all();
+        assert!(app.lists.get(&ListId::Me).is_some_and(|l| l.loading), "a refresh loads the Me list");
+    }
+
+    #[test]
+    fn me_keys() {
+        let mut app = me_app();
+        press(&mut app, egui::Key::J, egui::Modifiers::NONE);
+        press(&mut app, egui::Key::Enter, egui::Modifiers::NONE);
+        assert!(matches!(app.actions.as_slice(), [Action::MeMove(1), Action::MeOpen]));
+        app.actions.clear();
+        press(&mut app, egui::Key::O, egui::Modifiers::COMMAND);
+        assert!(matches!(app.actions.as_slice(), [Action::OpenUrl(u)] if u.ends_with("/browse/CI-1")));
+        app.actions.clear();
+        app.screen = Screen::Issues;
+        press(&mut app, egui::Key::Num5, egui::Modifiers::COMMAND);
+        assert!(matches!(app.actions.as_slice(), [Action::SetScreen(Screen::Me)]), "⌘5 is the Me screen");
     }
 
     /// Runs the shortcuts over one pass that presses `key` with `mods`.

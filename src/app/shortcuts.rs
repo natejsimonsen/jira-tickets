@@ -9,7 +9,8 @@ use egui::{Key, KeyboardShortcut, Modifiers};
 impl App {
     pub(super) fn shortcuts(&mut self, ctx: &egui::Context) {
         let cmd = Modifiers::COMMAND;
-        let screens = [(Key::Num1, Screen::Issues), (Key::Num2, Screen::Grooming), (Key::Num3, Screen::Team), (Key::Num4, Screen::Roadmap)];
+        let screens =
+            [(Key::Num1, Screen::Issues), (Key::Num2, Screen::Grooming), (Key::Num3, Screen::Team), (Key::Num4, Screen::Roadmap), (Key::Num5, Screen::Me)];
         for (k, s) in screens {
             if ctx.input_mut(|i| i.consume_shortcut(&KeyboardShortcut::new(cmd, k))) {
                 self.actions.push(Action::SetScreen(s));
@@ -73,7 +74,11 @@ impl App {
             self.team_shortcuts(ctx);
             return;
         }
-        // Roadmap's plain 1 to 4 are its tabs; ⌘1 to ⌘4 were taken above.
+        if self.screen == Screen::Me {
+            self.me_shortcuts(ctx);
+            return;
+        }
+        // Roadmap's plain 1 to 4 are its tabs; ⌘1 to ⌘5 were taken above.
         if self.screen == Screen::Roadmap {
             self.roadmap_shortcuts(ctx);
             return;
@@ -309,6 +314,30 @@ impl App {
         }
         if key(Key::Enter) {
             self.actions.push(Action::RoadmapOpen);
+        }
+    }
+}
+
+impl App {
+    /// The Me screen's keys (`keys::Group::Me`).
+    fn me_shortcuts(&mut self, ctx: &egui::Context) {
+        if ctx.input_mut(|i| i.consume_shortcut(&KeyboardShortcut::new(Modifiers::COMMAND, Key::O)))
+            && let Some(key) = self.me_focused()
+        {
+            self.actions.push(Action::OpenUrl(self.cfg.browse_url(&key)));
+        }
+        if ctx.text_edit_focused() {
+            return;
+        }
+        let key = |k: Key| ctx.input_mut(|i| i.consume_shortcut(&KeyboardShortcut::new(Modifiers::NONE, k)));
+        if key(Key::J) | key(Key::ArrowDown) {
+            self.actions.push(Action::MeMove(1));
+        }
+        if key(Key::K) | key(Key::ArrowUp) {
+            self.actions.push(Action::MeMove(-1));
+        }
+        if key(Key::Enter) {
+            self.actions.push(Action::MeOpen);
         }
     }
 }

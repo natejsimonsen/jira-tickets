@@ -284,6 +284,7 @@ pub fn hints_panel(app: &App, ui: &mut Ui, p: &Palette) {
         grooming,
         team: app.screen == Screen::Team,
         roadmap: (app.screen == Screen::Roadmap).then_some(app.roadmap.tab),
+        me: app.screen == Screen::Me,
     });
     hint_strip(ui, crate::keys::hints(c), p);
 }

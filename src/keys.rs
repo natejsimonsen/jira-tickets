@@ -8,6 +8,7 @@ pub enum Group {
     Grooming,
     Team,
     Roadmap,
+    Me,
     Pickers,
 }
 
@@ -19,13 +20,14 @@ impl Group {
             Group::Grooming => "Grooming",
             Group::Team => "Team",
             Group::Roadmap => "Roadmap",
+            Group::Me => "Me",
             Group::Pickers => "Pickers and Edit",
         }
     }
 }
 
 /// `keys` lists alternatives separated by ", ", drawn as chips joined by a muted "or" ("⌘F or /"); " to "
-/// joins the ends of a range ("⌘1 to ⌘4"), drawn as two chips with a muted "to"; "/" inside one chip is a
+/// joins the ends of a range ("⌘1 to ⌘5"), drawn as two chips with a muted "to"; "/" inside one chip is a
 /// pair ("j/k").
 pub struct KeyBinding {
     pub group: Group,
@@ -38,7 +40,7 @@ const fn b(group: Group, keys: &'static str, what: &'static str) -> KeyBinding {
 }
 
 pub const BINDINGS: &[KeyBinding] = &[
-    b(Group::Global, "⌘1 to ⌘4", "Issues, Grooming, Team, Roadmap"),
+    b(Group::Global, "⌘1 to ⌘5", "Issues, Grooming, Team, Roadmap, Me"),
     b(Group::Global, "⌘R", "Refresh"),
     b(Group::Global, "⌘⇧T", "Theme: System, Light, or Dark"),
     b(Group::Global, "⌘⇧D", "Density: Compact or Comfortable"),
@@ -80,10 +82,13 @@ pub const BINDINGS: &[KeyBinding] = &[
     b(Group::Team, "j/k, ↑/↓", "Next or previous ticket"),
     b(Group::Team, "Enter", "Open in Issues"),
     b(Group::Team, "d", "Show or hide done in the last 7 days"),
-    // Plain digits on Roadmap only; ⌘1 to ⌘4 stay the screen switches.
+    // Plain digits on Roadmap only; ⌘1 to ⌘5 stay the screen switches.
     b(Group::Roadmap, "1 to 4", "Now / Next / Later, Timeline, Status review, Outcomes"),
     b(Group::Roadmap, "j/k, ↑/↓", "Next or previous initiative"),
     b(Group::Roadmap, "Enter", "Open in Issues"),
+    b(Group::Me, "j/k, ↑/↓", "Next or previous ticket"),
+    b(Group::Me, "Enter", "Open in Issues"),
+    b(Group::Me, "⌘O", "Open in Jira"),
     b(Group::Pickers, "j/k, ↑/↓", "Move"),
     b(Group::Pickers, "Tab/⇧Tab", "Next or previous field"),
     b(Group::Pickers, "Enter", "Confirm"),
@@ -94,7 +99,7 @@ pub fn chips(keys: &str) -> impl Iterator<Item = &str> {
     keys.split(", ")
 }
 
-/// The chips of one alternative: ["⌘1", "⌘4"] for the range "⌘1 to ⌘4", else just the key.
+/// The chips of one alternative: ["⌘1", "⌘5"] for the range "⌘1 to ⌘5", else just the key.
 pub fn range(alt: &str) -> Vec<&str> {
     alt.split(" to ").collect()
 }
@@ -169,6 +174,8 @@ pub enum HintContext {
     Roadmap,
     /// The Roadmap screen on a tab with nothing to move through or open (Timeline, Outcomes).
     RoadmapView,
+    /// The Me screen.
+    Me,
 }
 
 /// Which text field has keyboard focus, if any.
@@ -227,6 +234,8 @@ pub struct HintState {
     pub team: bool,
     /// The Roadmap screen is showing, on this tab (1 to 4).
     pub roadmap: Option<u8>,
+    /// The Me screen is showing.
+    pub me: bool,
 }
 
 impl HintState {
@@ -243,12 +252,13 @@ impl HintState {
             grooming: None,
             team: false,
             roadmap: None,
+            me: false,
         }
     }
 }
 
 pub fn hint_context(s: HintState) -> HintContext {
-    let HintState { help_open, goto_open, picker, has_selection, focus, search_shown, read_only, grooming, team, roadmap } = s;
+    let HintState { help_open, goto_open, picker, has_selection, focus, search_shown, read_only, grooming, team, roadmap, me } = s;
     match (help_open, goto_open, picker) {
         (true, _, _) => HintContext::Help,
         // An open picker or go-to box owns the bar on every screen, Grooming included.
@@ -263,6 +273,7 @@ pub fn hint_context(s: HintState) -> HintContext {
         _ if grooming == Some(GroomHint::Placement) => HintContext::GroomPlacement,
         _ if grooming == Some(GroomHint::Bounce) => HintContext::GroomBounce,
         _ if team => HintContext::Team,
+        _ if me => HintContext::Me,
         // Timeline and Outcomes have no cursor (`views::roadmap::tab_rows` is empty), so no move or open hint.
         _ if matches!(roadmap, Some(2 | 4)) => HintContext::RoadmapView,
         _ if roadmap.is_some() => HintContext::Roadmap,
@@ -354,6 +365,7 @@ pub fn hints(c: HintContext) -> &'static [Hint] {
             &[&[K("1"), W("to"), K("4"), W("tab")], &[K("j/k"), W("or"), K("↑/↓"), W("move")], &[K("Enter"), W("open")], &[K("?"), W("help")]]
         }
         HintContext::RoadmapView => &[&[K("1"), W("to"), K("4"), W("tab")], &[K("?"), W("help")]],
+        HintContext::Me => &[&[K("j/k"), W("or"), K("↑/↓"), W("move")], &[K("Enter"), W("open")], &[K("⌘O"), W("Jira")], &[K("?"), W("help")]],
         HintContext::SignIn => &[&[K("Enter"), W("sign in")]],
         HintContext::Browse => &[&[K("j/k"), W("or"), K("↑/↓"), W("move")], &[K("⌘K"), W("go to")], &[K("⌘F"), W("search")], &[K("?"), W("help")]],
         HintContext::BrowseSearch => {
@@ -413,8 +425,8 @@ mod tests {
     #[test]
     fn readme_table_groups_and_quotes_keys() {
         let t = readme_table();
-        assert!(t.starts_with("| Keys | Action |\n| --- | --- |\n| **Global** | |\n| `⌘1` to `⌘4` | Issues, Grooming, Team, Roadmap |\n"));
-        assert_eq!(range("⌘1 to ⌘4"), ["⌘1", "⌘4"]);
+        assert!(t.starts_with("| Keys | Action |\n| --- | --- |\n| **Global** | |\n| `⌘1` to `⌘5` | Issues, Grooming, Team, Roadmap, Me |\n"));
+        assert_eq!(range("⌘1 to ⌘5"), ["⌘1", "⌘5"]);
         assert_eq!(range("j/k"), ["j/k"]);
         assert!(t.contains("| `⌘F` or `/` | Focus search |\n"));
         assert!(t.contains("| `⌘K` | Go to an issue by key, number, or link |\n"));
@@ -434,8 +446,9 @@ mod tests {
         assert!(t.contains(
             "| `d` | Show or hide done in the last 7 days |\n| **Roadmap** | |\n| `1` to `4` | Now / Next / Later, Timeline, Status review, Outcomes |\n"
         ));
-        assert!(t.contains("| `Enter` | Open in Issues |\n| **Pickers and Edit** | |\n"));
-        assert_eq!(t.matches("| **").count(), 6);
+        assert!(t.contains("| `Enter` | Open in Issues |\n| **Me** | |\n| `j/k` or `↑/↓` | Next or previous ticket |\n"));
+        assert!(t.contains("| `⌘O` | Open in Jira |\n| **Pickers and Edit** | |\n"));
+        assert_eq!(t.matches("| **").count(), 7);
     }
 
     fn st(help_open: bool, goto_open: bool, picker: Option<PickerHint>, has_selection: bool, focus: Focus) -> HintState {
@@ -507,6 +520,10 @@ mod tests {
         assert_eq!(hint_context(roadmap(4)), RoadmapView, "Outcomes has no cursor");
         assert_eq!(hint_context(HintState { help_open: true, ..roadmap(2) }), Help);
         assert_eq!(hint_text(hints(RoadmapView)), "1 to 4 tab · ? help");
+        let me = HintState { me: true, has_selection: true, ..HintState::new(Focus::None) };
+        assert_eq!(hint_context(me), Me, "the selection the Me screen sets does not bring the Issues keys");
+        assert_eq!(hint_context(HintState { help_open: true, ..me }), Help);
+        assert_eq!(hint_text(hints(Me)), "j/k or ↑/↓ move · Enter open · ⌘O Jira · ? help");
         assert_eq!(hint_text(hints(GoTo)), "Enter open · Esc close");
         assert_eq!(hint_text(hints(Search)), "Enter run as JQL · Esc clear", "one Enter wording for every search text");
         assert_eq!(hint_text(hints(EditPicker)), "Tab/⇧Tab next or previous field · Enter confirm · Esc cancel");

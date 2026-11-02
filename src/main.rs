@@ -9,6 +9,7 @@ mod filter;
 mod grooming;
 mod jira;
 mod keys;
+mod me;
 mod report;
 mod roadmap;
 #[cfg(feature = "snapshot")]

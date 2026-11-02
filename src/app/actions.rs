@@ -110,6 +110,10 @@ pub enum Action {
     RoadmapMove(i32),
     /// Opens the focused Roadmap initiative's epic on the Issues screen.
     RoadmapOpen,
+    /// Moves the Me cursor down (or up) its rows and selects the ticket there, so the detail pane shows it.
+    MeMove(i32),
+    /// Opens the focused Me ticket on the Issues screen.
+    MeOpen,
 }
 
 impl App {
@@ -229,6 +233,20 @@ impl App {
         }
     }
 
+    fn me_move(&mut self, d: i32, ctx: &egui::Context) {
+        let rows = crate::me::row_count(&self.me_sections());
+        self.me_view.cursor = crate::me::moved(self.me_view.cursor, d, rows);
+        if let Some(key) = self.me_focused() {
+            self.apply(Action::Select(key), ctx);
+        }
+    }
+
+    fn me_open(&mut self, ctx: &egui::Context) {
+        if let Some(key) = self.me_focused() {
+            self.open_in_issues(key, ctx);
+        }
+    }
+
     /// The Unassigned column has no footer.
     fn team_toggle_done(&mut self) {
         let member = {
@@ -284,6 +302,8 @@ impl App {
             Action::RoadmapTab(t) => self.roadmap_tab(t),
             Action::RoadmapMove(d) => self.roadmap_move(d),
             Action::RoadmapOpen => self.roadmap_open(ctx),
+            Action::MeMove(d) => self.me_move(d, ctx),
+            Action::MeOpen => self.me_open(ctx),
             Action::GroomMode(m) => self.groom_mode(m),
             Action::GroomMove(d) => self.groom_move(d),
             Action::GroomEpic { delta, skip_empty } => self.groom_epic(delta, skip_empty),

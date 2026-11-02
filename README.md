@@ -1,6 +1,6 @@
 # Jira Tickets
 
-A fast native desktop app for working through Jira tickets, built with Rust and egui. It keeps a local cache so it opens instantly, searches and filters the team's issues from the keyboard, and shows each issue's description and comments with Jira's rich text rendered. The Grooming screen walks the New column and runs grooming sessions, the Team screen shows what each member is working on, and the Roadmap screen turns the project's epics into a Now / Next / Later board, a quarter timeline, a status review, and outcomes by metric.
+A fast native desktop app for working through Jira tickets, built with Rust and egui. It keeps a local cache so it opens instantly, searches and filters the team's issues from the keyboard, and shows each issue's description and comments with Jira's rich text rendered. The Grooming screen walks the New column and runs grooming sessions, the Team screen shows what each member is working on, the Me screen shows your own tickets, and the Roadmap screen turns the project's epics into a Now / Next / Later board, a quarter timeline, a status review, and outcomes by metric.
 
 ## Install
 
@@ -68,7 +68,7 @@ Only a token you paste is saved. Signing out deletes that file.
 | Keys | Action |
 | --- | --- |
 | **Global** | |
-| `⌘1` to `⌘4` | Issues, Grooming, Team, Roadmap |
+| `⌘1` to `⌘5` | Issues, Grooming, Team, Roadmap, Me |
 | `⌘R` | Refresh |
 | `⌘⇧T` | Theme: System, Light, or Dark |
 | `⌘⇧D` | Density: Compact or Comfortable |
@@ -114,13 +114,17 @@ Only a token you paste is saved. Signing out deletes that file.
 | `1` to `4` | Now / Next / Later, Timeline, Status review, Outcomes |
 | `j/k` or `↑/↓` | Next or previous initiative |
 | `Enter` | Open in Issues |
+| **Me** | |
+| `j/k` or `↑/↓` | Next or previous ticket |
+| `Enter` | Open in Issues |
+| `⌘O` | Open in Jira |
 | **Pickers and Edit** | |
 | `j/k` or `↑/↓` | Move |
 | `Tab/⇧Tab` | Next or previous field |
 | `Enter` | Confirm |
 <!-- keys:end -->
 
-Only the Global keys work on every screen: `⌘1`–`⌘4`, `⌘R`, `⌘W`, `?`, and `Esc`, which cancels or closes whatever is open on the current screen. The Issues keys (`⌘K` and `⌘O` among them) apply on the Issues screen only, and the Grooming keys on the Grooming screen only. Plain keys (letters, `/`, `?`) do nothing while a text field has focus. While a picker is open, only `Esc`, the arrow keys (and `j` / `k`, except in the Assign picker), and `Enter` apply (in the Edit dialog, `Tab` and `⇧Tab` move between fields and `Enter` confirms); `?` also works while a picker without a text field is open. Selecting a row shows its detail. `?` (or the "?" button in the header) opens this list in the app, and a bar at the bottom of every screen shows the keys that apply right now. While the help is open only the global keys apply; `?` or `Esc` closes it.
+Only the Global keys work on every screen: `⌘1`–`⌘5`, `⌘R`, `⌘W`, `?`, and `Esc`, which cancels or closes whatever is open on the current screen. The Issues keys (`⌘K` and `⌘O` among them) apply on the Issues screen only, and the Grooming keys on the Grooming screen only. Plain keys (letters, `/`, `?`) do nothing while a text field has focus. While a picker is open, only `Esc`, the arrow keys (and `j` / `k`, except in the Assign picker), and `Enter` apply (in the Edit dialog, `Tab` and `⇧Tab` move between fields and `Enter` confirms); `?` also works while a picker without a text field is open. Selecting a row shows its detail. `?` (or the "?" button in the header) opens this list in the app, and a bar at the bottom of every screen shows the keys that apply right now. While the help is open only the global keys apply; `?` or `Esc` closes it.
 
 Above the Issues list are a team picker, an epic picker, a sprint picker, the config's quick filters, a Mine toggle, a Roadmap toggle, and the search box. The Roadmap toggle (`m`) shows only tickets under epics labelled `roadmap`; epics themselves are containers and never appear in the list. The sprint picker offers All sprints, the board's active and future sprints, and Backlog (issues in no active or future sprint, including ones only ever in closed sprints, as on the Jira board). It starts on the active sprint, or All sprints if the board has none.
 
@@ -224,6 +228,16 @@ Labels are the lightweight way to fill the roadmap in from Jira: add `roadmap`, 
 - The Outcomes tab says so when no epic has a `metric:` label, which is the case today.
 - The TOOLS board includes unlabelled tickets by assignee; Team columns only cover members listed in `[team].members`.
 
+## Me
+
+The Me screen (`⌘5`) shows the tickets assigned to you, found by `currentUser()`, so it needs no config. It opens on your in-progress work, in three sections:
+
+- In progress: your tickets in the In Progress status category, in rank order.
+- To do in open sprints: your To Do tickets in an active or future sprint, in rank order.
+- Done in the last 7 days: what you resolved this past week, newest first.
+
+The cards match the Team screen's. The focused ticket's detail shows on the right. `j`/`k` or `↑`/`↓` move, `Enter` (or a double click) opens the ticket on the Issues screen, and `⌘O` opens it in Jira.
+
 ## Developer switches
 
 - `JIRA_TICKETS_READONLY` blocks every write to Jira.
@@ -238,7 +252,7 @@ Screenshots need the `snapshot` feature:
     nix develop --command cargo build --release --features snapshot
     JIRA_TICKETS_SCREENSHOT=out.png JIRA_TICKETS_VIEW=issues JIRA_TICKETS_ROW=2 ./target/release/jira-tickets
 
-`JIRA_TICKETS_SCREENSHOT` is the output path and switches the app to an offscreen render at 1440x900, 2x. `JIRA_TICKETS_VIEW` picks `issues`, `grooming`, `team`, or `roadmap`. `JIRA_TICKETS_ROW=<n>` moves the selection by n rows, `JIRA_TICKETS_THEME` picks `light` or `dark` and `JIRA_TICKETS_DENSITY` picks `compact` or `comfortable`; unset, both follow `[appearance]` and the saved choice, and the `system` theme renders light here. Writes are always blocked in this mode. If nothing has loaded after 20 seconds (for example, no token), the picture shows whatever is on screen.
+`JIRA_TICKETS_SCREENSHOT` is the output path and switches the app to an offscreen render at 1440x900, 2x. `JIRA_TICKETS_VIEW` picks `issues`, `grooming`, `team`, `roadmap`, or `me`. `JIRA_TICKETS_ROW=<n>` moves the selection by n rows, `JIRA_TICKETS_THEME` picks `light` or `dark` and `JIRA_TICKETS_DENSITY` picks `compact` or `comfortable`; unset, both follow `[appearance]` and the saved choice, and the `system` theme renders light here. Writes are always blocked in this mode. If nothing has loaded after 20 seconds (for example, no token), the picture shows whatever is on screen.
 
 ## How it works
 
@@ -267,7 +281,7 @@ The window is egui drawn on the GPU (wgpu), with no web view. All Jira traffic (
 | `.github/workflows/` | CI, and the semantic-release and release-build workflows |
 | `scripts/set-version.sh` | Stamps a release version into `Cargo.toml` and `Cargo.lock` |
 
-Grooming lives in `src/views/grooming.rs`, `src/app/groom.rs`, `src/grooming.rs`, and `src/report.rs`. Team lives in `src/teamview.rs` (the columns, pure) and `src/views/team.rs`. Roadmap lives in `src/roadmap.rs` (initiatives and the field mapping, pure), `src/views/roadmap.rs` (tabs 1 and 3), and `src/views/roadmap/timeline.rs` and `outcomes.rs` (tabs 2 and 4).
+Grooming lives in `src/views/grooming.rs`, `src/app/groom.rs`, `src/grooming.rs`, and `src/report.rs`. Team lives in `src/teamview.rs` (the columns, pure) and `src/views/team.rs`. Me lives in `src/me.rs` (the query and sections, pure) and `src/views/me.rs`. Roadmap lives in `src/roadmap.rs` (initiatives and the field mapping, pure), `src/views/roadmap.rs` (tabs 1 and 3), and `src/views/roadmap/timeline.rs` and `outcomes.rs` (tabs 2 and 4).
 
 ## Licence
 

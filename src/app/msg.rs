@@ -364,7 +364,7 @@ fn should_retry_without_members(err_is_unresolved_assignee: bool, sent_with_memb
 /// Only a transport failure on a refresh list means we are offline; bad JQL,
 /// rate limits, or a failed search just show on that list.
 fn marks_offline(id: ListId, e: &jira::Error) -> bool {
-    matches!(e, jira::Error::Network(_)) && matches!(id, ListId::TeamOpen | ListId::TeamInProgress | ListId::Epics | ListId::EpicChildren)
+    matches!(e, jira::Error::Network(_)) && matches!(id, ListId::TeamOpen | ListId::TeamInProgress | ListId::Epics | ListId::EpicChildren | ListId::Me)
 }
 
 #[cfg(test)]
