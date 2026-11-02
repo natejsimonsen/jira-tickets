@@ -251,7 +251,8 @@ pub fn run_with_timeout(bin: &Path, args: &[String], input: &str, path: &std::ff
     let mut child = std::process::Command::new(bin)
         .args(args)
         .env("PATH", path)
-        .current_dir(dirs::home_dir().unwrap_or_else(std::env::temp_dir))
+        // The home folder, when it exists (the nix build's HOME does not).
+        .current_dir(dirs::home_dir().filter(|h| h.is_dir()).unwrap_or_else(std::env::temp_dir))
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
