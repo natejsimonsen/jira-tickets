@@ -70,6 +70,10 @@ pub fn show(app: &mut App, ui: &mut Ui) {
                 if crate::views::tooltip(ui.add(button("Copy link", p)), "Copy link (c)").clicked() {
                     app.actions.push(Action::Copy(app.cfg.browse_url(&issue.key)));
                 }
+                // The shown issue's one quiet Move to Done, beside its other header actions.
+                if let Some(a) = c::done_button(ui, p, &issue, p.surface) {
+                    app.actions.push(a);
+                }
                 if let Some(label) = &add_label
                     && add_label_action(ui, p, label)
                 {
@@ -107,19 +111,24 @@ pub fn show(app: &mut App, ui: &mut Ui) {
         ui.add_space(section_space(ui, "Description", 0.0));
         let window_w = ui.ctx().content_rect().width();
         let sp = theme::spacing(ui.ctx());
-        ui.horizontal_top(|ui| {
-            // The gutter is FIELDS_GUTTER exactly: no item spacing either side of it.
-            ui.spacing_mut().item_spacing.x = 0.0;
-            let (main_w, fields_w) = detail_columns(window_w, ui.available_width(), sp.prose_max_width);
-            ui.allocate_ui_with_layout(vec2(main_w, 0.0), egui::Layout::top_down(egui::Align::Min), |ui| {
+        // Two fixed columns: the fields rail's x comes from the pane's width alone, never from what the description
+        // holds, so moving between issues never shifts it. The description column is clipped to its own width.
+        let origin = ui.cursor().min;
+        let (main_w, fields_w) = detail_columns(window_w, ui.available_width(), adf_view::column_width(ui.ctx()));
+        let column = |x: f32, w: f32| egui::UiBuilder::new().max_rect(egui::Rect::from_min_size(egui::pos2(x, origin.y), vec2(w, f32::INFINITY)));
+        let main_bottom = ui
+            .scope_builder(column(origin.x, main_w), |ui| {
                 ui.set_width(main_w);
+                let clip = ui.clip_rect();
+                ui.set_clip_rect(egui::Rect::from_x_y_ranges(clip.left()..=origin.x + main_w + FIELDS_GUTTER / 2.0, clip.y_range()));
                 let below = section_heading(ui, p, "Description", None);
                 let first = issue
                     .description
                     .as_ref()
                     .map_or_else(|| adf_view::first_ink_top(ui.ctx(), &serde_json::Value::Null), |d| adf_view::first_ink_top(ui.ctx(), d));
-                // One gap from the label to the first ink, whatever block comes first (a heading's top margin collapses).
-                ui.add_space(label_space(ui, below, first));
+                let heading = issue.description.as_ref().is_some_and(adf_view::starts_with_heading);
+                // A leading heading gets more room under the label than a paragraph, so the two never stack.
+                ui.add_space(label_space_for(ui, below, first, heading));
                 match &issue.description {
                     Some(d) => adf_view::show_value(ui, d, p, p.surface),
                     None if loading => {
@@ -148,9 +157,12 @@ pub fn show(app: &mut App, ui: &mut Ui) {
                 } else {
                     c::missing_value(ui, p, READ_ONLY_NOTE);
                 }
-            });
-            ui.add_space(FIELDS_GUTTER);
-            ui.vertical(|ui| {
+            })
+            .response
+            .rect
+            .bottom();
+        let fields_bottom = ui
+            .scope_builder(column(origin.x + main_w + FIELDS_GUTTER, fields_w), |ui| {
                 ui.set_width(fields_w);
                 ui.spacing_mut().item_spacing.y = 0.0;
                 person_field(ui, p, "Assignee", issue.assignee.as_ref(), "Unassigned");
@@ -160,8 +172,14 @@ pub fn show(app: &mut App, ui: &mut Ui) {
                 field(ui, p, "Due", issue.due_date.as_deref().unwrap_or("—"));
                 field(ui, p, "Created", &short_date(&issue.created));
                 field(ui, p, "Updated", &short_date(&issue.updated));
-            });
-        });
+            })
+            .response
+            .rect
+            .bottom();
+        ui.advance_cursor_after_rect(egui::Rect::from_min_max(
+            origin,
+            egui::pos2(origin.x + main_w + FIELDS_GUTTER + fields_w, main_bottom.max(fields_bottom)),
+        ));
         ui.add_space(24.0);
     });
     let view = out.inner_rect;
@@ -245,12 +263,25 @@ pub fn section_gap_space(gap: f32, below_ink: f32, heading_ink_top: f32, item_sp
 /// The space after a pane label whose box runs `below` past its ink for LABEL_TO_CONTENT (ink to ink) to content
 /// whose ink starts `first` into its box; the layout's item spacing comes on top.
 fn label_space(ui: &Ui, below: f32, first: f32) -> f32 {
-    label_to_content(theme::spacing(ui.ctx())) - below - first - ui.spacing().item_spacing.y
+    label_space_for(ui, below, first, false)
+}
+
+/// `label_space`, with `label_to_heading` when the content opens with a document heading.
+fn label_space_for(ui: &Ui, below: f32, first: f32, heading: bool) -> f32 {
+    let sp = theme::spacing(ui.ctx());
+    let gap = if heading { label_to_heading(sp) } else { label_to_content(sp) };
+    gap - below - first - ui.spacing().item_spacing.y
 }
 
 /// A pane label → its content's ink: two line gaps, as under a document heading (8 / 12).
 pub fn label_to_content(sp: &theme::Spacing) -> f32 {
     2.0 * sp.line_gap
+}
+
+/// A pane label → a leading document heading's ink: a paragraph gap more than `label_to_content` (20 / 28), so
+/// the quiet label reads as a caption over the document, not a second title stacked on its first heading.
+pub fn label_to_heading(sp: &theme::Spacing) -> f32 {
+    label_to_content(sp) + sp.paragraph_gap
 }
 
 /// The composer's fixed height.
@@ -732,16 +763,19 @@ mod tests {
         let gap = crate::testutil::ink_of(&shapes, "Confirm the bar").top() - crate::testutil::ink_of(&shapes, "Description").bottom();
         let want = label_to_content(&theme::COMPACT);
         assert!((gap - want).abs() <= 0.5, "Description → text {gap}");
-        // A description that opens with a heading: the same gap (its top margin collapses under the label).
+        // A description that opens with a heading: a paragraph gap more, so label and heading never stack.
         let h = serde_json::json!({"type": "doc", "content": [{"type": "heading", "attrs": {"level": 2}, "content": [{"type": "text", "text": "Objective"}]}]});
+        assert!(adf_view::starts_with_heading(&h) && !adf_view::starts_with_heading(&v));
         let heads = crate::testutil::paint_at2(egui::vec2(800.0, 600.0), |ui| {
             ui.set_width(400.0);
             let below = section_heading(ui, &p, "Description", None);
-            ui.add_space(label_space(ui, below, adf_view::first_ink_top(ui.ctx(), &h)));
+            ui.add_space(label_space_for(ui, below, adf_view::first_ink_top(ui.ctx(), &h), true));
             adf_view::show_value(ui, &h, &p, p.surface);
         });
         let first = crate::testutil::ink_of(&heads, "Objective").top() - crate::testutil::ink_of(&heads, "Description").bottom();
-        assert!((first - want).abs() <= 0.5, "Description → heading {first}");
+        let to_heading = label_to_heading(&theme::COMPACT);
+        assert!((first - to_heading).abs() <= 0.5, "Description → heading {first}");
+        assert!(to_heading > want, "a leading heading gets more room than a paragraph");
         let card = crate::testutil::fills(&shapes).iter().find(|(_, c)| *c == c::card_fill(&p, false)).expect("card").0;
         let gap = card.top() - crate::testutil::ink_of(&shapes, "Comments").bottom();
         assert!((gap - want).abs() <= 0.5, "Comments → card {gap}");

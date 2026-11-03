@@ -42,7 +42,7 @@ pub fn show(app: &mut App, ui: &mut Ui) {
 
 /// The list's right inset inside its panel (the thumb runs in it).
 const LIST_RIGHT: f32 = 16.0;
-/// A long section shows this many cards, then "N more", so every section header fits on a laptop screen.
+/// A long section shows this many cards, then "Show N more", so every section header fits on a laptop screen.
 const PREVIEW: usize = 3;
 
 /// How many of a section's `n` cards to draw: all when `open` or when hiding would save only one, else PREVIEW.
@@ -102,12 +102,17 @@ fn list(app: &App, ui: &mut Ui, p: &Palette, acts: &mut Vec<Action>) {
         let header_top = theme::Ink::of(&ctx, &theme::bold(sp.h3), None).top;
         ui.add_space(first_header_space(crate::views::BUTTON_H, key_line, theme::Ink::of(&ctx, &key_font, None).top, header_top));
         let mut row = 0;
+        let toggle_font = theme::body(sp.small);
+        let toggle_ink = theme::Ink::of(&ctx, &toggle_font, None);
+        // What the last item left under its lowest ink: a card gap, plus a fold link's line box below its baseline
+        // (its words have no descenders).
+        let mut below = sp.card_gap;
         for (si, (s, cards)) in sections.iter().enumerate() {
-            // The density's section gap between sections, ink edge to ink edge: the last card (or empty state)
-            // already left a card gap under itself.
+            // The density's section gap between sections, ink edge to ink edge.
             if si > 0 {
-                ui.add_space(section_space(sp.section_gap, sp.card_gap));
+                ui.add_space(section_space(sp.section_gap, below));
             }
+            below = sp.card_gap;
             // A header sits a card gap over its own cards.
             ui.spacing_mut().item_spacing.y = 0.0;
             c::section_header(ui, p, s.title(), Some(cards.len()));
@@ -125,6 +130,9 @@ fn list(app: &App, ui: &mut Ui, p: &Palette, acts: &mut Vec<Action>) {
             for (ci, c) in cards.iter().enumerate().take(n) {
                 let sel = row == cursor;
                 let resp = card(app, ui, p, (si, ci), c, sel);
+                if sel && let Some(a) = done_on_card(ui, p, resp.rect, c.issue) {
+                    acts.push(a);
+                }
                 if resp.clicked() || resp.double_clicked() {
                     acts.push(Action::MeMove(row as i32 - cursor as i32));
                 }
@@ -138,21 +146,46 @@ fn list(app: &App, ui: &mut Ui, p: &Palette, acts: &mut Vec<Action>) {
             }
             row = start + cards.len();
             let folded = cards.len() - n;
-            let toggle = if folded > 0 {
-                Some((format!("{folded} more"), true))
-            } else if shown(cards.len(), false) < cards.len() && !cursor_inside {
-                Some(("Show fewer".to_string(), false))
-            } else {
-                None
-            };
-            if let Some((label, to)) = toggle
-                && ui.add(c::ghost(&label, p)).clicked()
-            {
-                ui.data_mut(|d| d.insert_temp(open_id, to));
+            // The fold is a link, like Standup's More / Less: accent, underlined, a 24 pt target.
+            if let Some((label, to)) = fold_toggle(folded, cards.len(), cursor_inside) {
+                if crate::views::text_link(ui, &label, toggle_font.clone(), p.accent).clicked() {
+                    ui.data_mut(|d| d.insert_temp(open_id, to));
+                }
+                below = sp.card_gap + toggle_ink.line - toggle_ink.base;
             }
         }
     });
     c::scroll_edge_fade(ui, &out, p.bg);
+}
+
+/// A section's fold link, (label, open when clicked): "Show N more" while `folded` cards hide, "Show fewer" once
+/// opened by hand (not while the cursor holds it open), else none.
+pub fn fold_toggle(folded: usize, n: usize, cursor_inside: bool) -> Option<(String, bool)> {
+    if folded > 0 {
+        Some((format!("Show {folded} more"), true))
+    } else if shown(n, false) < n && !cursor_inside {
+        Some(("Show fewer".to_string(), false))
+    } else {
+        None
+    }
+}
+
+/// The focused card's "Move to Done" (`components::done_button`), at the right end of its key line inside the
+/// card's right pad, as Team places it: the key is short, so the line has room, and the card keeps its height as
+/// the cursor moves. Drawn over the card after it, so the button takes the click.
+fn done_on_card(ui: &mut Ui, p: &Palette, card: egui::Rect, issue: &crate::jira::Issue) -> Option<Action> {
+    let sp = theme::spacing(ui.ctx());
+    let key_font = theme::key_font();
+    let key = theme::Ink::of(ui.ctx(), &key_font, None);
+    // As `team::card` places the key: its capitals card_pad under the frame's edge.
+    let edge = c::card_stroke(p, true).width;
+    let key_mid = card.top() + edge + (sp.card_pad - key.top).round().max(0.0) + key.line / 2.0;
+    let slot = egui::Rect::from_x_y_ranges(
+        (card.left() + sp.card_pad)..=(card.right() - sp.card_pad - edge),
+        (key_mid - crate::views::BUTTON_H / 2.0)..=(key_mid + crate::views::BUTTON_H / 2.0),
+    );
+    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(slot).layout(egui::Layout::right_to_left(egui::Align::Center)));
+    c::done_button(&mut child, p, issue, c::card_frame(ui, p, true).fill)
 }
 
 /// The Team screen's card, its egui ids kept apart from Team's by the section offset. The list is wide, so the
@@ -213,9 +246,38 @@ mod tests {
         app.store.absorb(ListId::Me, todo);
         let shapes = crate::testutil::paint_at2(egui::vec2(1200.0, 800.0), |ui| show(&mut app, ui));
         let drawn: Vec<String> = crate::testutil::inks(&shapes).into_iter().map(|(t, _)| t).collect();
-        assert!(drawn.iter().any(|t| t == "3 more"), "{drawn:?}");
+        assert!(drawn.iter().any(|t| t == "Show 3 more"), "{drawn:?}");
         assert!(!drawn.iter().any(|t| t == "CI-4"), "folded: {drawn:?}");
         assert!(drawn.iter().any(|t| t == "Done in the last 7 days"), "{drawn:?}");
+    }
+
+    #[test]
+    fn the_focused_card_alone_offers_move_to_done() {
+        let _g = crate::jira::tests::WRITE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut app = App::for_test(cfg(), None);
+        app.screen = crate::app::Screen::Me;
+        let issue = |key: &str| Issue {
+            key: key.into(),
+            summary: "Mine".into(),
+            status: Status { name: "Doing".into(), category: "indeterminate".into() },
+            ..Default::default()
+        };
+        app.store.absorb(ListId::Me, vec![issue("CI-1"), issue("CI-2")]);
+        let count = |app: &mut App| {
+            let shapes = crate::testutil::paint_at2(egui::vec2(1200.0, 800.0), |ui| list(app, ui, theme::palette(ui.ctx()), &mut Vec::new()));
+            crate::testutil::inks(&shapes).into_iter().filter(|(t, _)| t == c::DONE_TEXT).count()
+        };
+        assert_eq!(count(&mut app), 1, "one, on the focused card");
+        let _ro = crate::jira::tests::ReadOnlyGuard::new();
+        assert_eq!(count(&mut app), 0, "read-only: none");
+    }
+
+    #[test]
+    fn the_fold_link_says_what_it_does() {
+        assert_eq!(fold_toggle(3, 6, false), Some(("Show 3 more".to_string(), true)));
+        assert_eq!(fold_toggle(0, 6, false), Some(("Show fewer".to_string(), false)));
+        assert_eq!(fold_toggle(0, 6, true), None, "the cursor holds it open");
+        assert_eq!(fold_toggle(0, PREVIEW + 1, false), None, "a short section has no fold");
     }
 
     #[test]

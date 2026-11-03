@@ -81,6 +81,27 @@ pub fn card_at<'c, 'a>(col: &'c Column<'a>, row: usize) -> Option<&'c Card<'a>> 
     col.in_progress.iter().chain(&col.ready).nth(row)
 }
 
+/// The end of a column a move ran into: the cursor stays put there.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum End {
+    First,
+    Last,
+}
+
+/// Which end a move of `d` rows from `row` runs into in a column of `len` cards, when the cursor cannot move at all
+/// (j on the last card, k on the first). None for a move that lands, or an empty column.
+pub fn end_hit(row: usize, len: usize, d: i32) -> Option<End> {
+    if len == 0 {
+        None
+    } else if d > 0 && row + 1 >= len {
+        Some(End::Last)
+    } else if d < 0 && row == 0 {
+        Some(End::First)
+    } else {
+        None
+    }
+}
+
 pub fn jql_done_recent(projects: &[String], member_id: &str) -> String {
     let projects: Vec<String> = projects.iter().map(|p| jql_quote(p)).collect();
     format!("project in ({}) AND assignee = {} AND statusCategory = Done AND resolved >= -7d ORDER BY resolved DESC", projects.join(", "), jql_quote(member_id))
@@ -147,6 +168,17 @@ mod tests {
         assert_eq!(clamp_cursor(1, 3, &cols), (1, 0), "an empty column holds row 0");
         assert_eq!(clamp_cursor(9, 0, &cols), (2, 0), "past the Unassigned column");
         assert_eq!(clamp_cursor(3, 4, &[]), (0, 0));
+    }
+
+    #[test]
+    fn end_hit_only_when_the_cursor_cannot_move() {
+        assert_eq!(end_hit(0, 1, 1), Some(End::Last), "j on the only card");
+        assert_eq!(end_hit(2, 3, 2), Some(End::Last));
+        assert_eq!(end_hit(1, 3, 2), None, "it still moves one");
+        assert_eq!(end_hit(0, 3, -1), Some(End::First));
+        assert_eq!(end_hit(1, 3, -1), None);
+        assert_eq!(end_hit(0, 0, 1), None, "an empty column has no end");
+        assert_eq!(end_hit(0, 2, 0), None);
     }
 
     #[test]

@@ -13,7 +13,7 @@ pub use actions::Action;
 pub use msg::Msg;
 pub use pickers::{
     ASSIGN_USERS, POINTS_HINT, PRIORITY_HINT, Picker, assign_current_row, assign_cursor_after_filter, assign_matches, assign_note, assign_rows,
-    sprint_current_row, sprint_row_label, transition_row,
+    is_done_category, sprint_current_row, sprint_row_label, transition_row,
 };
 
 pub use standup::{StandupPhase, StandupState};
@@ -456,6 +456,28 @@ impl App {
         }
     }
 
+    /// `D` (Shift+D, no other modifier) moves the screen's focused ticket to Done (`done_target`) on every screen.
+    /// Checked before the screens' own keys, which would read Shift+D as a plain `d` (Team's done footer). Help,
+    /// an open picker or go-to box, a focused text field, and Grooming's open dialogs keep the key for themselves.
+    pub(super) fn done_shortcut(&mut self, ctx: &egui::Context) {
+        let g = &self.grooming;
+        let modal = g.pending_report.is_some() || g.summary_open || g.bounce_text.is_some() || g.placement.is_some();
+        let busy = self.help_open || self.picker.is_some() || self.goto.is_some() || (self.screen == Screen::Grooming && modal);
+        if busy || ctx.text_edit_focused() {
+            return;
+        }
+        let pressed = ctx.input_mut(|i| {
+            let shift_only = i
+                .events
+                .iter()
+                .any(|e| matches!(e, egui::Event::Key { key: egui::Key::D, pressed: true, modifiers, .. } if *modifiers == egui::Modifiers::SHIFT));
+            shift_only && i.consume_key(egui::Modifiers::SHIFT, egui::Key::D)
+        });
+        if pressed && let Some(key) = self.done_target() {
+            self.actions.push(Action::MoveToDone(key));
+        }
+    }
+
     /// The Team screen's columns, from the team lists in the store.
     pub fn team_columns(&self) -> Vec<crate::teamview::Column<'_>> {
         let in_progress = self.store.list(ListId::TeamInProgress);
@@ -487,7 +509,8 @@ impl App {
             },
             Screen::Team => parents(&mut self.team_columns().iter().flat_map(|c| c.in_progress.iter().chain(&c.ready)).map(|c| c.issue)),
             Screen::Me => parents(&mut self.store.list(ListId::Me).into_iter()),
-            Screen::Issues | Screen::Roadmap | Screen::Standup => return None,
+            Screen::Standup => parents(&mut self.standup.saved.tickets.all()),
+            Screen::Issues | Screen::Roadmap => return None,
         })
     }
 
@@ -646,6 +669,7 @@ impl eframe::App for App {
         ui.painter().rect_filled(ui.max_rect(), 0.0, theme::palette(&ctx).bg);
         close_shortcut(&ctx);
         if self.client.is_some() {
+            self.done_shortcut(&ctx);
             self.shortcuts(&ctx);
             // Set again by the detail pane when its pill row shows.
             self.detail_pills_top = None;
@@ -1028,12 +1052,45 @@ mod tests {
         assert!(matches!(app.actions.as_slice(), [Action::SetScreen(Screen::Me)]), "⌘5 is the Me screen");
     }
 
+    #[test]
+    fn shift_d_moves_the_focused_ticket_to_done_on_every_screen() {
+        let mut app = me_app();
+        app.me_view.cursor = 1;
+        let want = app.me_focused().unwrap();
+        press(&mut app, egui::Key::D, egui::Modifiers::SHIFT);
+        assert!(matches!(app.actions.as_slice(), [Action::MoveToDone(k)] if *k == want), "Me");
+        app.actions.clear();
+        app.screen = Screen::Issues;
+        app.selected = Some("CI-9".into());
+        press(&mut app, egui::Key::D, egui::Modifiers::SHIFT);
+        assert!(matches!(app.actions.as_slice(), [Action::MoveToDone(k)] if k == "CI-9"), "Issues");
+        app.actions.clear();
+        app.screen = Screen::Team;
+        press(&mut app, egui::Key::D, egui::Modifiers::SHIFT);
+        assert!(!app.actions.iter().any(|a| matches!(a, Action::TeamToggleDone)), "Shift+D is not Team's plain d");
+        press(&mut app, egui::Key::D, egui::Modifiers::NONE);
+        assert!(app.actions.iter().any(|a| matches!(a, Action::TeamToggleDone)), "plain d still is");
+        app.actions.clear();
+        app.screen = Screen::Issues;
+        press(&mut app, egui::Key::D, egui::Modifiers::COMMAND | egui::Modifiers::SHIFT);
+        assert!(matches!(app.actions.as_slice(), [Action::ToggleDensity]), "⌘⇧D stays density");
+        app.actions.clear();
+        app.help_open = true;
+        press(&mut app, egui::Key::D, egui::Modifiers::SHIFT);
+        assert!(app.actions.is_empty(), "help owns the keys");
+    }
+
     /// Runs the shortcuts over one pass that presses `key` with `mods`.
     fn press(app: &mut App, key: egui::Key, mods: egui::Modifiers) {
         let ctx = egui::Context::default();
         let ev = egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: mods };
         let input = egui::RawInput { events: vec![ev], ..Default::default() };
-        ctx.run_ui(input, |_| app.shortcuts(&ctx)).textures_delta.clear();
+        ctx.run_ui(input, |_| {
+            app.done_shortcut(&ctx);
+            app.shortcuts(&ctx);
+        })
+        .textures_delta
+        .clear();
     }
 
     #[test]

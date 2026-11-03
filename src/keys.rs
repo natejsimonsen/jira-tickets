@@ -47,6 +47,8 @@ pub const BINDINGS: &[KeyBinding] = &[
     b(Group::Global, "⌘⇧T", "Theme: System, Light, or Dark"),
     b(Group::Global, "⌘⇧D", "Density: Compact or Comfortable"),
     b(Group::Global, "⌘W", "Close the window"),
+    // Shift+D on every screen with a focused ticket; plain `d` stays Team's done footer.
+    b(Group::Global, "D", "Move the focused ticket to Done"),
     // Esc is global: it cancels a picker or the Edit bar and closes go-to (round 13 H3).
     b(Group::Global, "Esc", "Cancel or close"),
     b(Group::Global, "?, Esc", "Close this help"),
@@ -91,7 +93,7 @@ pub const BINDINGS: &[KeyBinding] = &[
     b(Group::Me, "j/k, ↑/↓", "Next or previous ticket"),
     b(Group::Me, "Enter", "Open in Issues"),
     b(Group::Me, "⌘O", "Open in Jira"),
-    b(Group::Standup, "j/k, ↑/↓", "Next or previous suggested ticket"),
+    b(Group::Standup, "j/k, ↑/↓", "Next or previous ticket or suggestion"),
     b(Group::Standup, "c", "Add to the current sprint"),
     b(Group::Standup, "n", "Add to the next sprint"),
     b(Group::Standup, "b", "Add to the backlog"),
@@ -423,6 +425,26 @@ pub fn hints(c: HintContext) -> &'static [Hint] {
     }
 }
 
+/// The Move to Done hint (Shift+D, `BINDINGS`' global "D").
+pub const DONE_HINT: Hint = &[K("D"), W("move to Done")];
+
+/// The bar contexts with a focused ticket that `D` can move: the Issues selection, Grooming's cursor row, the Team
+/// card, the Roadmap initiative, the Me ticket and the Standup card.
+fn done_applies(c: HintContext) -> bool {
+    use HintContext::*;
+    matches!(c, Selected | SelectedSearch | GroomPreCheck | GroomSession | Team | Roadmap | Me | Standup)
+}
+
+/// `hs` with DONE_HINT where `D` would act: a screen context from `done_applies` with a `focused` ticket
+/// (`App::done_target`). It goes right before "? help" (or last), so help stays the bar's end.
+pub fn with_done_hint(c: HintContext, mut hs: Vec<Hint>, focused: bool) -> Vec<Hint> {
+    if focused && done_applies(c) {
+        let at = hs.iter().position(|h| h.first() == Some(&K("?"))).unwrap_or(hs.len());
+        hs.insert(at, DONE_HINT);
+    }
+    hs
+}
+
 /// The Standup header's run button (and so the `r` key), labelled for the state it is in.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum StandupRun {
@@ -546,7 +568,7 @@ mod tests {
         assert!(t.contains("| `J/K` | Move a Ready for Work ticket down or up in rank |\n"));
         assert!(t.contains("| `j/k` or `↑/↓` | Move |\n"), "one alternatives order, no keys in prose");
         let global = BINDINGS.iter().filter(|k| k.group == Group::Global).count();
-        assert_eq!(global, 7, "only the keys that work on every screen live in Global; ⌘K and ⌘O are Issues keys");
+        assert_eq!(global, 8, "only the keys that work on every screen live in Global (D included); ⌘K and ⌘O are Issues keys");
         assert!(t.contains("| **Issues** | |\n| `⌘K` | Go to an issue by key, number, or link |\n| `⌘O` | Open in Jira |\n"));
         assert!(t.contains("| `Esc` | Cancel or close |\n| `?` or `Esc` | Close this help |\n"), "Esc right above the help row");
         assert!(t.contains("| `?` or `Esc` | Close this help |\n| **Issues** | |\n"), "one help row, the last of Global");
@@ -560,7 +582,7 @@ mod tests {
             "| `d` | Show or hide done in the last 7 days |\n| **Roadmap** | |\n| `1` to `4` | Now / Next / Later, Timeline, Status review, Outcomes |\n"
         ));
         assert!(t.contains("| `Enter` | Open in Issues |\n| **Me** | |\n| `j/k` or `↑/↓` | Next or previous ticket |\n"));
-        assert!(t.contains("| `⌘O` | Open in Jira |\n| **Standup** | |\n| `j/k` or `↑/↓` | Next or previous suggested ticket |\n"));
+        assert!(t.contains("| `⌘O` | Open in Jira |\n| **Standup** | |\n| `j/k` or `↑/↓` | Next or previous ticket or suggestion |\n"));
         assert!(t.contains("| `r` | Run the review again |\n| **Pickers and Edit** | |\n"));
         assert!(t.contains("| `⌘1` to `⌘6` | Issues, Grooming, Team, Roadmap, Me, Standup |\n"));
         assert_eq!(t.matches("| **").count(), 8);
@@ -692,6 +714,30 @@ mod tests {
             hint_text(hints(Selected)),
             "j/k or ↑/↓ move · t transition · a assign · s sprint · e edit · l label · J/K rank · c copy · ⌘O open · ? help"
         );
+    }
+
+    #[test]
+    fn move_to_done_hint_shows_where_d_acts() {
+        use HintContext::*;
+        let with = |c, focused| hint_text(&with_done_hint(c, hints(c).to_vec(), focused));
+        assert_eq!(
+            with(Selected, true),
+            "j/k or ↑/↓ move · t transition · a assign · s sprint · e edit · l label · J/K rank · c copy · ⌘O open · D move to Done · ? help"
+        );
+        assert_eq!(with(Team, true), "h/l or ←/→ member · j/k or ↑/↓ move · Enter open · d done · D move to Done · ? help");
+        assert_eq!(with(Me, true), "j/k or ↑/↓ move · Enter open · ⌘O Jira · D move to Done · ? help");
+        assert_eq!(with(Roadmap, true), "1 to 4 tab · j/k or ↑/↓ move · Enter open · D move to Done · ? help");
+        assert_eq!(with(GroomPreCheck, true), format!("{} · D move to Done", hint_text(hints(GroomPreCheck))), "no help hint: last");
+        assert!(with(GroomSession, true).ends_with("Tab pre-check · D move to Done · ? help"));
+        assert!(with(SelectedSearch, true).ends_with("⌘O open · D move to Done · ? help"));
+        let standup = standup_hints(StandupHint { cards: true, copy: true, run: Some(StandupRun::Again), read_only: false });
+        assert!(hint_text(&with_done_hint(Standup, standup, true)).ends_with("r run again · D move to Done · ? help"));
+        // Nothing focused (an unadded Standup card, an empty Grooming list) or no ticket on screen: no D.
+        assert_eq!(with(Team, false), hint_text(hints(Team)));
+        for c in [Browse, BrowseSearch, RoadmapView, StandupEmpty, StandupTitle, Search, Composer, Picker, EditPicker, GoTo, Help, GroomSummary] {
+            assert_eq!(with(c, true), hint_text(hints(c)), "{c:?}");
+        }
+        assert!(BINDINGS.iter().any(|b| b.keys == "D" && b.group == Group::Global), "the hint names a bound key");
     }
 
     #[test]

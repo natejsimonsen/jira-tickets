@@ -73,6 +73,7 @@ Only a token you paste is saved. Signing out deletes that file.
 | `⌘⇧T` | Theme: System, Light, or Dark |
 | `⌘⇧D` | Density: Compact or Comfortable |
 | `⌘W` | Close the window |
+| `D` | Move the focused ticket to Done |
 | `Esc` | Cancel or close |
 | `?` or `Esc` | Close this help |
 | **Issues** | |
@@ -119,7 +120,7 @@ Only a token you paste is saved. Signing out deletes that file.
 | `Enter` | Open in Issues |
 | `⌘O` | Open in Jira |
 | **Standup** | |
-| `j/k` or `↑/↓` | Next or previous suggested ticket |
+| `j/k` or `↑/↓` | Next or previous ticket or suggestion |
 | `c` | Add to the current sprint |
 | `n` | Add to the next sprint |
 | `b` | Add to the backlog |

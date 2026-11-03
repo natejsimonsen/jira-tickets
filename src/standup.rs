@@ -177,6 +177,107 @@ pub fn fetch_activity(c: &Client, since: NaiveDate, me: &str) -> jira::Result<Ve
     Ok(raw.iter().filter_map(|v| activity_of(v, me, since)).collect())
 }
 
+// ---------- The window's tickets ----------
+
+/// The user's tickets beside the summary, as Jira-style cards: moved to a Done-category status since the window
+/// opened, and in progress now. Kept in `Saved`, so the cards show from the cache before (or without) Jira.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Tickets {
+    /// The window start the done list was read for; None until a read lands.
+    pub since: Option<NaiveDate>,
+    pub done: Vec<jira::Issue>,
+    pub in_progress: Vec<jira::Issue>,
+}
+
+/// Equal when they serialise the same (`jira::Issue` has no `PartialEq`), so `Saved` compares whole.
+impl PartialEq for Tickets {
+    fn eq(&self, other: &Self) -> bool {
+        serde_json::to_value(self).ok() == serde_json::to_value(other).ok()
+    }
+}
+
+impl Tickets {
+    /// Every card, in reading order: done, then in progress.
+    pub fn all(&self) -> impl Iterator<Item = &jira::Issue> {
+        self.done.iter().chain(&self.in_progress)
+    }
+}
+
+/// The user's tickets that moved into a Done-category status on or after `since`, latest first.
+pub fn done_jql(since: NaiveDate) -> String {
+    format!("assignee = currentUser() AND statusCategory = Done AND statusCategoryChangedDate >= \"{since}\" ORDER BY statusCategoryChangedDate DESC")
+}
+
+/// The user's tickets in progress now, last updated first.
+pub const IN_PROGRESS_JQL: &str = "assignee = currentUser() AND statusCategory = \"In Progress\" ORDER BY updated DESC";
+
+/// The window the cards are for: the shown review's (so they sit beside its summary), today's before any review.
+pub fn tickets_window(saved: &Saved, today: NaiveDate) -> NaiveDate {
+    window_start(saved.ran_on.unwrap_or(today))
+}
+
+/// Both card lists for the window starting `since`. A ticket the two reads both return (it moved between them)
+/// shows once, as done.
+pub fn fetch_tickets(c: &Client, since: NaiveDate) -> jira::Result<Tickets> {
+    let done = c.search(&done_jql(since), jira::LIST_FIELDS)?;
+    let mut in_progress = c.search(IN_PROGRESS_JQL, jira::LIST_FIELDS)?;
+    in_progress.retain(|i| !done.iter().any(|d| d.key == i.key));
+    Ok(Tickets { since: Some(since), done, in_progress })
+}
+
+/// The issue's page on `site`.
+pub fn browse_url(site: &str, key: &str) -> String {
+    format!("{}/browse/{key}", site.trim_end_matches('/'))
+}
+
+/// `spans` with every whole-word mention of one of `keys` in plain text made a link to its issue page, so the
+/// summary draws it as a key chip (`adf_view`). Links, code and placeholders are left alone.
+pub fn link_keys(spans: Vec<crate::adf::Span>, site: &str, keys: &BTreeSet<String>) -> Vec<crate::adf::Span> {
+    let mut out = Vec::with_capacity(spans.len());
+    for sp in spans {
+        if sp.link.is_some() || sp.code || sp.placeholder || keys.is_empty() {
+            out.push(sp);
+            continue;
+        }
+        let chars: Vec<char> = sp.text.chars().collect();
+        let mut plain = String::new();
+        let mut i = 0;
+        while i < chars.len() {
+            let starts = chars[i].is_ascii_uppercase() && (i == 0 || !(chars[i - 1].is_alphanumeric() || chars[i - 1] == '-'));
+            if starts && let Some(n) = key_len(&chars[i..]) {
+                let key: String = chars[i..i + n].iter().collect();
+                if keys.contains(&key) {
+                    if !plain.is_empty() {
+                        out.push(crate::adf::Span { text: std::mem::take(&mut plain), ..sp.clone() });
+                    }
+                    out.push(crate::adf::Span { link: Some(browse_url(site, &key)), text: key, ..sp.clone() });
+                    i += n;
+                    continue;
+                }
+            }
+            plain.push(chars[i]);
+            i += 1;
+        }
+        if !plain.is_empty() {
+            out.push(crate::adf::Span { text: plain, ..sp });
+        }
+    }
+    out
+}
+
+/// The length of the issue key ("CI-1234": capitals and digits, a dash, digits) `chars` starts with, when it is a
+/// whole word (no letter, digit or dash straight after it).
+fn key_len(chars: &[char]) -> Option<usize> {
+    let project = chars.iter().take_while(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || **c == '_').count();
+    if project == 0 || chars.get(project) != Some(&'-') {
+        return None;
+    }
+    let digits = chars[project + 1..].iter().take_while(|c| c.is_ascii_digit()).count();
+    let end = project + 1 + digits;
+    (digits > 0 && !chars.get(end).is_some_and(|c| c.is_alphanumeric() || *c == '-' || *c == '_')).then_some(end)
+}
+
 // ---------- The claude run ----------
 
 /// The prompt with its placeholders filled. The activity goes in last, so text inside it is never substituted.
@@ -792,10 +893,11 @@ pub fn inline_spans(text: &str) -> Vec<crate::adf::Span> {
     crate::adf::linkify(&out)
 }
 
-/// A list of plain lines (a summary section) as one bulleted list.
-pub fn bullets_doc(items: &[String]) -> crate::adf::Doc {
+/// A list of plain lines (a summary section) as one bulleted list; mentions of `keys` link to their issues
+/// (`link_keys`).
+pub fn bullets_doc(items: &[String], site: &str, keys: &BTreeSet<String>) -> crate::adf::Doc {
     use crate::adf::Block;
-    let items = items.iter().map(|t| vec![Block::Paragraph(inline_spans(t.trim()))]).collect();
+    let items = items.iter().map(|t| vec![Block::Paragraph(link_keys(inline_spans(t.trim()), site, keys))]).collect();
     crate::adf::Doc { blocks: vec![Block::List { ordered: false, items }] }
 }
 
@@ -904,6 +1006,8 @@ pub struct Saved {
     pub dismissed: BTreeSet<String>,
     /// Dismiss key → the issue key it was added as.
     pub added: BTreeMap<String, String>,
+    /// The window's done and in-progress tickets, last read.
+    pub tickets: Tickets,
 }
 
 impl Saved {
@@ -1091,7 +1195,7 @@ mod tests {
         assert_eq!(preview_text(&description_doc("Only.")), ("Only.".to_string(), false));
         assert_eq!(preview_text(&description_doc("## Head")), ("Head".to_string(), false));
         assert_eq!(preview_text(&description_doc("")), (String::new(), false));
-        assert!(bullets_doc(&["x".into()]).blocks.len() == 1);
+        assert!(bullets_doc(&["x".into()], "https://x", &BTreeSet::new()).blocks.len() == 1);
     }
 
     #[test]
@@ -1368,5 +1472,55 @@ mod tests {
             assert!(jira::is_read_only(&add_ticket(&c, json!({}), 101, Target::Backlog).unwrap_err()));
         }
         assert!(rx.try_recv().is_err(), "read-only sent nothing");
+    }
+
+    #[test]
+    fn ticket_jql_and_window() {
+        assert_eq!(
+            done_jql(d("2026-10-30")),
+            "assignee = currentUser() AND statusCategory = Done AND statusCategoryChangedDate >= \"2026-10-30\" ORDER BY statusCategoryChangedDate DESC"
+        );
+        assert!(IN_PROGRESS_JQL.contains("statusCategory = \"In Progress\""));
+        let mon = d("2026-11-02");
+        assert_eq!(tickets_window(&Saved::default(), mon), d("2026-10-30"), "no review: today's window");
+        let ran = Saved { ran_on: Some(d("2026-11-04")), ..Default::default() };
+        assert_eq!(tickets_window(&ran, mon), d("2026-11-02"), "the shown review's window");
+    }
+
+    #[test]
+    fn fetch_tickets_reads_both_lists_and_shows_a_ticket_once() {
+        let issue = |key: &str, cat: &str| json!({ "key": key, "fields": { "summary": key, "status": { "name": "S", "statusCategory": { "key": cat } } } });
+        let page = json!({ "issues": [issue("CI-1", "done"), issue("CI-2", "indeterminate")] });
+        let (base, rx) = crate::jira::tests::stub_server(vec![("POST", "/rest/api/3/search/jql", page)]);
+        let login = crate::auth::Login { email: "a@b.c".into(), token: "t".into(), source: crate::auth::Source::Env };
+        let c = Client::new(&base, &login);
+        let t = fetch_tickets(&c, d("2026-10-30")).unwrap();
+        assert_eq!(t.since, Some(d("2026-10-30")));
+        assert_eq!(t.done.len(), 2);
+        assert!(t.in_progress.is_empty(), "both came back as done first");
+        let jqls: Vec<String> = rx.try_iter().map(|r| serde_json::from_str::<Value>(&r.body).unwrap()["jql"].as_str().unwrap().to_string()).collect();
+        assert_eq!(jqls, [done_jql(d("2026-10-30")), IN_PROGRESS_JQL.to_string()]);
+    }
+
+    #[test]
+    fn summary_keys_link_to_their_cards() {
+        let keys: BTreeSet<String> = ["CI-12".to_string(), "DEMO-1".to_string()].into();
+        let spans = link_keys(inline_spans("CI-12: shipped, see CI-123 and xCI-12 and `CI-12`, then DEMO-1."), "https://x/", &keys);
+        let linked: Vec<(&str, Option<&str>)> = spans.iter().map(|s| (s.text.as_str(), s.link.as_deref())).collect();
+        assert_eq!(
+            linked,
+            [
+                ("CI-12", Some("https://x/browse/CI-12")),
+                (": shipped, see CI-123 and xCI-12 and ", None),
+                ("CI-12", None),
+                (", then ", None),
+                ("DEMO-1", Some("https://x/browse/DEMO-1")),
+                (".", None),
+            ]
+        );
+        assert!(spans[2].code, "code is left alone");
+        assert_eq!(key_len(&"CI-9-x".chars().collect::<Vec<_>>()), None, "not a whole word");
+        assert_eq!(key_len(&"GOLD-312)".chars().collect::<Vec<_>>()), Some(8));
+        assert_eq!(browse_url("https://x/", "CI-1"), "https://x/browse/CI-1");
     }
 }

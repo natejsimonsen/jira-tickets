@@ -43,8 +43,8 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
             // Fields on `bg` with the dialog's own edge, in both themes.
             crate::views::dialog_fields(ui, p);
             let buttons_gap = match picker {
-                Picker::Transition { key, items, cursor } => {
-                    let below = title_with_note(ui, p, &format!("Transition {key}"), note);
+                Picker::Transition { key, items, cursor, done } => {
+                    let below = title_with_note(ui, p, &if *done { format!("Move {key} to Done") } else { format!("Transition {key}") }, note);
                     let names = items.iter().map(|t| Row::plain(transition_row(t)).current_if(t.to.eq_ignore_ascii_case(&status))).collect();
                     rows(ui, p, names, live, &mut confirm, cursor, None, Some(below))
                 }
@@ -113,22 +113,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                         r.request_focus();
                     }
                     ui.add_space(group_space(ui, "Priority"));
-                    if !live {
-                        // View-only: the priority as a disabled field, like the two beside it.
-                        let mut shown = read_only_priority(priority).to_string();
-                        edit_group(ui, p, "Priority", &mut shown, |t| field_if(t, "", false, p));
-                    } else if custom_priority(orig_priority) {
-                        // A priority outside Jira's five defaults: this site has its own, so type it.
-                        edit_group(ui, p, "Priority", priority, |t| field(t, crate::app::PRIORITY_HINT, p));
-                    } else {
-                        edit_label(ui, p, "Priority");
-                        // An issue with no priority yet shows "Not set" as the first, selected segment.
-                        let unset = orig_priority.trim().is_empty();
-                        let options = priority_options(unset);
-                        if let Some(i) = crate::views::components::segmented(ui, p, &options, priority_segment(priority, unset)) {
-                            *priority = priority_from_segment(i, unset).to_string();
-                        }
-                    }
+                    priority_group(ui, p, priority, orig_priority, live);
                     ui.add_space(group_space(ui, "Story points"));
                     edit_group(ui, p, "Story points", points, |t| field_if(t, crate::app::POINTS_HINT, live, p));
                     BUTTONS_GAP
@@ -142,7 +127,9 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
             // The hint bar carries the keys; the dialog carries one primary action.
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 8.0;
-                if ui.add(crate::views::primary_button_if("Confirm", can_confirm, p)).clicked() && can_confirm {
+                let confirm_button =
+                    if can_confirm { crate::views::primary_button_if("Confirm", true, p) } else { crate::views::components::primary_button_off("Confirm", p) };
+                if ui.add(confirm_button).clicked() && can_confirm {
                     confirm = true;
                 }
                 // The app's one secondary button, as beside Copy link and Open in Jira.
@@ -160,6 +147,28 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
     }
 }
 
+/// The Edit dialog's Priority group. Jira's five defaults are segments ("Not set" first and selected when the
+/// issue has none); view-only (`live` false) they are the same segments, disabled, so a choice from a list reads as
+/// one in both modes. A priority outside the defaults (the site has its own) is typed, and disabled when view-only.
+fn priority_group(ui: &mut egui::Ui, p: &Palette, priority: &mut String, orig_priority: &str, live: bool) {
+    if custom_priority(orig_priority) {
+        if live {
+            edit_group(ui, p, "Priority", priority, |t| field(t, crate::app::PRIORITY_HINT, p));
+        } else {
+            let mut shown = read_only_priority(priority).to_string();
+            edit_group(ui, p, "Priority", &mut shown, |t| field_if(t, "", false, p));
+        }
+        return;
+    }
+    edit_label(ui, p, "Priority");
+    let unset = orig_priority.trim().is_empty();
+    let options = priority_options(unset);
+    let picked = ui.add_enabled_ui(live, |ui| crate::views::components::segmented(ui, p, &options, priority_segment(priority, unset))).inner;
+    if let Some(i) = picked.filter(|_| live) {
+        *priority = priority_from_segment(i, unset).to_string();
+    }
+}
+
 /// The space before the buttons after Assign's empty state (its hint's descenders are its ink).
 fn return_gap(ui: &egui::Ui) -> f32 {
     let ink = theme::Ink::of(ui.ctx(), &theme::body(theme::spacing(ui.ctx()).small), None);
@@ -171,6 +180,7 @@ fn return_gap(ui: &egui::Ui) -> f32 {
 pub fn read_only_note(picker: &Picker) -> String {
     let (name, verb) = match picker {
         Picker::Resolution { close: true, .. } => ("Close", "close"),
+        Picker::Transition { done: true, .. } => ("Move to Done", "move to done"),
         Picker::Transition { .. } | Picker::Resolution { .. } => ("Transition", "transition"),
         Picker::Assign { .. } => ("Assign", "assign"),
         Picker::Sprint { .. } => ("Move", "move"),
@@ -209,7 +219,7 @@ pub fn priority_from_segment(i: usize, unset: bool) -> &'static str {
     }
 }
 
-/// The Edit dialog's priority in read-only mode, where it shows as a disabled field: "Not set" when empty.
+/// A custom priority in read-only mode, where it shows as a disabled field: "Not set" when empty.
 pub fn read_only_priority(priority: &str) -> &str {
     if priority.trim().is_empty() { PRIORITY_UNSET } else { priority }
 }
@@ -459,14 +469,24 @@ fn font_for(current: bool) -> egui::FontId {
     if current { theme::bold(14.0) } else { theme::body(14.0) }
 }
 
-/// `live` false (read-only mode): the rows are view-only, in the disabled style: no cursor fill or ring, every
-/// name muted, no clicks. The current value keeps its semibold and "current" tag.
+/// A picker row's fill: the accent `dialog_cursor_fill` on the cursor row; read-only (`live` false), the neutral
+/// `dialog_input_fill` step instead (the disabled fields' tone), so the cursor still shows yet reads as off.
+fn cursor_fill(on_cursor: bool, live: bool, p: &Palette) -> egui::Color32 {
+    match (on_cursor, live) {
+        (true, true) => crate::views::dialog_cursor_fill(p),
+        (true, false) => theme::dialog_input_fill(p),
+        (false, _) => egui::Color32::TRANSPARENT,
+    }
+}
+
+/// `live` false (read-only mode): the rows are view-only, in the disabled style: the quiet neutral cursor fill
+/// (`cursor_fill`), every name muted, no clicks. The current value keeps its semibold and "current" tag.
 fn row_list(ui: &mut egui::Ui, p: &Palette, names: &[Row], live: bool, confirm: &mut bool, cursor: &mut usize) {
     {
         ui.spacing_mut().item_spacing.y = 0.0;
         for (i, n) in names.iter().enumerate() {
-            let on_cursor = live && i == *cursor;
-            let fill = if on_cursor { crate::views::dialog_cursor_fill(p) } else { egui::Color32::TRANSPARENT };
+            let on_cursor = i == *cursor;
+            let fill = cursor_fill(on_cursor, live, p);
             // The cursor is fill-only: an accent ring round a full-width row in a short list reads as a focused text
             // field. The clear 1 px edge stays so the rows keep their size.
             let edge = egui::Stroke::new(1.0, egui::Color32::TRANSPARENT);
@@ -480,7 +500,11 @@ fn row_list(ui: &mut egui::Ui, p: &Palette, names: &[Row], live: bool, confirm: 
                     ui.set_width(ui.available_width());
                     ui.set_min_height(ROW_H - 12.0);
                     // Secondary text lifts on the cursor fill where muted would fall under 5.0:1.
-                    let muted = if on_cursor { crate::views::muted_on_selected(p) } else { crate::views::dialog_muted(p) };
+                    let muted = match (on_cursor, live) {
+                        (true, true) => crate::views::muted_on_selected(p),
+                        (true, false) => theme::muted_on(fill, p),
+                        (false, _) => crate::views::dialog_muted(p),
+                    };
                     let color = row_text_color(n.muted, live, p.text, muted);
                     let mut job = egui::text::LayoutJob::default();
                     let font = font_for(n.current);
@@ -538,15 +562,21 @@ mod tests {
         assert_eq!(super::row_text_color(false, false, text, muted), muted, "read-only: every row reads as off");
         assert_eq!(super::read_only_priority(" "), "Not set");
         assert_eq!(super::read_only_priority("High"), "High");
-        // No cursor fill or ring on a view-only list, wherever the cursor is.
+        // A view-only list keeps a quiet neutral cursor row, never the live accent one.
         for p in [crate::theme::LIGHT, crate::theme::DARK] {
             let shapes = crate::testutil::paint_at2(egui::vec2(800.0, 600.0), |ui| {
                 ui.set_width(440.0);
                 let names = vec![super::Row::plain("Done".into()), super::Row::plain("Won't Do".into())];
                 super::rows(ui, &p, names, false, &mut false, &mut 0, None, None);
             });
+            let fills = crate::testutil::fills(&shapes);
             let cursor = crate::views::dialog_cursor_fill(&p);
-            assert!(crate::testutil::fills(&shapes).iter().all(|(_, c)| *c != cursor), "no cursor row");
+            assert!(fills.iter().all(|(_, c)| *c != cursor), "no live cursor row");
+            let quiet = crate::theme::dialog_input_fill(&p);
+            assert_eq!(fills.iter().filter(|(_, c)| *c == quiet).count(), 1, "one quiet cursor row, dark={}", p.dark);
+            assert!(crate::theme::contrast(quiet, crate::views::dialog_fill(&p)) > 1.05, "it shows on the dialog, dark={}", p.dark);
+            let muted = crate::theme::muted_on(quiet, &p);
+            assert!(crate::theme::contrast(muted, quiet) >= 4.5, "its text reads, dark={}", p.dark);
         }
     }
 
@@ -679,6 +709,21 @@ mod tests {
             let gap = crate::testutil::ink_of(&shapes, "Unassigned").top() - field.bottom();
             assert!((gap - 12.0).abs() <= 0.25, "field → Unassigned {gap}");
         }
+    }
+
+    #[test]
+    fn a_read_only_priority_shows_its_segments_disabled() {
+        // Round 5: view-only, Priority was a plain text box ("Not set"), unlike the list choice it is.
+        let p = crate::theme::LIGHT;
+        let mut priority = String::new();
+        let shapes = crate::testutil::paint_at2(egui::vec2(800.0, 400.0), |ui| {
+            ui.set_width(440.0);
+            super::priority_group(ui, &p, &mut priority, "", false);
+        });
+        for name in ["Not set", "Highest", "Medium", "Lowest"] {
+            crate::testutil::ink_of(&shapes, name);
+        }
+        assert!(priority.is_empty(), "nothing chosen");
     }
 
     #[test]

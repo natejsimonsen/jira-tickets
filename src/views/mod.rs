@@ -525,7 +525,8 @@ pub fn sign_in(app: &mut App, ui: &mut Ui) {
                 ui.add_space(if app.login.is_some() { 8.0 } else { BODY_TO_ASIDE });
                 ui.add(egui::Label::new(aside).extend());
                 ui.add_space(ASIDE_TO_FIELD);
-                ui.visuals_mut().text_edit_bg_color = Some(theme::input_fill(p.surface, p));
+                // The page's one field fill (`Palette::field`), as the search box and the filter combos.
+                ui.visuals_mut().text_edit_bg_color = Some(p.field());
                 let r = add_field(ui, None, &mut app.token_input, |t| input_field(t, "API token", theme::body(14.0), p).id(egui::Id::new("token-input")).password(true));
                 if ui.memory(|m| m.focused().is_none()) {
                     r.request_focus();
@@ -778,9 +779,19 @@ fn toast_body(ui: &mut Ui, p: &Palette, dot: Option<Color32>, text: &str) {
     ui.add_space(ink.pad_deep(TOAST_INK_Y));
 }
 
-/// The toast's one line: the type dot (if any), 8, the text, with TOAST_INK_X from the fill to the ink either side.
+/// The widest a toast gets, fill edge to fill edge; longer text wraps (a one-line read-only notice ran ~665 wide
+/// across both panes).
+pub const TOAST_MAX_W: f32 = 480.0;
+
+/// The width the toast's text wraps at: TOAST_MAX_W less the side padding and, with a dot, its slot and gap.
+pub fn toast_wrap_w(dot: bool) -> f32 {
+    TOAST_MAX_W - 2.0 * TOAST_INK_X - if dot { TOAST_DOT + TOAST_DOT_GAP } else { 0.0 }
+}
+
+/// The toast's row: the type dot (if any, on the first line's middle), 8, the text wrapped at `toast_wrap_w`, with
+/// TOAST_INK_X from the fill to the ink either side.
 fn toast_row(ui: &mut Ui, p: &Palette, dot: Option<Color32>, text: &str) {
-    let g = ui.painter().layout_no_wrap(text.to_string(), theme::body(14.0), p.tooltip_text);
+    let g = ui.painter().layout(text.to_string(), theme::body(14.0), p.tooltip_text, toast_wrap_w(dot.is_some()));
     // The rasters' visible coverage: a faint outer column read the right inset 15.5 (round 15 D2).
     let ink = theme::visible_ink(ui.ctx(), &g);
     let (lb, rb) = if ink.is_positive() { (ink.left(), g.size().x - ink.right()) } else { (0.0, 0.0) };
@@ -863,8 +874,8 @@ pub fn dialog_stroke(p: &Palette) -> Stroke {
 
 pub use crate::theme::DARK_EDGE;
 
-/// Inside a dialog: fields one step under the dialog's fill (`theme::dialog_input_fill`: light #ebebe7, dark the
-/// input rule under the dialog) with the dialog's edge (focus stays the accent).
+/// Inside a dialog: fields in the page's one field fill (`theme::dialog_input_fill`, `Palette::field`) with the
+/// dialog's edge (focus stays the accent).
 pub fn dialog_fields(ui: &mut Ui, p: &Palette) {
     let edge = dialog_stroke(p).color;
     let v = ui.visuals_mut();
@@ -1114,29 +1125,19 @@ pub fn link_hit(slot: Rect) -> Rect {
     slot.expand2(vec2(0.0, ((MIN_TARGET_H - slot.height()) / 2.0).max(0.0)))
 }
 
-/// A primary button that, when disabled, takes the one disabled look (`primary_disabled_colors`) and ignores
-/// clicks. Add it with `ui.add`, not `ui.add_enabled(false, ..)`: egui would fade it a second time.
+/// A primary button; disabled, `components::primary_button_off` (no fill, faded accent edge, hover only), so a
+/// disabled Confirm is quieter than the Cancel beside it in both themes. Add it with `ui.add`, not
+/// `ui.add_enabled(false, ..)`: egui would fade it a second time.
 pub fn primary_button_if(text: &str, enabled: bool, p: &Palette) -> egui::Button<'static> {
-    let b = if enabled {
-        let (fill, fg) = primary_colors(p);
-        egui::Button::new(RichText::new(text.to_string()).color(fg).size(14.0)).fill(fill).stroke(Stroke::new(1.0, fill))
-    } else {
-        let (fill, fg) = primary_disabled_colors(p);
-        egui::Button::new(RichText::new(text.to_string()).color(fg).size(14.0)).fill(fill).stroke(disabled_stroke(p)).sense(Sense::hover())
-    };
-    b.corner_radius(theme::RADIUS).min_size(vec2(0.0, BUTTON_H))
-}
-
-/// The one disabled button look, primary or secondary: the resting secondary (`button`) faded to
-/// `theme::DISABLED_ALPHA`, exactly what egui draws for `ui.add_enabled(false, button(..))`. A quieter frame, its
-/// label ≥ 5.5:1 on every fill (the old accent tint with faded text read 2.2:1). Returns (fill, text), translucent.
-pub fn primary_disabled_colors(p: &Palette) -> (Color32, Color32) {
-    (theme::button_fill(p).gamma_multiply(theme::DISABLED_ALPHA), p.text.gamma_multiply(theme::DISABLED_ALPHA))
-}
-
-/// The disabled button's edge: `button`'s `border` at DISABLED_ALPHA.
-pub fn disabled_stroke(p: &Palette) -> Stroke {
-    Stroke::new(1.0, p.border.gamma_multiply(theme::DISABLED_ALPHA))
+    if !enabled {
+        return components::primary_button_off(text, p);
+    }
+    let (fill, fg) = primary_colors(p);
+    egui::Button::new(RichText::new(text.to_string()).color(fg).size(14.0))
+        .fill(fill)
+        .stroke(Stroke::new(1.0, fill))
+        .corner_radius(theme::RADIUS)
+        .min_size(vec2(0.0, BUTTON_H))
 }
 
 /// Pill inner padding (8/2) and radius (10).
@@ -2127,20 +2128,9 @@ mod widget_tests {
     }
 
     #[test]
-    fn one_disabled_look_for_every_button() {
-        for p in [&theme::LIGHT, &theme::DARK] {
-            let (fill, fg) = primary_disabled_colors(p);
-            // egui's own disabled fade of the secondary button, so `add_enabled(false, button(..))` matches.
-            assert_eq!(fill, theme::button_fill(p).gamma_multiply(theme::DISABLED_ALPHA));
-            assert_eq!(fg, p.text.gamma_multiply(theme::DISABLED_ALPHA));
-            assert_eq!(disabled_stroke(p).color, p.border.gamma_multiply(theme::DISABLED_ALPHA));
-            for page in [dialog_fill(p), p.bg, p.surface, p.selection()] {
-                let f = theme::over(fill, page);
-                let t = theme::over(fg, f);
-                assert!(theme::contrast(t, f) >= 4.5, "its label still reads, dark={}: {:.2}", p.dark, theme::contrast(t, f));
-                assert!(theme::contrast(f, page) < theme::contrast(primary_colors(p).0, page), "quieter than live, dark={}", p.dark);
-            }
-        }
+    fn long_toasts_wrap_inside_the_cap() {
+        assert_eq!(toast_wrap_w(false) + 2.0 * TOAST_INK_X, TOAST_MAX_W);
+        assert!(toast_wrap_w(true) < toast_wrap_w(false), "the dot's slot comes off the text");
     }
 
     #[test]
