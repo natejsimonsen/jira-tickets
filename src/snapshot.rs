@@ -215,6 +215,30 @@ fn run_step(harness: &mut Harness<'_, App>, step: &Step) {
     }
 }
 
+/// The Standup shot waits for a whole review: with no saved review and none started by itself, it starts one,
+/// then waits for it to end, up to `[standup].timeout_secs` plus a minute for Jira.
+fn standup_wait(harness: &mut Harness<'_, App>) {
+    frames(harness, 2);
+    if harness.state().standup.phase.is_none() && harness.state().standup.saved.review.is_none() {
+        harness.state_mut().actions.push(Action::StandupRun);
+        frames(harness, 2);
+    }
+    let limit = Duration::from_secs(harness.state().cfg.standup.timeout_secs + 60);
+    let start = Instant::now();
+    while harness.state().standup.phase.is_some() && start.elapsed() < limit {
+        frames(harness, 10);
+    }
+    let st = &harness.state().standup;
+    eprintln!(
+        "snapshot: standup {} after {:.0}s, {} activity issues, {} suggestions{}",
+        if st.phase.is_some() { "still running" } else { "done" },
+        start.elapsed().as_secs_f32(),
+        st.activity_count.unwrap_or(0),
+        st.saved.visible().len(),
+        st.error.as_deref().map(|e| format!(", error: {e}")).unwrap_or_default()
+    );
+}
+
 pub fn run(out: Option<&str>, cfg: Config) {
     crate::jira::READ_ONLY.store(true, std::sync::atomic::Ordering::Relaxed);
     let mut harness = Harness::builder()
@@ -233,6 +257,8 @@ pub fn run(out: Option<&str>, cfg: Config) {
         Ok("grooming") => Screen::Grooming,
         Ok("team") => Screen::Team,
         Ok("roadmap") => Screen::Roadmap,
+        Ok("me") => Screen::Me,
+        Ok("standup") => Screen::Standup,
         _ => Screen::Issues,
     };
     let start = Instant::now();
@@ -241,6 +267,9 @@ pub fn run(out: Option<&str>, cfg: Config) {
     }
     eprintln!("snapshot: data {} after {:.1}s", if harness.state().shot_ready(screen) { "ready" } else { "not ready" }, start.elapsed().as_secs_f32());
     harness.state_mut().actions.push(Action::SetScreen(screen));
+    if screen == Screen::Standup {
+        standup_wait(&mut harness);
+    }
     if let Ok(n) = std::env::var("JIRA_TICKETS_ROW").map(|v| v.parse::<i32>().unwrap_or(0)) {
         harness.state_mut().actions.push(Action::Move(n));
     }

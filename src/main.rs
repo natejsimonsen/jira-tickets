@@ -9,10 +9,12 @@ mod filter;
 mod grooming;
 mod jira;
 mod keys;
+mod me;
 mod report;
 mod roadmap;
 #[cfg(feature = "snapshot")]
 mod snapshot;
+mod standup;
 mod store;
 mod teamview;
 mod theme;

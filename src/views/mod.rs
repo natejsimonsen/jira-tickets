@@ -7,8 +7,10 @@ pub mod grooming_guide;
 pub mod help;
 pub mod icons;
 pub mod issues;
+pub mod me;
 pub mod pickers;
 pub mod roadmap;
+pub mod standup;
 pub mod team;
 
 use crate::app::{Action, App, Screen};
@@ -28,6 +30,8 @@ pub fn main(app: &mut App, ui: &mut Ui) {
         Screen::Grooming => grooming::show(app, ui),
         Screen::Team => team::show(app, ui),
         Screen::Roadmap => roadmap::show(app, ui),
+        Screen::Me => me::show(app, ui),
+        Screen::Standup => standup::show(app, ui),
     }
     // One 1 px rule, the header panel's own last point under its 48 px bar (egui's separator line is off, so
     // nothing stacks on it), then the active tab's 2 px accent bar over the rule's y-range. Painted after the
@@ -52,6 +56,39 @@ pub fn empty_state(ui: &mut Ui, p: &Palette, text: &str) {
 /// The empty-state text size.
 pub const EMPTY_STATE_SIZE: f32 = 14.0;
 
+/// The widths a split's first pane may be dragged to in `available`: no cap of its own, only the room that
+/// leaves the pane beside it `other_min`. Never under `min`, so a window narrower than both mins keeps the range valid.
+pub fn split_range(available: f32, min: f32, other_min: f32) -> std::ops::RangeInclusive<f32> {
+    min..=(available - other_min).max(min)
+}
+
+/// The first pane's width this frame: the saved (dragged) width, else `default`, held to `split_range` and to
+/// `available`, so a width saved in a wider window shrinks to fit this one.
+pub fn split_width(saved: Option<f32>, default: f32, available: f32, min: f32, other_min: f32) -> f32 {
+    let r = split_range(available, min, other_min);
+    saved.unwrap_or(default).clamp(*r.start(), *r.end()).min(available.max(0.0))
+}
+
+/// A drag handle over the `gap` between two panes, the first starting at `left`. A drag saves the first pane's
+/// new width under `id` (persisted with the window state); `saved_split` reads it back for `split_width`.
+pub fn splitter(ui: &mut Ui, id: egui::Id, left: f32, gap: egui::Rect) {
+    let resp = ui.interact(gap, id.with("handle"), Sense::drag());
+    if resp.hovered() || resp.dragged() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+    }
+    if resp.dragged()
+        && let Some(pos) = resp.interact_pointer_pos()
+    {
+        let w = pos.x - gap.width() / 2.0 - left;
+        ui.data_mut(|d| d.insert_persisted(id, w));
+    }
+}
+
+/// A splitter's saved width, if the user has dragged it.
+pub fn saved_split(ui: &Ui, id: egui::Id) -> Option<f32> {
+    ui.data_mut(|d| d.get_persisted::<f32>(id))
+}
+
 /// The top space that centres `content_h` in `avail_h` (never negative).
 pub fn centre_top(avail_h: f32, content_h: f32) -> f32 {
     ((avail_h - content_h) / 2.0).max(0.0).round()
@@ -74,8 +111,27 @@ fn centred(ui: &mut Ui, id: &str, content: impl FnOnce(&mut Ui)) {
     });
 }
 
-/// The tabs, in ⌘1–⌘4 order.
-const TABS: [(Screen, &str); 4] = [(Screen::Issues, "Issues"), (Screen::Grooming, "Grooming"), (Screen::Team, "Team"), (Screen::Roadmap, "Roadmap")];
+/// The tabs, in their ⌘-digit order (`tab_key`).
+const TABS: [(Screen, &str); 6] = [
+    (Screen::Issues, "Issues"),
+    (Screen::Grooming, "Grooming"),
+    (Screen::Team, "Team"),
+    (Screen::Roadmap, "Roadmap"),
+    (Screen::Me, "Me"),
+    (Screen::Standup, "Standup"),
+];
+
+/// The digit that, with ⌘, switches to `s` (`App::shortcuts`).
+pub fn tab_key(s: Screen) -> u8 {
+    match s {
+        Screen::Issues => 1,
+        Screen::Grooming => 2,
+        Screen::Team => 3,
+        Screen::Roadmap => 4,
+        Screen::Me => 5,
+        Screen::Standup => 6,
+    }
+}
 
 /// Each tab's origin x for a title whose galley starts at `left`: TITLE_GAP from the title's ink to the first
 /// tab's ink, TAB_GAP between the tabs' ink (round 13 A1 / A2: gaps between the boxes read 33.5 and 24.5–25.5).
@@ -250,7 +306,7 @@ fn header(app: &mut App, ui: &mut Ui, p: &Palette) -> (egui::Rect, Option<egui::
                     active_tab = Some(tab_underline_x(rect.left(), &galley));
                 }
                 ui.painter().galley(pos, galley, p.text);
-                let r = tooltip(r, format!("{name} (⌘{})", i + 1));
+                let r = tooltip(r, format!("{name} (⌘{})", tab_key(s)));
                 if r.clicked() {
                     app.actions.push(Action::SetScreen(s));
                 }
@@ -1741,6 +1797,12 @@ mod widget_tests {
     }
 
     #[test]
+    fn tab_keys_match_the_tab_order() {
+        let keys: Vec<u8> = TABS.iter().map(|(s, _)| tab_key(*s)).collect();
+        assert_eq!(keys, [1, 2, 3, 4, 5, 6]);
+    }
+
+    #[test]
     fn small_label_sits_on_the_names_baseline() {
         // A 14 px name with its baseline 13 down, drawn at top 10: a 12 px label (baseline 11 down) goes at 12.
         assert_eq!(top_for_baseline(10.0 + 13.0, 11.0), 12.0);
@@ -1991,6 +2053,23 @@ mod widget_tests {
     fn toast_sits_above_the_hint_bar_when_there_is_one() {
         assert_eq!(toast_offset(Some(24.0)), 40.0);
         assert_eq!(toast_offset(None), 24.0);
+    }
+
+    #[test]
+    fn splits_have_no_cap_but_the_other_pane() {
+        // Wide window: the first pane may take all but the other pane's minimum.
+        assert_eq!(split_range(2560.0, 320.0, 576.0), 320.0..=1984.0);
+        // Narrow window: the range collapses to the minimum instead of inverting.
+        assert_eq!(split_range(600.0, 320.0, 576.0), 320.0..=320.0);
+        // A saved width wider than this window shrinks to fit it; one that fits is kept as dragged.
+        assert_eq!(split_width(Some(3000.0), 400.0, 1440.0, 320.0, 576.0), 864.0);
+        assert_eq!(split_width(Some(1500.0), 400.0, 2560.0, 320.0, 576.0), 1500.0);
+        // Nothing saved: the default; dragged under the minimum: the minimum.
+        assert_eq!(split_width(None, 400.0, 1440.0, 320.0, 576.0), 400.0);
+        assert_eq!(split_width(Some(10.0), 400.0, 1440.0, 320.0, 576.0), 320.0);
+        // A window narrower than the minimum: never wider than the window, never negative.
+        assert_eq!(split_width(Some(900.0), 400.0, 200.0, 320.0, 576.0), 200.0);
+        assert_eq!(split_width(None, 400.0, -5.0, 320.0, 576.0), 0.0);
     }
 }
 

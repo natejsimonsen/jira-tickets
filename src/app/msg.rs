@@ -58,6 +58,15 @@ pub enum Msg {
     ReportLoaded(Option<(std::path::PathBuf, crate::report::Report)>),
     /// Ready for Work tickets under the epics a Promote moved tickets into Planning for.
     Siblings(jira::Result<Vec<Issue>>),
+    /// The Standup review's Jira step: how many issues the user touched in the window.
+    StandupActivity(jira::Result<usize>),
+    /// The Standup review's answer from `claude`.
+    StandupReview(Result<crate::standup::Review, String>),
+    /// A suggested ticket was created: its key, and the sprint it moved to (None: the backlog) or why it did not.
+    StandupAdded {
+        dkey: String,
+        result: jira::Result<(String, Result<Option<String>, String>)>,
+    },
     /// A Team member's tickets done in the last 7 days.
     DoneRecent {
         member: String,
@@ -70,6 +79,9 @@ impl App {
         match msg {
             Msg::ReportLoaded(report) => self.report_loaded(report),
             Msg::Siblings(result) => self.siblings_loaded(result),
+            Msg::StandupActivity(result) => self.standup_activity_loaded(result),
+            Msg::StandupReview(result) => self.standup_reviewed(result),
+            Msg::StandupAdded { dkey, result } => self.standup_added(dkey, result),
             Msg::DoneRecent { member, result } => {
                 self.team.done_loading.remove(&member);
                 match result {
@@ -364,7 +376,7 @@ fn should_retry_without_members(err_is_unresolved_assignee: bool, sent_with_memb
 /// Only a transport failure on a refresh list means we are offline; bad JQL,
 /// rate limits, or a failed search just show on that list.
 fn marks_offline(id: ListId, e: &jira::Error) -> bool {
-    matches!(e, jira::Error::Network(_)) && matches!(id, ListId::TeamOpen | ListId::TeamInProgress | ListId::Epics | ListId::EpicChildren)
+    matches!(e, jira::Error::Network(_)) && matches!(id, ListId::TeamOpen | ListId::TeamInProgress | ListId::Epics | ListId::EpicChildren | ListId::Me)
 }
 
 #[cfg(test)]

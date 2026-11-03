@@ -49,6 +49,10 @@ pub enum Action {
     Rank(i32),
     /// Shows or hides the keyboard help overlay (`?`).
     ToggleHelp,
+    /// Steps the colour scheme: System, Light, Dark (⌘⇧T).
+    CycleTheme,
+    /// Switches between Compact and Comfortable spacing (⌘⇧D).
+    ToggleDensity,
     /// Switches the Grooming screen between Pre-check and Session.
     GroomMode(super::GroomMode),
     /// Moves the Grooming cursor: a pre-check row, or a session candidate.
@@ -106,6 +110,26 @@ pub enum Action {
     RoadmapMove(i32),
     /// Opens the focused Roadmap initiative's epic on the Issues screen.
     RoadmapOpen,
+    /// Moves the Me cursor down (or up) its rows and selects the ticket there, so the detail pane shows it.
+    MeMove(i32),
+    /// Opens the focused Me ticket on the Issues screen.
+    MeOpen,
+    /// Runs the standup review now (Run again).
+    StandupRun,
+    /// Moves the Standup cursor down (or up) the suggested tickets.
+    StandupMove(i32),
+    /// Puts the Standup cursor on this card.
+    StandupFocus(usize),
+    /// Dismisses the focused suggestion for good.
+    StandupDismiss,
+    /// Creates the focused suggestion's ticket and moves it into the target's sprint.
+    StandupAdd(crate::standup::Target),
+    /// The focused card's title field takes focus.
+    StandupEditTitle,
+    /// Copies the standup summary as text.
+    StandupCopy,
+    /// Opens the focused suggestion's source.
+    StandupOpenSource,
 }
 
 impl App {
@@ -225,6 +249,20 @@ impl App {
         }
     }
 
+    fn me_move(&mut self, d: i32, ctx: &egui::Context) {
+        let rows = crate::me::row_count(&self.me_sections());
+        self.me_view.cursor = crate::me::moved(self.me_view.cursor, d, rows);
+        if let Some(key) = self.me_focused() {
+            self.apply(Action::Select(key), ctx);
+        }
+    }
+
+    fn me_open(&mut self, ctx: &egui::Context) {
+        if let Some(key) = self.me_focused() {
+            self.open_in_issues(key, ctx);
+        }
+    }
+
     /// The Unassigned column has no footer.
     fn team_toggle_done(&mut self) {
         let member = {
@@ -280,6 +318,24 @@ impl App {
             Action::RoadmapTab(t) => self.roadmap_tab(t),
             Action::RoadmapMove(d) => self.roadmap_move(d),
             Action::RoadmapOpen => self.roadmap_open(ctx),
+            Action::MeMove(d) => self.me_move(d, ctx),
+            Action::MeOpen => self.me_open(ctx),
+            Action::StandupRun => self.standup_run(),
+            Action::StandupMove(d) => self.standup_move(d),
+            Action::StandupFocus(i) => self.standup_focus(i),
+            Action::StandupDismiss => self.standup_dismiss(),
+            Action::StandupAdd(t) => self.standup_add(t),
+            Action::StandupEditTitle => self.standup.focus_title = !self.standup_keys().is_empty(),
+            Action::StandupCopy => {
+                if let Some(text) = self.standup_text() {
+                    self.apply(Action::Copy(text), ctx);
+                }
+            }
+            Action::StandupOpenSource => {
+                if let Some(u) = self.standup_source_url() {
+                    open_url(&u);
+                }
+            }
             Action::GroomMode(m) => self.groom_mode(m),
             Action::GroomMove(d) => self.groom_move(d),
             Action::GroomEpic { delta, skip_empty } => self.groom_epic(delta, skip_empty),
@@ -502,6 +558,16 @@ impl App {
             Action::OpenEdit => self.open_edit(),
             Action::PickerMove(d) => self.picker_move(d),
             Action::ToggleHelp => self.help_open = !self.help_open,
+            Action::CycleTheme => {
+                let next = super::Appearance { theme: self.appearance.theme.next(), ..self.appearance };
+                self.set_appearance(next, ctx);
+                self.toast_kind(format!("Theme: {}", next.theme.name()), ToastKind::Info);
+            }
+            Action::ToggleDensity => {
+                let next = super::Appearance { density: self.appearance.density.toggled(), ..self.appearance };
+                self.set_appearance(next, ctx);
+                self.toast_kind(format!("Density: {}", next.density.name()), ToastKind::Info);
+            }
             Action::PickerCancel => self.picker = None,
             Action::PickerConfirm => self.confirm_picker(),
             Action::Rank(delta) => {

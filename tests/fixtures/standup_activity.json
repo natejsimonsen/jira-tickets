@@ -1,0 +1,79 @@
+{
+  "issues": [
+    {
+      "key": "CI-1",
+      "fields": {
+        "summary": "Fix rollouts",
+        "issuetype": { "name": "Task" },
+        "status": { "name": "In Progress" },
+        "created": "2026-10-30T12:00:00.000+0000",
+        "reporter": { "accountId": "me-1", "displayName": "Me" },
+        "comment": {
+          "comments": [
+            {
+              "author": { "accountId": "me-1", "displayName": "Me" },
+              "created": "2026-11-01T12:00:00.000+0000",
+              "body": { "type": "doc", "version": 1, "content": [{ "type": "paragraph", "content": [{ "type": "text", "text": "Opened the PR for this" }] }] }
+            },
+            {
+              "author": { "accountId": "other-1", "displayName": "Other" },
+              "created": "2026-11-01T12:30:00.000+0000",
+              "body": { "type": "doc", "version": 1, "content": [{ "type": "paragraph", "content": [{ "type": "text", "text": "Thanks" }] }] }
+            }
+          ]
+        }
+      },
+      "changelog": {
+        "histories": [
+          {
+            "author": { "accountId": "me-1" },
+            "created": "2026-10-31T12:00:00.000+0000",
+            "items": [{ "field": "status", "fromString": "New", "toString": "In Progress" }, { "field": "Rank", "fromString": "", "toString": "Ranked higher" }]
+          },
+          {
+            "author": { "accountId": "other-1" },
+            "created": "2026-10-31T13:00:00.000+0000",
+            "items": [{ "field": "status", "fromString": "In Progress", "toString": "In Review" }]
+          }
+        ]
+      }
+    },
+    {
+      "key": "CI-2",
+      "fields": {
+        "summary": "Old ticket",
+        "issuetype": { "name": "Bug" },
+        "status": { "name": "Done" },
+        "created": "2026-09-01T12:00:00.000+0000",
+        "reporter": { "accountId": "me-1" },
+        "comment": { "comments": [] }
+      },
+      "changelog": {
+        "histories": [
+          { "author": { "accountId": "me-1" }, "created": "2026-10-20T12:00:00.000+0000", "items": [{ "field": "status", "fromString": "New", "toString": "In Progress" }] },
+          { "author": { "accountId": "me-1" }, "created": "2026-11-01T12:00:00.000+0000", "items": [{ "field": "resolution", "fromString": "", "toString": "Done" }] }
+        ]
+      }
+    },
+    {
+      "key": "CI-3",
+      "fields": {
+        "summary": "Someone else's",
+        "issuetype": { "name": "Story" },
+        "status": { "name": "New" },
+        "created": "2026-10-01T12:00:00.000+0000",
+        "reporter": { "accountId": "other-1" },
+        "comment": {
+          "comments": [
+            { "author": { "accountId": "other-1" }, "created": "2026-10-31T12:00:00.000+0000", "body": { "type": "doc", "version": 1, "content": [] } }
+          ]
+        }
+      },
+      "changelog": {
+        "histories": [
+          { "author": { "accountId": "other-1" }, "created": "2026-10-31T12:00:00.000+0000", "items": [{ "field": "assignee", "fromString": "", "toString": "Me" }] }
+        ]
+      }
+    }
+  ]
+}

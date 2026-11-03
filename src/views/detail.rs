@@ -124,7 +124,8 @@ pub fn show(app: &mut App, ui: &mut Ui) {
                 ui.add_space(label_space(ui, below, first));
                 for c in &issue.comments {
                     comment_card(ui, p, &c.author, &short_date(&c.created), &c.body);
-                    ui.add_space(COMMENT_GAP - ui.spacing().item_spacing.y);
+                    // Between comment cards: the cards' own padding.
+                    ui.add_space(theme::spacing(ui.ctx()).card_pad - ui.spacing().item_spacing.y);
                 }
                 // After the cards, 16 to the composer (12 + 4); with no cards it sits 16 below the label like one.
                 if !issue.comments.is_empty() {
@@ -213,20 +214,18 @@ fn title_block(ui: &mut Ui, p: &Palette, key_ink: f32, summary: &str) {
     let pills = snap(ui, snap(ui, r.rect.top()) + foot + TITLE_TO_PILLS);
     ui.add_space(pills - ui.cursor().top());
 }
-/// Pills → Description and the description's last line → Comments, measured to the ink (round 13 E5: 24 to
-/// the boxes read 34 and 37).
-const SECTION_INK_GAP: f32 = 32.0;
-
-/// The space before a section heading `text` for SECTION_INK_GAP between the ink of the block above (ending
-/// `below_ink` over its box's bottom) and the heading's ink; the layout's item spacing already follows the block.
+/// The space before a section heading `text` for the density's `section_gap` (pills → Description and the
+/// description's last line → Comments, measured to the ink; 32 in Compact, round 13 E5: 24 to the boxes read 34
+/// and 37) between the ink of the block above (ending `below_ink` over its box's bottom) and the heading's ink;
+/// the layout's item spacing already follows the block.
 fn section_space(ui: &Ui, text: &str, below_ink: f32) -> f32 {
     let top = theme::ink_rect(&ui.painter().layout_no_wrap(text.to_string(), theme::bold(12.0), egui::Color32::WHITE)).top();
-    section_gap_space(below_ink, top, ui.spacing().item_spacing.y)
+    section_gap_space(theme::spacing(ui.ctx()).section_gap, below_ink, top, ui.spacing().item_spacing.y)
 }
 
-/// SECTION_INK_GAP less the ink's leading either side and the item spacing.
-pub fn section_gap_space(below_ink: f32, heading_ink_top: f32, item_spacing_y: f32) -> f32 {
-    SECTION_INK_GAP - below_ink - heading_ink_top - item_spacing_y
+/// The section `gap` less the ink's leading either side and the item spacing.
+pub fn section_gap_space(gap: f32, below_ink: f32, heading_ink_top: f32, item_spacing_y: f32) -> f32 {
+    gap - below_ink - heading_ink_top - item_spacing_y
 }
 /// A section label's ink → the first ink under it: the description's first line, a comment card's or the
 /// composer's edge, the read-only note (round 15 E6/F2: 8 to the label's box read 18.5 and 17).
@@ -237,8 +236,6 @@ const LABEL_INK_GAP: f32 = 16.0;
 fn label_space(ui: &Ui, below: f32, first: f32) -> f32 {
     LABEL_INK_GAP - below - first - ui.spacing().item_spacing.y
 }
-/// Between comment cards: the cards' own 12 px padding.
-const COMMENT_GAP: f32 = 12.0;
 /// The composer's fixed height.
 const COMPOSER_H: f32 = 72.0;
 /// The composer's inner margin: with its 1 px stroke, text sits 12 in, on a comment card's text edge.
@@ -249,7 +246,7 @@ const COMPOSER_STROKE: f32 = 1.0;
 /// F1 keeps it).
 #[cfg(test)]
 const COMPOSER_BOX_H: f32 = 90.0;
-/// The composer's border to its text's ink, above: a comment card's CARD_PAD (round 14 F1: 16.5 read to the line
+/// The composer's border to its text's ink, above: a Compact comment card's padding (round 14 F1: 16.5 read to the line
 /// box's 12).
 const COMPOSER_INK_TOP: f32 = 12.0;
 
@@ -274,20 +271,18 @@ pub const DETAIL_RIGHT: f32 = 16.0;
 /// What read-only mode shows instead of the composer.
 pub const READ_ONLY_NOTE: &str = "Read-only, comments can't be posted";
 
-/// A comment card's padding, measured to the ink on every side (round 13 E2: a 12 margin read 16–16.5 to the ink
-/// above and below).
-pub const CARD_PAD: f32 = 12.0;
-
 /// One comment: surface_2, fill only (like code blocks), in both themes; code inside steps off it
-/// (`chip_fill_on`). CARD_PAD to the header's ink above and to the body's descenders below; the sides keep the
-/// 12 margin (the text's own bearing reads 12, round 13).
+/// (`chip_fill_on`). The density's `card_pad` (12 in Compact), measured to the ink on every side (round 13 E2: a
+/// 12 margin read 16–16.5 to the ink above and below): to the header's ink above and to the body's descenders
+/// below; the sides keep the margin (the text's own bearing reads 12, round 13).
 pub fn comment_card(ui: &mut Ui, p: &Palette, author: &str, date: &str, body: &serde_json::Value) {
-    let below = theme::Ink::of(ui.ctx(), &theme::body(14.0), Some(adf_view::line_height(14.0))).pad_deep(CARD_PAD);
-    let pad = CARD_PAD as i8;
+    let card_pad = theme::spacing(ui.ctx()).card_pad;
+    let below = theme::Ink::of(ui.ctx(), &theme::body(14.0), Some(adf_view::line_height(14.0))).pad_deep(card_pad);
+    let pad = card_pad as i8;
     Frame::new().fill(p.surface_2).corner_radius(theme::RADIUS).inner_margin(Margin { left: pad, right: pad, top: 0, bottom: 0 }).show(ui, |ui| {
         ui.set_width(ui.available_width());
         let header = header_galleys(ui, p, author, date);
-        ui.add_space(CARD_PAD - header.ink_top);
+        ui.add_space(card_pad - header.ink_top);
         let under = header.below_ink();
         comment_header_row(ui, header);
         // HEADER_TO_BODY from the header's lowest ink to the body's first ink.
@@ -478,6 +473,13 @@ pub fn detail_columns(window_w: f32, available: f32) -> (f32, f32) {
 /// The fields column below a 1200 px window: 132, so the description keeps 400 with the 24 gutter (K1).
 pub const NARROW_FIELDS: f32 = 132.0;
 
+/// The narrowest the detail pane gets beside a dragged list: its 16 + 16 margins and `detail_columns`' floor (a
+/// 300 description column, the gutter and the fields column's minimum), so neither column overflows the pane.
+pub fn min_pane_width(window_w: f32) -> f32 {
+    let fields_min = if window_w < 1200.0 { NARROW_FIELDS } else { 220.0 };
+    32.0 + 300.0 + FIELDS_GUTTER + fields_min
+}
+
 /// Composer box → Comment button.
 const BOX_TO_BUTTON: f32 = 12.0;
 
@@ -506,6 +508,14 @@ mod tests {
         assert_eq!(detail_columns(1000.0, crate::views::issues::NARROW_DETAIL_MIN - 32.0), (400.0, NARROW_FIELDS));
         assert_eq!(detail_columns(1000.0, 300.0).0, 300.0, "floor");
         assert_eq!(detail_columns(2560.0, 1800.0).0, MAIN_MAX);
+    }
+
+    #[test]
+    fn min_pane_holds_both_columns() {
+        for w in [1000.0, 1440.0] {
+            let (main, fields) = detail_columns(w, min_pane_width(w) - 32.0);
+            assert_eq!(main + FIELDS_GUTTER + fields, min_pane_width(w) - 32.0, "window {w}");
+        }
     }
 
     #[test]
@@ -564,9 +574,9 @@ mod tests {
         let (a, d) = (crate::testutil::ink_of(&shapes, "Ada Lovelace"), crate::testutil::ink_of(&shapes, "2026-07-29 13:28"));
         let b = crate::testutil::ink_of(&shapes, "Looks good, shipping it today");
         let near = |v: f32, want: f32| (v - want).abs() <= 0.5;
-        assert!(near(a.top().min(d.top()) - card.top(), CARD_PAD), "top {}", a.top().min(d.top()) - card.top());
-        assert!(near(card.bottom() - b.bottom(), CARD_PAD), "bottom {}", card.bottom() - b.bottom());
-        assert!(near(a.left() - card.left(), CARD_PAD), "left {}", a.left() - card.left());
+        assert!(near(a.top().min(d.top()) - card.top(), theme::COMPACT.card_pad), "top {}", a.top().min(d.top()) - card.top());
+        assert!(near(card.bottom() - b.bottom(), theme::COMPACT.card_pad), "bottom {}", card.bottom() - b.bottom());
+        assert!(near(a.left() - card.left(), theme::COMPACT.card_pad), "left {}", a.left() - card.left());
         assert!(near(d.left() - a.right(), COMMENT_META_GAP), "author · date {}", d.left() - a.right());
         // Neither has descenders, so the ink bottoms are the baselines.
         assert!(near(a.bottom(), d.bottom()), "one baseline: {} vs {}", a.bottom(), d.bottom());
@@ -679,7 +689,7 @@ mod tests {
                 crate::testutil::ink_of(&shapes, "a gpqy line").bottom()
             };
             let gap = crate::testutil::ink_of(&shapes, "Description").top() - above;
-            assert!((gap - SECTION_INK_GAP).abs() <= 0.5, "{below}: {gap}");
+            assert!((gap - theme::COMPACT.section_gap).abs() <= 0.5, "{below}: {gap}");
         }
     }
 
