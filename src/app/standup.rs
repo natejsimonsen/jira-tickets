@@ -32,8 +32,15 @@ pub struct StandupState {
     pub activity_count: Option<usize>,
     /// Why the last review failed; the last good review stays on screen.
     pub error: Option<String>,
-    /// The focused card: an index into `saved.visible()`.
+    /// The focused card, in reading order: the ticket cards (`saved.tickets.all()`), then the suggestions
+    /// (`saved.visible()`).
     pub cursor: usize,
+    /// The ticket cards' read is in flight.
+    pub tickets_loading: bool,
+    /// A ticket read asked for while one was in flight: runs when it lands.
+    pub(super) tickets_reload: bool,
+    /// Why the last ticket read failed; the cached cards stay.
+    pub tickets_error: Option<String>,
     /// Edited titles, by dismiss key.
     pub titles: HashMap<String, String>,
     /// Dismiss keys with an add in flight.
@@ -141,12 +148,18 @@ impl App {
         self.standup.phase = None;
         match result {
             Ok(review) => {
+                let window = standup::tickets_window(&self.standup.saved, (self.today)());
                 self.standup.saved.review = Some(review);
                 self.standup.saved.ran_on = self.standup.saved.last_run;
                 self.standup.saved.ran_at = Some(chrono::Utc::now().timestamp());
                 self.standup.cursor = 0;
                 self.standup.titles.clear();
                 self.save_standup();
+                // The cards follow the review's window: read them again when it moved (a first read comes with the
+                // launch refresh).
+                if self.standup.saved.tickets.since.is_some() && standup::tickets_window(&self.standup.saved, (self.today)()) != window {
+                    self.load_standup_tickets();
+                }
                 if self.screen != Screen::Standup {
                     self.toast_kind("Standup review ready (⌘6)", ToastKind::Info);
                 }
@@ -155,25 +168,82 @@ impl App {
         }
     }
 
-    /// The visible cards' dismiss keys, in order.
+    /// The visible suggestion cards' dismiss keys, in order.
     pub fn standup_keys(&self) -> Vec<String> {
         self.standup.saved.visible().into_iter().map(standup::dismiss_key).collect()
     }
 
-    /// The focused card's index and dismiss key, the cursor clamped onto the cards.
+    /// How many ticket cards come before the suggestions.
+    pub fn standup_ticket_count(&self) -> usize {
+        let t = &self.standup.saved.tickets;
+        t.done.len() + t.in_progress.len()
+    }
+
+    /// Every card's id in cursor order: "jira:KEY" for a ticket, the dismiss key for a suggestion.
+    fn standup_row_ids(&self) -> Vec<String> {
+        let tickets = self.standup.saved.tickets.all().map(|i| format!("jira:{}", i.key));
+        tickets.chain(self.standup_keys()).collect()
+    }
+
+    /// The cursor clamped onto the cards; None with no cards.
+    pub fn standup_cursor(&self) -> Option<usize> {
+        Some(self.standup.cursor.min(self.standup_row_ids().len().checked_sub(1)?))
+    }
+
+    /// The focused ticket card's issue, when the cursor is on one.
+    pub fn standup_focused_ticket(&self) -> Option<&jira::Issue> {
+        self.standup.saved.tickets.all().nth(self.standup_cursor()?)
+    }
+
+    /// The focused suggestion card's index in `saved.visible()` and its dismiss key; None on a ticket card.
     fn standup_focused(&self) -> Option<(usize, String)> {
-        let keys = self.standup_keys();
-        let i = self.standup.cursor.min(keys.len().checked_sub(1)?);
-        Some((i, keys[i].clone()))
+        let i = self.standup_cursor()?.checked_sub(self.standup_ticket_count())?;
+        Some((i, self.standup_keys().get(i)?.clone()))
+    }
+
+    /// What Move to Done (`D`) moves on this screen: the focused ticket card while it is not done yet, or the focused
+    /// suggestion once it was added as a ticket. `App::done_target`'s Standup arm.
+    pub fn standup_done_target(&self) -> Option<String> {
+        if let Some(i) = self.standup_focused_ticket() {
+            return (!super::is_done_category(&i.status.category)).then(|| i.key.clone());
+        }
+        let (_, dkey) = self.standup_focused()?;
+        self.standup.saved.added.get(&dkey).cloned()
     }
 
     pub(super) fn standup_move(&mut self, d: i32) {
-        let last = self.standup_keys().len().saturating_sub(1);
+        let last = self.standup_row_ids().len().saturating_sub(1);
         self.standup.cursor = self.standup.cursor.min(last).saturating_add_signed(d as isize).min(last);
     }
 
     pub(super) fn standup_focus(&mut self, i: usize) {
-        self.standup.cursor = i.min(self.standup_keys().len().saturating_sub(1));
+        self.standup.cursor = i.min(self.standup_row_ids().len().saturating_sub(1));
+    }
+
+    /// The ticket cards landed. The cursor stays on the card it was on (cards above it may come or go); the last
+    /// good cards stay when the read failed.
+    pub(super) fn standup_tickets_loaded(&mut self, result: jira::Result<standup::Tickets>) {
+        self.standup.tickets_loading = false;
+        let reload = std::mem::take(&mut self.standup.tickets_reload);
+        match result {
+            Ok(tickets) => {
+                let focused = self.standup_cursor().and_then(|i| self.standup_row_ids().get(i).cloned());
+                self.standup.saved.tickets = tickets;
+                self.standup.tickets_error = None;
+                if let Some(at) = focused.and_then(|id| self.standup_row_ids().iter().position(|r| *r == id)) {
+                    self.standup.cursor = at;
+                }
+                self.save_standup();
+            }
+            Err(jira::Error::Unauthorized(m)) => {
+                self.client = None;
+                self.token_error = Some(m);
+            }
+            Err(e) => self.standup.tickets_error = Some(e.to_string()),
+        }
+        if reload && self.client.is_some() {
+            self.load_standup_tickets();
+        }
     }
 
     /// Hides the focused card for good: its key is kept, so a rerun's same suggestion stays hidden.
@@ -239,8 +309,11 @@ impl App {
         }
     }
 
-    /// The focused card's source link, if it has one.
+    /// What `o` opens: the focused ticket card's Jira page, or the focused suggestion's source link, if it has one.
     pub fn standup_source_url(&self) -> Option<String> {
+        if let Some(i) = self.standup_focused_ticket() {
+            return Some(standup::browse_url(&self.cfg.site, &i.key));
+        }
         let (i, _) = self.standup_focused()?;
         let url = self.standup.saved.visible().get(i)?.source_url.trim().to_string();
         (!url.is_empty()).then_some(url)
@@ -496,5 +569,74 @@ mod tests {
         assert_eq!(app.standup_source_url().as_deref(), Some("https://a"));
         app.standup.cursor = 2;
         assert_eq!(app.standup_source_url(), None, "C has no source");
+    }
+
+    fn ticket(key: &str, cat: &str) -> jira::Issue {
+        jira::Issue { key: key.into(), summary: key.into(), status: jira::Status { name: "S".into(), category: cat.into() }, ..Default::default() }
+    }
+
+    fn with_tickets(app: &mut App) {
+        app.standup.saved.tickets = standup::Tickets {
+            since: chrono::NaiveDate::from_ymd_opt(2026, 10, 30),
+            done: vec![ticket("CI-1", "done")],
+            in_progress: vec![ticket("CI-2", "indeterminate")],
+        };
+    }
+
+    #[test]
+    fn the_cursor_runs_over_the_tickets_then_the_suggestions() {
+        let mut app = App::for_test(cfg(), None);
+        with_review(&mut app);
+        with_tickets(&mut app);
+        let ctx = egui::Context::default();
+        assert_eq!(app.standup_focused_ticket().map(|i| i.key.as_str()), Some("CI-1"));
+        assert_eq!(app.standup_done_target(), None, "a done card is not moved again");
+        assert_eq!(app.standup_source_url().as_deref(), Some("https://x.atlassian.net/browse/CI-1"), "o opens the ticket");
+        app.apply(Action::StandupDismiss, &ctx);
+        assert_eq!(app.standup_keys().len(), 3, "x on a ticket card dismisses nothing");
+        app.apply(Action::StandupMove(1), &ctx);
+        assert_eq!(app.standup_done_target().as_deref(), Some("CI-2"), "the focused in-progress card is D's target");
+        app.apply(Action::StandupMove(1), &ctx);
+        assert_eq!(app.standup_focused_ticket().map(|i| i.key.as_str()), None);
+        assert_eq!(app.standup_source_url().as_deref(), Some("https://a"), "then the first suggestion");
+        assert_eq!(app.standup_done_target(), None, "not added yet");
+        app.standup.saved.added.insert("url:https://a".into(), "CI-42".into());
+        assert_eq!(app.standup_done_target().as_deref(), Some("CI-42"));
+        app.apply(Action::StandupMove(9), &ctx);
+        assert_eq!(app.standup.cursor, 4, "clamped onto the last suggestion");
+        app.apply(Action::StandupDismiss, &ctx);
+        assert_eq!(app.standup_keys(), ["url:https://a", "url:https://b"]);
+        assert_eq!(app.standup.cursor, 3);
+    }
+
+    #[test]
+    fn tickets_load_with_a_client_and_keep_the_focused_card() {
+        let issue =
+            |key: &str, cat: &str| serde_json::json!({ "key": key, "fields": { "summary": key, "status": { "name": "S", "statusCategory": { "key": cat } } } });
+        let (base, rx) = jira::tests::stub_server(vec![("POST", "/rest/api/3/search/jql", serde_json::json!({ "issues": [issue("CI-7", "indeterminate")] }))]);
+        let mut app = App::for_test(cfg(), None);
+        app.load_standup_tickets();
+        assert!(!app.standup.tickets_loading, "no client: nothing would clear the flag");
+        app.client = Some(client(&base));
+        app.today = || chrono::NaiveDate::from_ymd_opt(2026, 11, 2).unwrap();
+        with_review(&mut app);
+        with_tickets(&mut app);
+        app.standup.cursor = 2; // the first suggestion
+        app.load_standup_tickets();
+        app.load_standup_tickets();
+        assert!(app.standup.tickets_loading && app.standup.tickets_reload, "a second ask runs after the first lands");
+        pump(&mut app, 1);
+        let t = &app.standup.saved.tickets;
+        assert_eq!((t.since, t.done.len(), t.in_progress.len()), (chrono::NaiveDate::from_ymd_opt(2026, 10, 30), 1, 0), "the ticket shows once");
+        assert_eq!(app.standup.cursor, 1, "still on the first suggestion, one card fewer above it");
+        assert!(app.standup.tickets_loading, "the deferred read started");
+        pump(&mut app, 1);
+        assert!(!app.standup.tickets_loading);
+        let bodies: Vec<String> = rx.try_iter().map(|r| r.body).collect();
+        assert_eq!(bodies.len(), 4, "two reads of two searches");
+        assert!(bodies[0].contains("statusCategoryChangedDate >= \\\"2026-10-30\\\""), "{}", bodies[0]);
+        app.handle(Msg::StandupTickets(Err(jira::Error::Other("Jira returned 500".into()))));
+        assert_eq!(app.standup.saved.tickets.done.len(), 1, "a failed read keeps the last cards");
+        assert!(app.standup.tickets_error.is_some());
     }
 }

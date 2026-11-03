@@ -11,6 +11,8 @@ pub enum Picker {
         key: String,
         items: Vec<Transition>,
         cursor: usize,
+        /// Opened by Move to Done with several Done transitions: titled "Move KEY to Done", only those rows.
+        done: bool,
     },
     Resolution {
         key: String,
@@ -127,6 +129,52 @@ impl App {
         });
     }
 
+    /// Move to Done (`D`, or a `done_button`): fetches `key`'s transitions with their target categories; the
+    /// answer (`Msg::DoneOptions`) goes to `done_options`. Read-only mode refuses it here, before any request, as
+    /// every write does; an issue already in the Done category only says so.
+    pub(super) fn move_to_done(&mut self, key: String) {
+        if self.client.is_none() || self.picker.is_some() || self.picker_loading {
+            return;
+        }
+        if let Err(e) = jira::check_writable() {
+            let (text, kind) = super::msg::done_toast(DONE_WRITE, &Err(e));
+            self.toast_kind(text, kind);
+            return;
+        }
+        if let Some(i) = self.store.get(&key)
+            && is_done_category(&i.status.category)
+        {
+            let text = format!("{key} is already {}", i.status.name);
+            self.toast_kind(text, super::ToastKind::Info);
+            return;
+        }
+        self.picker_loading = true;
+        self.spawn(move |c, tx| {
+            let _ = tx.send(Msg::DoneOptions { key: key.clone(), result: c.transitions_with_category(&key) });
+        });
+    }
+
+    /// Move to Done's transitions landed: applies the one Done transition (a resolution error opens the
+    /// Resolution picker, as for any transition), opens the picker on several, or toasts that there is none.
+    pub(super) fn done_options(&mut self, key: String, items: Vec<(Transition, String)>) {
+        match done_step(items) {
+            DoneStep::Apply(t) => {
+                if let Err(e) = jira::check_writable() {
+                    let (text, kind) = super::msg::done_toast(DONE_WRITE, &Err(e));
+                    self.toast_kind(text, kind);
+                    return;
+                }
+                // Remember the transition so a resolution error can retry it.
+                self.pending_transition = Some((key.clone(), t.id.clone()));
+                self.spawn_write(move |c, tx| {
+                    let _ = tx.send(Msg::Done { key: key.clone(), what: "Transition", result: c.transition(&key, &t.id, None) });
+                });
+            }
+            DoneStep::Choose(items) => self.picker = Some(Picker::Transition { key, items, cursor: 0, done: true }),
+            DoneStep::None => self.toast_kind(format!("{key}'s workflow has no Done step from here"), super::ToastKind::Info),
+        }
+    }
+
     pub(super) fn open_assign(&mut self) {
         let Some(key) = self.action_target() else { return };
         if self.client.is_none() || self.picker_loading {
@@ -208,7 +256,7 @@ impl App {
         }
         let Some(p) = self.picker.take() else { return };
         match p {
-            Picker::Transition { key, items, cursor } => {
+            Picker::Transition { key, items, cursor, .. } => {
                 let Some(t) = items.get(cursor).cloned() else { return };
                 // Remember the transition so a resolution error can retry it.
                 self.pending_transition = Some((key.clone(), t.id.clone()));
@@ -255,6 +303,35 @@ impl App {
                 });
             }
         }
+    }
+}
+
+/// Move to Done's name in its read-only toast ("…so the move to done was not sent").
+const DONE_WRITE: &str = "Move to Done";
+
+/// Whether a status category key is Jira's Done category.
+pub fn is_done_category(category: &str) -> bool {
+    category.eq_ignore_ascii_case("done")
+}
+
+/// What Move to Done does with an issue's transitions.
+#[derive(Debug, PartialEq)]
+pub enum DoneStep {
+    /// Exactly one transition leads into the Done category: apply it.
+    Apply(Transition),
+    /// Several do (Done, Won't Do): the user picks one.
+    Choose(Vec<Transition>),
+    /// None do from this status.
+    None,
+}
+
+/// Move to Done's decision over (transition, target category) pairs, in Jira's order.
+pub fn done_step(items: Vec<(Transition, String)>) -> DoneStep {
+    let mut done: Vec<Transition> = items.into_iter().filter(|(_, cat)| is_done_category(cat)).map(|(t, _)| t).collect();
+    match done.len() {
+        0 => DoneStep::None,
+        1 => DoneStep::Apply(done.remove(0)),
+        _ => DoneStep::Choose(done),
     }
 }
 
@@ -521,7 +598,7 @@ mod tests {
     fn confirm_is_off_until_the_choice_differs() {
         let t = |n: &str, to: &str| Transition { id: n.into(), name: n.into(), to: to.into() };
         let items = vec![t("Start", "In Progress"), t("Review", "In Review")];
-        let tr = |cursor| Picker::Transition { key: "CI-1".into(), items: items.clone(), cursor };
+        let tr = |cursor| Picker::Transition { key: "CI-1".into(), items: items.clone(), cursor, done: false };
         assert!(!tr(1).changes("in review", None), "the current status is a no-op");
         assert!(tr(0).changes("In Review", None));
         assert!(!tr(5).changes("In Review", None), "past the rows");
@@ -579,12 +656,130 @@ mod tests {
         let login = crate::auth::Login { email: "a@b.c".into(), token: "t".into(), source: crate::auth::Source::Env };
         let mut app = App::for_test(cfg, Some(std::sync::Arc::new(crate::jira::Client::new(&base, &login))));
         let t = Transition { id: "1".into(), name: "Start".into(), to: "In Progress".into() };
-        app.picker = Some(Picker::Transition { key: "CI-1".into(), items: vec![t], cursor: 0 });
+        app.picker = Some(Picker::Transition { key: "CI-1".into(), items: vec![t], cursor: 0, done: false });
         app.confirm_picker();
         assert!(app.picker.is_some(), "the dialog stays open");
         assert!(app.toast.as_ref().is_some_and(|t| t.text.contains("the transition was not sent")), "and the toast says why");
         std::thread::sleep(std::time::Duration::from_millis(50));
         assert!(rx.try_iter().next().is_none(), "nothing sent");
+    }
+
+    #[test]
+    fn move_to_done_applies_one_done_step_and_lets_the_user_pick_between_several() {
+        let t = |id: &str, to: &str, cat: &str| (Transition { id: id.into(), name: to.into(), to: to.into() }, cat.to_string());
+        assert_eq!(done_step(vec![t("1", "In Progress", "indeterminate"), t("2", "Done", "done")]), DoneStep::Apply(t("2", "Done", "done").0));
+        assert_eq!(
+            done_step(vec![t("2", "Done", "done"), t("1", "Backlog", "new"), t("3", "Won't Do", "DONE")]),
+            DoneStep::Choose(vec![t("2", "Done", "done").0, t("3", "Won't Do", "done").0]),
+            "Jira's order, only the Done ones"
+        );
+        assert_eq!(done_step(vec![t("1", "In Progress", "indeterminate")]), DoneStep::None);
+        assert_eq!(done_step(vec![]), DoneStep::None);
+    }
+
+    fn done_app(transitions: serde_json::Value) -> (App, std::sync::mpsc::Receiver<crate::jira::tests::Recorded>) {
+        // The reads a finished write sets off (the issue's detail, the board's sprints) answer too: a 404 there
+        // toasts and, whenever it lands first, hides the write's own toast.
+        let (base, rx) = crate::jira::tests::stub_server(vec![
+            ("GET", "/rest/api/3/issue/CI-1/transitions", transitions),
+            ("POST", "/rest/api/3/issue/CI-1/transitions", serde_json::json!({})),
+            ("GET", "/rest/api/3/issue/CI-1", serde_json::json!({"key": "CI-1", "fields": {"status": {"name": "Done", "statusCategory": {"key": "done"}}}})),
+            ("GET", "/rest/agile/1.0/board/", serde_json::json!({"values": []})),
+        ]);
+        let cfg: crate::config::Config = toml::from_str("site = \"https://x.atlassian.net\"\nemail = \"a@b.c\"\n").unwrap();
+        let login = crate::auth::Login { email: "a@b.c".into(), token: "t".into(), source: crate::auth::Source::Env };
+        let app = App::for_test(cfg, Some(std::sync::Arc::new(crate::jira::Client::new(&base, &login))));
+        (app, rx)
+    }
+
+    fn pump(app: &mut App, until: impl Fn(&App) -> bool) {
+        let start = std::time::Instant::now();
+        while start.elapsed() < std::time::Duration::from_secs(2) {
+            app.drain();
+            if until(app) {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        panic!("timed out");
+    }
+
+    fn posts(rx: &std::sync::mpsc::Receiver<crate::jira::tests::Recorded>) -> Vec<serde_json::Value> {
+        // The list reloads after a write are POSTs too (search): only the writes count.
+        rx.try_iter()
+            .filter(|r| r.method == "POST" && !r.path.starts_with("/rest/api/3/search"))
+            .map(|r| serde_json::from_str(&r.body).unwrap_or_default())
+            .collect()
+    }
+
+    fn tr_json(id: &str, to: &str, cat: &str) -> serde_json::Value {
+        serde_json::json!({"id": id, "name": to, "to": {"name": to, "statusCategory": {"key": cat}}})
+    }
+
+    #[test]
+    fn one_done_transition_is_sent_at_once() {
+        let _g = crate::jira::tests::WRITE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (mut app, rx) = done_app(serde_json::json!({"transitions": [tr_json("11", "In Review", "indeterminate"), tr_json("31", "Done", "done")]}));
+        app.move_to_done("CI-1".into());
+        assert!(app.picker_loading);
+        pump(&mut app, |a| a.toast.as_ref().is_some_and(|t| t.text == "Transition done"));
+        assert!(app.picker.is_none(), "no picker for one Done step");
+        assert_eq!(posts(&rx), [serde_json::json!({"transition": {"id": "31"}})]);
+    }
+
+    #[test]
+    fn several_done_transitions_open_the_picker_on_just_those() {
+        let _g = crate::jira::tests::WRITE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (mut app, rx) = done_app(
+            serde_json::json!({"transitions": [tr_json("31", "Done", "done"), tr_json("11", "In Review", "indeterminate"), tr_json("41", "Won't Do", "done")]}),
+        );
+        app.move_to_done("CI-1".into());
+        pump(&mut app, |a| a.picker.is_some());
+        match &app.picker {
+            Some(Picker::Transition { key, items, cursor: 0, done: true }) => {
+                assert_eq!(key, "CI-1");
+                assert_eq!(items.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(), ["31", "41"]);
+            }
+            _ => panic!("expected the Done picker"),
+        }
+        assert!(posts(&rx).is_empty(), "nothing sent before a choice");
+    }
+
+    #[test]
+    fn no_done_transition_toasts() {
+        let _g = crate::jira::tests::WRITE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (mut app, rx) = done_app(serde_json::json!({"transitions": [tr_json("11", "In Review", "indeterminate")]}));
+        app.move_to_done("CI-1".into());
+        pump(&mut app, |a| !a.picker_loading);
+        assert!(app.toast.as_ref().is_some_and(|t| t.text.contains("no Done step")), "{:?}", app.toast.as_ref().map(|t| &t.text));
+        assert!(app.picker.is_none());
+        assert!(posts(&rx).is_empty());
+    }
+
+    #[test]
+    fn read_only_move_to_done_sends_nothing() {
+        let _g = crate::jira::tests::WRITE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _ro = crate::jira::tests::ReadOnlyGuard::new();
+        let (mut app, rx) = done_app(serde_json::json!({"transitions": [tr_json("31", "Done", "done")]}));
+        app.move_to_done("CI-1".into());
+        assert!(!app.picker_loading, "no request");
+        assert!(app.toast.as_ref().is_some_and(|t| t.text.contains("move to done was not sent")), "{:?}", app.toast.as_ref().map(|t| &t.text));
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        assert!(rx.try_iter().next().is_none(), "no network at all");
+    }
+
+    #[test]
+    fn an_issue_already_done_only_says_so() {
+        let (mut app, rx) = done_app(serde_json::json!({"transitions": []}));
+        let done =
+            crate::jira::Issue { key: "CI-1".into(), status: crate::jira::Status { name: "Done".into(), category: "done".into() }, ..Default::default() };
+        app.store.absorb(crate::store::ListId::TeamOpen, vec![done]);
+        let _g = crate::jira::tests::WRITE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        app.move_to_done("CI-1".into());
+        assert!(!app.picker_loading);
+        assert!(app.toast.as_ref().is_some_and(|t| t.text == "CI-1 is already Done"));
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        assert!(rx.try_iter().next().is_none());
     }
 
     #[test]

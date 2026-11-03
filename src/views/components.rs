@@ -468,9 +468,111 @@ pub fn key_chip_edge(p: &Palette) -> Stroke {
     Stroke::new(1.0, p.pill_edge())
 }
 
+/// The Move to Done action's words.
+pub const DONE_TEXT: &str = "Move to Done";
+/// The Move to Done key (Shift+D), as `keys::BINDINGS` lists it.
+pub const DONE_KEY: &str = "D";
+
+/// Whether a `done_button` shows for an issue in `category`: not in read-only mode (no write controls, like the
+/// add-label action; `D` still answers with the read-only toast), and not once the issue is in the Done category.
+pub fn done_button_shown(read_only: bool, category: &str) -> bool {
+    !read_only && !crate::app::is_done_category(category)
+}
+
+/// The quiet "Move to Done" action for `issue`: a `ghost` button with the `D` key on its chip (as the add-label
+/// action draws `l`), in either row direction (the chip sits after the words, toward the row's end). `on` is the
+/// fill under it (`p.surface`, or `card_fill` on a card) for the chip's step. Hidden per `done_button_shown`.
+/// Clicked, it returns the same `Action` the `D` key sends; push it: `if let Some(a) = done_button(..) { app.actions.push(a) }`.
+pub fn done_button(ui: &mut Ui, p: &Palette, issue: &crate::jira::Issue, on: Color32) -> Option<crate::app::Action> {
+    if !done_button_shown(crate::views::detail::composer_read_only(), &issue.status.category) {
+        return None;
+    }
+    let kg = ui.painter().layout_job(crate::views::issues::key_job(DONE_KEY, p.text));
+    let ink = theme::ink_rect(&kg);
+    let chip_w = (ink.width() + 2.0 * KEY_CHIP_PAD.x).ceil();
+    let chip = |ui: &mut Ui| {
+        let (rect, _) = ui.allocate_exact_size(vec2(chip_w, BUTTON_H), Sense::hover());
+        if ui.is_rect_visible(rect) {
+            let ppp = ui.ctx().pixels_per_point();
+            let snap = |v: f32| (v * ppp).round() / ppp;
+            let pos = egui::pos2(snap(rect.left() + KEY_CHIP_PAD.x - ink.left()), snap(rect.center().y - ink.center().y));
+            paint_key_chip(ui.painter(), pos, &kg, on, p);
+            ui.painter().galley(pos, kg.clone(), p.text);
+        }
+    };
+    let rtl = ui.layout().main_dir() == egui::Direction::RightToLeft;
+    if rtl {
+        chip(ui);
+    }
+    // The words sit a ghost's own padding from their key, not a full item gap further.
+    let gap = std::mem::replace(&mut ui.spacing_mut().item_spacing.x, 0.0);
+    let resp = ui.add(ghost(DONE_TEXT, p));
+    if !rtl {
+        chip(ui);
+    }
+    ui.spacing_mut().item_spacing.x = gap;
+    crate::views::tooltip(resp, format!("{DONE_TEXT} ({DONE_KEY})")).clicked().then(|| crate::app::Action::MoveToDone(issue.key.clone()))
+}
+
+/// A disabled primary (Confirm while it would change nothing, or in read-only mode): no fill and a faded accent
+/// edge, so it keeps the primary's slot yet reads quieter than the filled secondary beside it (Cancel) in both
+/// themes, never raised. Its label is `text` faded to DISABLED_ALPHA. Hover only, no clicks.
+pub fn primary_button_off(text: &str, p: &Palette) -> egui::Button<'static> {
+    let (fg, edge) = primary_off_colors(p);
+    egui::Button::new(RichText::new(text.to_string()).color(fg).size(14.0))
+        .fill(Color32::TRANSPARENT)
+        .stroke(Stroke::new(1.0, edge))
+        .sense(Sense::hover())
+        .corner_radius(theme::RADIUS)
+        .min_size(vec2(0.0, BUTTON_H))
+}
+
+/// `primary_button_off`'s (label, edge) colours.
+pub fn primary_off_colors(p: &Palette) -> (Color32, Color32) {
+    (p.text.gamma_multiply(theme::DISABLED_ALPHA), crate::views::primary_colors(p).0.gamma_multiply(theme::DISABLED_ALPHA))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn done_button_shows_only_where_a_write_could_land() {
+        assert!(done_button_shown(false, "indeterminate"));
+        assert!(done_button_shown(false, "new"));
+        assert!(!done_button_shown(true, "indeterminate"), "read-only: no write controls");
+        assert!(!done_button_shown(false, "done"), "already done");
+        assert!(!done_button_shown(false, "Done"));
+    }
+
+    #[test]
+    fn done_button_sends_the_key_action() {
+        let issue = crate::jira::Issue {
+            key: "CI-7".into(),
+            status: crate::jira::Status { name: "In Progress".into(), category: "indeterminate".into() },
+            ..Default::default()
+        };
+        let mut out = None;
+        crate::testutil::paint_at2(egui::vec2(400.0, 100.0), |ui| {
+            out = Some(done_button(ui, &theme::LIGHT, &issue, theme::LIGHT.surface).is_none());
+        });
+        assert_eq!(out, Some(true), "not clicked: no action");
+        assert_eq!(DONE_KEY, "D");
+        assert!(crate::keys::BINDINGS.iter().any(|b| b.keys == DONE_KEY && b.what.contains("Done")), "the chip names the bound key");
+    }
+
+    #[test]
+    fn a_disabled_primary_reads_apart_from_cancel() {
+        for p in [&theme::LIGHT, &theme::DARK] {
+            let dialog = crate::views::dialog_fill(p);
+            let (fg, edge) = primary_off_colors(p);
+            let label = theme::over(fg, dialog);
+            assert!(theme::contrast(label, dialog) >= 4.5, "its label still reads, dark={}: {:.2}", p.dark, theme::contrast(label, dialog));
+            // Cancel is filled (`button_fill`) with a neutral `border`; the off Confirm has no fill and an accent edge.
+            assert_ne!(theme::over(edge, dialog), p.border, "dark={}", p.dark);
+            assert!(theme::contrast(label, dialog) < theme::contrast(p.text, theme::button_fill(p)), "quieter than Cancel's label, dark={}", p.dark);
+        }
+    }
 
     #[test]
     fn selected_cards_and_rows_share_one_accent_treatment() {

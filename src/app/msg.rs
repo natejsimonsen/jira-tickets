@@ -38,6 +38,11 @@ pub enum Msg {
         result: jira::Result<Vec<Transition>>,
     },
     Resolutions(jira::Result<Vec<Resolution>>),
+    /// Move to Done: the issue's transitions, each with its target status's category.
+    DoneOptions {
+        key: String,
+        result: jira::Result<Vec<(Transition, String)>>,
+    },
     /// The session's `c`: the ticket's transitions and Jira's resolutions, fetched together.
     CloseOptions {
         key: String,
@@ -67,6 +72,8 @@ pub enum Msg {
         dkey: String,
         result: jira::Result<(String, Result<Option<String>, String>)>,
     },
+    /// The Standup screen's ticket cards: done in the window, and in progress.
+    StandupTickets(jira::Result<crate::standup::Tickets>),
     /// A Team member's tickets done in the last 7 days.
     DoneRecent {
         member: String,
@@ -87,6 +94,7 @@ impl App {
             Msg::StandupActivity(result) => self.standup_activity_loaded(result),
             Msg::StandupReview(result) => self.standup_reviewed(result),
             Msg::StandupAdded { dkey, result } => self.standup_added(dkey, result),
+            Msg::StandupTickets(result) => self.standup_tickets_loaded(result),
             Msg::DoneRecent { member, result } => {
                 self.team.done_loading.remove(&member);
                 match result {
@@ -295,8 +303,15 @@ impl App {
                     Ok(items) => {
                         let status = self.store.get(&key).map(|i| i.status.name.clone()).unwrap_or_default();
                         let cursor = transition_cursor(&items, &status);
-                        self.picker = Some(Picker::Transition { key, items, cursor });
+                        self.picker = Some(Picker::Transition { key, items, cursor, done: false });
                     }
+                    Err(e) => self.toast(e.to_string(), true),
+                }
+            }
+            Msg::DoneOptions { key, result } => {
+                self.picker_loading = false;
+                match result {
+                    Ok(items) => self.done_options(key, items),
                     Err(e) => self.toast(e.to_string(), true),
                 }
             }

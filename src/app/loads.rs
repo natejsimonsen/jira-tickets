@@ -32,6 +32,25 @@ impl App {
         });
         self.refresh_done_recent();
         self.load_done_counts();
+        self.load_standup_tickets();
+    }
+
+    /// The Standup screen's ticket cards: done since the window opened, and in progress (`standup::fetch_tickets`).
+    /// The last list stays on screen (and in the cache) until the new one lands; a load asked for while one is in
+    /// flight runs after it.
+    pub(crate) fn load_standup_tickets(&mut self) {
+        let client_present = self.client.is_some();
+        if defer_load(client_present, self.standup.tickets_loading) {
+            self.standup.tickets_reload = true;
+        }
+        if !should_load(client_present, self.standup.tickets_loading) {
+            return;
+        }
+        self.standup.tickets_loading = true;
+        let since = crate::standup::tickets_window(&self.standup.saved, (self.today)());
+        self.spawn(move |c, tx| {
+            let _ = tx.send(Msg::StandupTickets(crate::standup::fetch_tickets(c, since)));
+        });
     }
 
     /// Every member's done count, so each closed footer shows how many it holds. Only the ids come back: the list

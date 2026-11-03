@@ -40,6 +40,9 @@ pub enum Action {
     Move(i32),
     Comment,
     OpenTransition,
+    /// Moves this issue to a status in the Done category (`D`, or a `done_button`): one Done transition is
+    /// applied at once, several open the transition picker on just those, none toasts why.
+    MoveToDone(String),
     OpenAssign,
     OpenSprint,
     OpenEdit,
@@ -224,6 +227,32 @@ impl App {
             self.cursor = i;
         }
         self.apply(Action::Select(key), ctx);
+    }
+
+    /// The ticket `D` moves to Done on this screen: the Issues selection (and the detail pane's), the Grooming row
+    /// under the cursor (a pre-check candidate, or a session row), the focused Team card, the focused Roadmap
+    /// initiative (on the tabs with a cursor), the focused Me ticket, or the focused Standup card once it was added
+    /// to Jira. None when the screen has nothing focused.
+    pub fn done_target(&self) -> Option<String> {
+        match self.screen {
+            Screen::Issues => self.selected.clone(),
+            Screen::Grooming => match self.grooming.mode {
+                super::GroomMode::PreCheck => self.pre_check_candidates().get(self.grooming.cursor).map(|c| c.issue.key.clone()),
+                super::GroomMode::Session => self.session_row_focus(),
+            },
+            Screen::Team => {
+                let cols = self.team_columns();
+                let (col, row) = crate::teamview::clamp_cursor(self.team.col, self.team.row, &cols);
+                cols.get(col).and_then(|c| crate::teamview::card_at(c, row)).map(|card| card.issue.key.clone())
+            }
+            Screen::Roadmap if matches!(self.roadmap.tab, 1 | 3) => {
+                let keys = self.roadmap_keys();
+                keys.get(self.roadmap.cursor.min(keys.len().saturating_sub(1))).filter(|k| !k.is_empty()).cloned()
+            }
+            Screen::Roadmap => None,
+            Screen::Me => self.me_focused(),
+            Screen::Standup => self.standup_done_target(),
+        }
     }
 
     /// The jira keys of the current Roadmap tab's rows, in cursor order.
@@ -559,6 +588,7 @@ impl App {
                 });
             }
             Action::OpenTransition => self.open_transition(),
+            Action::MoveToDone(key) => self.move_to_done(key),
             Action::OpenAssign => self.open_assign(),
             Action::OpenSprint => self.open_sprint(),
             Action::OpenEdit => self.open_edit(),
