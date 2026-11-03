@@ -171,6 +171,8 @@ pub enum HintContext {
     GroomPreCheck,
     /// The pre-check summary dialog: Enter promotes.
     GroomSummary,
+    /// The pre-check summary dialog in read-only mode: promoting is off, so only Esc.
+    GroomSummaryReadOnly,
     /// The "report for today exists" confirm.
     GroomOverwrite,
     /// The Grooming screen in Session mode.
@@ -179,6 +181,8 @@ pub enum HintContext {
     GroomPlacement,
     /// Session: the bounce comment box is open.
     GroomBounce,
+    /// The bounce box in read-only mode: posting is off, so only Esc.
+    GroomBounceReadOnly,
     /// The Team screen.
     Team,
     /// The Roadmap screen on a tab with a cursor (Now / Next / Later, Status review).
@@ -189,6 +193,8 @@ pub enum HintContext {
     Me,
     /// The Standup screen.
     Standup,
+    /// The Standup screen with no cards (no review yet, or nothing untracked): no card keys.
+    StandupEmpty,
     /// The Standup screen with a card's title field focused.
     StandupTitle,
 }
@@ -253,6 +259,8 @@ pub struct HintState {
     pub me: bool,
     /// The Standup screen is showing.
     pub standup: bool,
+    /// The Standup screen has at least one suggestion card.
+    pub standup_cards: bool,
 }
 
 impl HintState {
@@ -271,12 +279,13 @@ impl HintState {
             roadmap: None,
             me: false,
             standup: false,
+            standup_cards: false,
         }
     }
 }
 
 pub fn hint_context(s: HintState) -> HintContext {
-    let HintState { help_open, goto_open, picker, has_selection, focus, search_shown, read_only, grooming, team, roadmap, me, standup } = s;
+    let HintState { help_open, goto_open, picker, has_selection, focus, search_shown, read_only, grooming, team, roadmap, me, standup, standup_cards } = s;
     match (help_open, goto_open, picker) {
         (true, _, _) => HintContext::Help,
         // An open picker or go-to box owns the bar on every screen, Grooming included.
@@ -285,14 +294,17 @@ pub fn hint_context(s: HintState) -> HintContext {
         (_, _, Some(PickerHint::Other)) => HintContext::Picker,
         (_, true, None) => HintContext::GoTo,
         _ if grooming == Some(GroomHint::PreCheck) => HintContext::GroomPreCheck,
+        _ if grooming == Some(GroomHint::Summary) && read_only => HintContext::GroomSummaryReadOnly,
         _ if grooming == Some(GroomHint::Summary) => HintContext::GroomSummary,
         _ if grooming == Some(GroomHint::Overwrite) => HintContext::GroomOverwrite,
         _ if grooming == Some(GroomHint::Session) => HintContext::GroomSession,
         _ if grooming == Some(GroomHint::Placement) => HintContext::GroomPlacement,
+        _ if grooming == Some(GroomHint::Bounce) && read_only => HintContext::GroomBounceReadOnly,
         _ if grooming == Some(GroomHint::Bounce) => HintContext::GroomBounce,
         _ if team => HintContext::Team,
         _ if me => HintContext::Me,
         // The title field takes plain letters, so no card keys while it has focus.
+        _ if standup && focus == Focus::None && !standup_cards => HintContext::StandupEmpty,
         _ if standup && focus == Focus::None => HintContext::Standup,
         _ if standup => HintContext::StandupTitle,
         // Timeline and Outcomes have no cursor (`views::roadmap::tab_rows` is empty), so no move or open hint.
@@ -322,7 +334,7 @@ pub fn hints(c: HintContext) -> &'static [Hint] {
         HintContext::SearchEmpty => &[&[K("Enter"), W("run as JQL")], &[K("Esc"), W("done")]],
         HintContext::Composer => &[&[K("⌘Enter"), W("post")], &[K("Esc"), W("done (draft kept)")]],
         HintContext::EditPicker => &[&[K("Tab/⇧Tab"), W("next or previous field")], &[K("Enter"), W("confirm")], &[K("Esc"), W("cancel")]],
-        HintContext::AssignPicker => &[&[K("Type"), W("to filter")], &[K("↑/↓"), W("move")], &[K("Enter"), W("confirm")], &[K("Esc"), W("cancel")]],
+        HintContext::AssignPicker => &[&[W("Type to filter")], &[K("↑/↓"), W("move")], &[K("Enter"), W("confirm")], &[K("Esc"), W("cancel")]],
         HintContext::Picker => &[&[K("j/k"), W("or"), K("↑/↓"), W("move")], &[K("Enter"), W("confirm")], &[K("Esc"), W("cancel")]],
         HintContext::Selected => &[
             &[K("j/k"), W("or"), K("↑/↓"), W("move")],
@@ -352,12 +364,13 @@ pub fn hints(c: HintContext) -> &'static [Hint] {
         HintContext::GroomPreCheck => &[
             &[K("j/k"), W("or"), K("↑/↓"), W("move")],
             &[K("r"), W("ready")],
-            &[K("w/n/e"), W("code")],
+            &[K("w/n/e"), W("needs detail")],
             &[K("u"), W("undo")],
             &[K("Enter"), W("summary")],
             &[K("Tab"), W("session")],
         ],
         HintContext::GroomSummary => &[&[K("Enter"), W("promote")], &[K("Esc"), W("cancel")]],
+        HintContext::GroomSummaryReadOnly => &[&[K("Esc"), W("cancel")]],
         HintContext::GroomOverwrite => &[&[K("Enter"), W("overwrite")], &[K("Esc"), W("keep the old one")]],
         HintContext::GroomSession => &[
             &[K("j/k"), W("or"), K("↑/↓"), W("move")],
@@ -375,6 +388,7 @@ pub fn hints(c: HintContext) -> &'static [Hint] {
         ],
         HintContext::GroomPlacement => &[&[K("↑/↓"), W("move")], &[K("Enter"), W("place")], &[K("Esc"), W("cancel")]],
         HintContext::GroomBounce => &[&[K("⌘Enter"), W("post")], &[K("Esc"), W("cancel")]],
+        HintContext::GroomBounceReadOnly => &[&[K("Esc"), W("cancel")]],
         HintContext::Team => &[
             &[K("h/l"), W("or"), K("←/→"), W("member")],
             &[K("j/k"), W("or"), K("↑/↓"), W("move")],
@@ -399,13 +413,78 @@ pub fn hints(c: HintContext) -> &'static [Hint] {
             &[K("r"), W("run again")],
             &[K("?"), W("help")],
         ],
-        HintContext::StandupTitle => &[&[K("Enter"), W("or"), K("Esc"), W("done")]],
+        HintContext::StandupEmpty => &[&[K("r"), W("run")], &[K("y"), W("copy")], &[K("?"), W("help")]],
+        HintContext::StandupTitle => &[&[K("Enter"), W("or"), K("Esc"), W("done (title kept)")]],
         HintContext::SignIn => &[&[K("Enter"), W("sign in")]],
         HintContext::Browse => &[&[K("j/k"), W("or"), K("↑/↓"), W("move")], &[K("⌘K"), W("go to")], &[K("⌘F"), W("search")], &[K("?"), W("help")]],
         HintContext::BrowseSearch => {
             &[&[K("j/k"), W("or"), K("↑/↓"), W("move")], &[K("Esc"), W("clear")], &[K("⌘K"), W("go to")], &[K("⌘F"), W("search")], &[K("?"), W("help")]]
         }
     }
+}
+
+/// The Standup header's run button (and so the `r` key), labelled for the state it is in.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum StandupRun {
+    /// No review yet.
+    Now,
+    /// A review is on screen.
+    Again,
+    /// The last run failed.
+    Retry,
+}
+
+impl StandupRun {
+    /// The button's label; the hint says the same words.
+    pub fn label(self) -> &'static str {
+        match self {
+            StandupRun::Now => "Run now",
+            StandupRun::Again => "Run again",
+            StandupRun::Retry => "Try again",
+        }
+    }
+
+    fn hint(self) -> Hint {
+        match self {
+            StandupRun::Now => &[K("r"), W("run now")],
+            StandupRun::Again => &[K("r"), W("run again")],
+            StandupRun::Retry => &[K("r"), W("try again")],
+        }
+    }
+}
+
+/// What the Standup screen offers right now, for its hint bar.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct StandupHint {
+    /// At least one suggestion card is showing.
+    pub cards: bool,
+    /// There is a review to copy.
+    pub copy: bool,
+    /// The run button, when it shows (not while a review runs).
+    pub run: Option<StandupRun>,
+    /// Writes are blocked: the cards have no add buttons, so no add keys.
+    pub read_only: bool,
+}
+
+/// The Standup hint bar with its title field unfocused: only the keys that do something now, the run key named
+/// like its button.
+pub fn standup_hints(s: StandupHint) -> Vec<Hint> {
+    let mut out: Vec<Hint> = Vec::new();
+    if s.cards {
+        out.push(&[K("j/k"), W("or"), K("↑/↓"), W("move")]);
+        if !s.read_only {
+            out.extend_from_slice(&[&[K("c"), W("current sprint")], &[K("n"), W("next sprint")], &[K("b"), W("backlog")]]);
+        }
+        out.extend_from_slice(&[&[K("x"), W("dismiss")], &[K("e"), W("edit")], &[K("o"), W("open")]]);
+    }
+    if s.copy {
+        out.push(&[K("y"), W("copy")]);
+    }
+    if let Some(r) = s.run {
+        out.push(r.hint());
+    }
+    out.push(&[K("?"), W("help")]);
+    out
 }
 
 /// Plain text of a hint line, for tests.
@@ -532,8 +611,10 @@ mod tests {
         assert_eq!(hint_context(groom(GroomHint::Summary)), GroomSummary);
         assert_eq!(hint_context(groom(GroomHint::Overwrite)), GroomOverwrite);
         assert_eq!(hint_context(HintState { help_open: true, ..groom(GroomHint::Session) }), Help, "help wins on Grooming too");
-        assert_eq!(hint_text(hints(GroomPreCheck)), "j/k or ↑/↓ move · r ready · w/n/e code · u undo · Enter summary · Tab session");
+        assert_eq!(hint_text(hints(GroomPreCheck)), "j/k or ↑/↓ move · r ready · w/n/e needs detail · u undo · Enter summary · Tab session");
         assert_eq!(hint_text(hints(GroomSummary)), "Enter promote · Esc cancel");
+        assert_eq!(hint_context(HintState { read_only: true, ..groom(GroomHint::Summary) }), GroomSummaryReadOnly);
+        assert_eq!(hint_text(hints(GroomSummaryReadOnly)), "Esc cancel", "read-only cannot promote");
         assert_eq!(hint_text(hints(GroomOverwrite)), "Enter overwrite · Esc keep the old one");
         assert_eq!(
             hint_text(hints(GroomSession)),
@@ -543,6 +624,8 @@ mod tests {
         assert_eq!(hint_text(hints(GroomPlacement)), "↑/↓ move · Enter place · Esc cancel");
         assert_eq!(hint_context(HintState { focus: Focus::OtherText, ..groom(GroomHint::Bounce) }), GroomBounce, "the box has focus");
         assert_eq!(hint_text(hints(GroomBounce)), "⌘Enter post · Esc cancel");
+        assert_eq!(hint_context(HintState { read_only: true, focus: Focus::OtherText, ..groom(GroomHint::Bounce) }), GroomBounceReadOnly);
+        assert_eq!(hint_text(hints(GroomBounceReadOnly)), "Esc cancel", "read-only cannot post");
         let team = HintState { team: true, has_selection: true, ..HintState::new(Focus::None) };
         assert_eq!(hint_context(team), Team, "the Issues selection does not leak onto Team");
         assert_eq!(hint_context(HintState { help_open: true, ..team }), Help);
@@ -560,15 +643,46 @@ mod tests {
         assert_eq!(hint_context(me), Me, "the selection the Me screen sets does not bring the Issues keys");
         assert_eq!(hint_context(HintState { help_open: true, ..me }), Help);
         assert_eq!(hint_text(hints(Me)), "j/k or ↑/↓ move · Enter open · ⌘O Jira · ? help");
-        let standup = |focus| HintState { standup: true, has_selection: true, ..HintState::new(focus) };
+        let standup = |focus| HintState { standup: true, standup_cards: true, has_selection: true, ..HintState::new(focus) };
+        let no_cards = HintState { standup_cards: false, ..standup(Focus::None) };
+        assert_eq!(hint_context(no_cards), StandupEmpty, "no cards, no card keys");
+        assert_eq!(hint_text(hints(StandupEmpty)), "r run · y copy · ? help");
         assert_eq!(hint_context(standup(Focus::None)), Standup, "the Issues selection does not leak onto Standup");
         assert_eq!(hint_context(standup(Focus::OtherText)), StandupTitle, "editing a title: letters type");
-        assert_eq!(hint_text(hints(StandupTitle)), "Enter or Esc done");
+        assert_eq!(hint_text(hints(StandupTitle)), "Enter or Esc done (title kept)", "both end the edit and keep the text");
         assert_eq!(hint_context(HintState { help_open: true, ..standup(Focus::None) }), Help);
         assert_eq!(
             hint_text(hints(Standup)),
             "j/k or ↑/↓ move · c current sprint · n next sprint · b backlog · x dismiss · e edit · o open · y copy · r run again · ? help"
         );
+        assert_eq!(
+            hint_text(&standup_hints(StandupHint { cards: true, copy: true, run: Some(StandupRun::Again), read_only: false })),
+            hint_text(hints(Standup))
+        );
+        assert_eq!(
+            hint_text(&standup_hints(StandupHint { cards: false, copy: false, run: Some(StandupRun::Now), read_only: false })),
+            "r run now · ? help",
+            "no review: nothing to copy"
+        );
+        assert_eq!(
+            hint_text(&standup_hints(StandupHint { cards: false, copy: false, run: None, read_only: false })),
+            "? help",
+            "a first run: no r while it runs"
+        );
+        assert_eq!(
+            hint_text(&standup_hints(StandupHint { cards: false, copy: true, run: Some(StandupRun::Retry), read_only: false })),
+            "y copy · r try again · ? help"
+        );
+        assert_eq!(
+            hint_text(&standup_hints(StandupHint { cards: true, copy: true, run: Some(StandupRun::Again), read_only: true })),
+            "j/k or ↑/↓ move · x dismiss · e edit · o open · y copy · r run again · ? help",
+            "read-only: no add keys"
+        );
+        let running = hint_text(&standup_hints(StandupHint { cards: true, copy: true, run: None, read_only: false }));
+        assert!(running.ends_with("o open · y copy · ? help"), "{running}");
+        for r in [StandupRun::Now, StandupRun::Again, StandupRun::Retry] {
+            assert_eq!(hint_text(&[r.hint()]), format!("r {}", r.label().to_lowercase()), "the hint says the button's words");
+        }
         assert_eq!(hint_text(hints(GoTo)), "Enter open · Esc close");
         assert_eq!(hint_text(hints(Search)), "Enter run as JQL · Esc clear", "one Enter wording for every search text");
         assert_eq!(hint_text(hints(EditPicker)), "Tab/⇧Tab next or previous field · Enter confirm · Esc cancel");

@@ -72,6 +72,11 @@ pub enum Msg {
         member: String,
         result: jira::Result<Vec<Issue>>,
     },
+    /// How many tickets a Team member finished in the last 7 days.
+    DoneCount {
+        member: String,
+        result: jira::Result<usize>,
+    },
 }
 
 impl App {
@@ -86,6 +91,7 @@ impl App {
                 self.team.done_loading.remove(&member);
                 match result {
                     Ok(issues) => {
+                        self.team.done_count.insert(member.clone(), issues.len());
                         self.team.done.insert(member, issues);
                     }
                     Err(jira::Error::Unauthorized(m)) => {
@@ -94,6 +100,20 @@ impl App {
                     }
                     // The last good list stays; the footer shows it (or nothing) and the toast says why.
                     Err(e) => self.toast(format!("Couldn't load done tickets: {e}"), true),
+                }
+            }
+            Msg::DoneCount { member, result } => {
+                self.team.done_count_loading.remove(&member);
+                match result {
+                    Ok(n) => {
+                        self.team.done_count.insert(member, n);
+                    }
+                    Err(jira::Error::Unauthorized(m)) => {
+                        self.client = None;
+                        self.token_error = Some(m);
+                    }
+                    // A count is a hint on a closed row: a failed one keeps the last count and does not toast.
+                    Err(_) => {}
                 }
             }
             Msg::Login(Ok(login)) => {
@@ -357,7 +377,10 @@ impl App {
 pub fn done_toast(what: &str, result: &jira::Result<()>) -> (String, ToastKind) {
     match result {
         Ok(()) => (format!("{what} done"), ToastKind::Success),
-        Err(e) if jira::is_read_only(e) => (format!("Read-only mode: {} not sent to Jira", what.to_lowercase()), ToastKind::Info),
+        Err(e) if jira::is_read_only(e) => (
+            format!("Read-only mode is on, so the {} was not sent. Restart without JIRA_TICKETS_READONLY to send changes.", what.to_lowercase()),
+            ToastKind::Info,
+        ),
         Err(e) => (format!("{what} failed: {e}"), ToastKind::Error),
     }
 }
@@ -407,7 +430,10 @@ mod tests {
     fn done_toast_names_read_only_blocks() {
         assert_eq!(done_toast("Rank", &Ok(())), ("Rank done".to_string(), ToastKind::Success));
         let ro = jira::Error::Other("read-only mode, so nothing was sent to Jira".into());
-        assert_eq!(done_toast("Sprint move", &Err(ro)), ("Read-only mode: sprint move not sent to Jira".to_string(), ToastKind::Info));
+        assert_eq!(
+            done_toast("Sprint move", &Err(ro)),
+            ("Read-only mode is on, so the sprint move was not sent. Restart without JIRA_TICKETS_READONLY to send changes.".to_string(), ToastKind::Info)
+        );
         let other = jira::Error::Other("Jira returned 400".into());
         assert_eq!(done_toast("Assign", &Err(other)), ("Assign failed: Jira returned 400".to_string(), ToastKind::Error));
     }

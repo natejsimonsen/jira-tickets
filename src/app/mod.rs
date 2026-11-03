@@ -136,6 +136,11 @@ pub struct TeamState {
     pub done: HashMap<String, Vec<jira::Issue>>,
     /// Member ids with a done load in flight.
     pub done_loading: HashSet<String>,
+    /// How many tickets each member finished in the last 7 days, by member id, loaded for every member on each
+    /// refresh, so a closed footer can show its count. Kept through a refresh until the new count lands.
+    pub done_count: HashMap<String, usize>,
+    /// Member ids with a done count load in flight.
+    pub done_count_loading: HashSet<String>,
 }
 
 /// Everything the Me screen keeps between frames.
@@ -271,6 +276,8 @@ pub struct App {
     pub standup: StandupState,
     /// Runs the Standup review's `claude`; tests swap in a stand-in.
     pub(crate) review_runner: standup::ReviewRunner,
+    /// Today's date for the Standup review's window; tests pin it.
+    pub(crate) today: fn() -> chrono::NaiveDate,
     /// How many report reads were started, for tests.
     #[cfg(test)]
     pub(crate) report_reads: usize,
@@ -377,6 +384,7 @@ impl App {
             me_view: MeState::default(),
             standup: StandupState::default(),
             review_runner: crate::standup::run_review,
+            today: || chrono::Local::now().date_naive(),
             #[cfg(test)]
             report_reads: 0,
             client: None,
@@ -467,6 +475,41 @@ impl App {
         crate::me::issue_at(&s, row).map(|i| i.key.clone())
     }
 
+    /// The epics the current screen shows dots for, in reading order: Grooming's session rail or pre-check rows, the
+    /// Team columns, the Me list. Issues tracks its own rows (`views::issues::track_epics`); Roadmap and Standup show
+    /// no epic dots.
+    fn screen_epics(&self) -> Option<Vec<String>> {
+        let parents = |issues: &mut dyn Iterator<Item = &crate::jira::Issue>| issues.filter_map(|i| i.parent_key.clone()).collect::<Vec<_>>();
+        Some(match self.screen {
+            Screen::Grooming => match self.grooming.mode {
+                GroomMode::Session => self.session_queues().into_iter().filter_map(|q| q.epic).collect(),
+                GroomMode::PreCheck => parents(&mut self.pre_check_candidates().iter().map(|c| c.issue)),
+            },
+            Screen::Team => parents(&mut self.team_columns().iter().flat_map(|c| c.in_progress.iter().chain(&c.ready)).map(|c| c.issue)),
+            Screen::Me => parents(&mut self.store.list(ListId::Me).into_iter()),
+            Screen::Issues | Screen::Roadmap | Screen::Standup => return None,
+        })
+    }
+
+    /// Gives hue slots to the epics on the current screen first, then to the loaded epic list, on every screen,
+    /// not only Issues: Grooming and Team read `epic_slots` too, and with none given every epic fell back to one
+    /// slot (round 3: 10 of 16 Grooming epics one orange). Same phases as Issues (`views::issues::slot_phase`), so a
+    /// hue given here holds when Issues takes over.
+    fn track_screen_epics(&mut self) {
+        let Some(visible) = self.screen_epics() else { return };
+        let resolved = self.sprints_answered || self.sprints_cached || self.client.is_none();
+        match views::issues::slot_phase(resolved, self.epic_slots_final) {
+            views::issues::SlotPhase::Provisional => self.epic_slots.clear(),
+            views::issues::SlotPhase::Reset => {
+                self.epic_slots.clear();
+                self.epic_slots_final = true;
+            }
+            views::issues::SlotPhase::Keep => {}
+        }
+        let rest: Vec<String> = self.store.list(ListId::Epics).iter().map(|e| e.key.clone()).collect();
+        theme::assign_epic_slots(&mut self.epic_slots, visible.iter().map(String::as_str), rest.iter().map(String::as_str));
+    }
+
     /// The roadmap's initiatives, derived from the epics in the store and their children, and the summaries of the
     /// ongoing (KTLO) epics.
     pub fn roadmap_items(&self) -> (Vec<crate::roadmap::Initiative>, Vec<String>) {
@@ -529,6 +572,7 @@ impl App {
 
     fn connect(&mut self, login: Login) {
         self.client = Some(Arc::new(Client::new(&self.cfg.site, &login)));
+        crate::avatar::set_client(&self.ctx, self.client.clone());
         self.login = Some(login);
         self.finding_token = false;
         self.spawn(|c, tx| {
@@ -605,6 +649,10 @@ impl eframe::App for App {
             self.shortcuts(&ctx);
             // Set again by the detail pane when its pill row shows.
             self.detail_pills_top = None;
+            // Set again by the screens that show a detail pane (Issues, Me), so nothing centres on a pane that is not
+            // on screen.
+            self.detail_x = None;
+            self.track_screen_epics();
             views::main(self, ui);
             self.text_search_tick(&ctx);
             views::pickers::show(self, &ctx);
@@ -817,11 +865,26 @@ mod tests {
         app.handle(Msg::DoneRecent { member: "abc".into(), result: Ok(vec![done]) });
         assert!(app.team.done_loading.is_empty());
         assert_eq!(app.team.done.get("abc").map(|v| v.iter().map(|i| i.key.as_str()).collect::<Vec<_>>()), Some(vec!["CI-7"]));
+        assert_eq!(app.team.done_count.get("abc"), Some(&1), "the list's length is the count");
         app.team.done_loading.insert("abc".into());
         app.handle(Msg::DoneRecent { member: "abc".into(), result: Err(crate::jira::Error::Network("down".into())) });
         assert!(app.team.done_loading.is_empty());
         assert!(app.team.done.contains_key("abc"), "a failed reload keeps the last list");
         assert!(app.toast.is_some());
+    }
+
+    #[test]
+    fn done_count_result_is_stored_and_kept_on_failure() {
+        let mut app = team_app();
+        app.team.done_count_loading.insert("abc".into());
+        app.handle(Msg::DoneCount { member: "abc".into(), result: Ok(3) });
+        assert!(app.team.done_count_loading.is_empty());
+        assert_eq!(app.team.done_count.get("abc"), Some(&3));
+        app.team.done_count_loading.insert("abc".into());
+        app.handle(Msg::DoneCount { member: "abc".into(), result: Err(crate::jira::Error::Network("down".into())) });
+        assert!(app.team.done_count_loading.is_empty());
+        assert_eq!(app.team.done_count.get("abc"), Some(&3), "a failed reload keeps the last count");
+        assert!(app.toast.is_none(), "a count is a hint, not worth a toast");
     }
 
     #[test]
@@ -840,6 +903,9 @@ mod tests {
         assert!(!app.team.done_loading.contains("def"), "a closed footer does not");
         assert!(app.team.done.contains_key("abc"), "the open footer keeps its list until the reload lands");
         assert!(!app.team.done.contains_key("def"), "a closed footer's list is dropped, so reopening reloads it");
+        for m in &app.cfg.team.members {
+            assert!(app.team.done_count_loading.contains(m), "every member's count reloads: {m}");
+        }
     }
 
     fn roadmap_app() -> App {

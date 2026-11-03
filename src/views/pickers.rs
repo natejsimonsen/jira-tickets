@@ -6,7 +6,6 @@ use crate::app::{
     transition_row,
 };
 use crate::theme::{self, Palette};
-use crate::views::primary_button;
 use egui::{Frame, Margin, RichText, vec2};
 
 pub fn show(app: &mut App, ctx: &egui::Context) {
@@ -19,7 +18,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
     let help_open = app.help_open;
     let hint_bar = crate::views::hint_bar_height(app);
     // The issue's current status and sprint, for the "current" marker.
-    let issue = app.picker.as_ref().map(picker_key).and_then(|k| app.store.get(k));
+    let issue = app.picker.as_ref().map(Picker::key).and_then(|k| app.store.get(k));
     let status = issue.map(|i| i.status.name.clone()).unwrap_or_default();
     let sprint = issue.and_then(|i| i.sprint.clone());
     let app_pills = app.detail_pills_top;
@@ -28,41 +27,58 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
     crate::views::backdrop(ctx, "picker-backdrop", egui::Order::Middle, hint_bar, p);
     let mut confirm = false;
     let mut cancel = false;
+    // Off when nothing is selected (an Assign filter that matched nobody) or the choice is the current value.
+    let mut can_confirm = true;
     // A fixed top edge, so a list that shrinks while filtering never moves the dialog: PILLS_MARGIN over the
     // detail pane's pill row when it shows, else a fifth down the window.
     let top = picker_top(ctx.content_rect().height(), app_pills);
+    // Every picker writes: in read-only mode Confirm is off and a note under the title says why, before the choices.
+    let read_only = crate::jira::check_writable().is_err().then(|| read_only_note(picker));
+    let note = read_only.as_deref();
+    // Read-only, the body is view-only too: rows and fields in the disabled style (muted, no cursor, no caret).
+    let live = read_only.is_none();
     egui::Area::new(egui::Id::new("picker")).order(egui::Order::Foreground).anchor(egui::Align2::CENTER_TOP, vec2(0.0, top)).show(ctx, |ui| {
-        Frame::new().fill(crate::views::dialog_fill(p)).stroke(crate::views::dialog_stroke(p)).corner_radius(theme::RADIUS).inner_margin(DIALOG_MARGIN).show(
-            ui,
-            |ui| {
-                ui.set_width(440.0);
-                // Fields on `bg` with the dialog's own edge, in both themes.
-                crate::views::dialog_fields(ui, p);
-                let buttons_gap = match picker {
-                    Picker::Transition { key, items, cursor } => {
-                        let below = title_line(ui, p, &format!("Transition {key}"));
-                        let names = items.iter().map(|t| Row::plain(transition_row(t)).current_if(t.to.eq_ignore_ascii_case(&status))).collect();
-                        rows(ui, p, names, &mut confirm, cursor, None, Some(below))
+        crate::views::components::dialog_frame(p).inner_margin(DIALOG_MARGIN).show(ui, |ui| {
+            ui.set_width(DIALOG_W);
+            // Fields on `bg` with the dialog's own edge, in both themes.
+            crate::views::dialog_fields(ui, p);
+            let buttons_gap = match picker {
+                Picker::Transition { key, items, cursor } => {
+                    let below = title_with_note(ui, p, &format!("Transition {key}"), note);
+                    let names = items.iter().map(|t| Row::plain(transition_row(t)).current_if(t.to.eq_ignore_ascii_case(&status))).collect();
+                    rows(ui, p, names, live, &mut confirm, cursor, None, Some(below))
+                }
+                Picker::Resolution { key, items, cursor, close, .. } => {
+                    let below = title_with_note(ui, p, &if *close { format!("Close {key} as") } else { format!("Resolution for {key}") }, note);
+                    rows(ui, p, items.iter().map(|r| Row::plain(r.name.clone())).collect(), live, &mut confirm, cursor, None, Some(below))
+                }
+                Picker::Assign { key, items, current, cursor, filter } => {
+                    title_with_note(ui, p, &format!("Assign {key}"), note);
+                    ui.add_space(TITLE_GAP);
+                    let r = crate::views::add_field(ui, None, filter, |t| field_if(t, "Type a name", live, p));
+                    ui.add_space(assign_field_space(ui));
+                    // Not under the help overlay, or typing would land in the filter behind it.
+                    if !help_open && live {
+                        r.request_focus();
                     }
-                    Picker::Resolution { key, items, cursor, close, .. } => {
-                        let below = title_line(ui, p, &if *close { format!("Close {key} as") } else { format!("Resolution for {key}") });
-                        rows(ui, p, items.iter().map(|r| Row::plain(r.name.clone())).collect(), &mut confirm, cursor, None, Some(below))
+                    let (shown, cut) = assign_rows(items, filter, current.as_ref());
+                    if r.changed() {
+                        *cursor = assign_cursor_after_filter(&shown, filter, current.is_some());
                     }
-                    Picker::Assign { key, items, current, cursor, filter } => {
-                        title(ui, p, &format!("Assign {key}"));
-                        let r = crate::views::add_field(ui, None, filter, |t| field(t, "Type a name", p));
-                        ui.add_space(assign_field_space(ui));
-                        // Not under the help overlay, or typing would land in the filter behind it.
-                        if !help_open {
-                            r.request_focus();
-                        }
-                        let (shown, cut) = assign_rows(items, filter, current.as_ref());
-                        if r.changed() {
-                            *cursor = assign_cursor_after_filter(&shown, filter, current.is_some());
-                        }
+                    if Picker::assign_empty(filter, shown.len()) {
+                        // Nothing matched: no row is selected, so Enter cannot unassign.
+                        can_confirm = false;
+                        Frame::new().inner_margin(Margin::symmetric(ROW_INSET as i8, ROW_PAD_Y)).show(ui, |ui| {
+                            let message = format!("No people match “{}”", filter.trim());
+                            crate::views::components::empty_state(ui, p, &message, Some("Check the spelling, or clear the filter to see everyone."));
+                        });
+                        return_gap(ui)
+                    } else {
                         let now = assign_current_row(&shown, current.as_ref());
-                        let mut names = vec![Row::muted("Unassigned")];
-                        names.extend(shown.iter().map(|u| Row::plain(u.display_name.clone())));
+                        let mut names = vec![Row { avatar: Some(None), ..Row::muted("Unassigned") }];
+                        names.extend(shown.iter().map(|u| Row { avatar: Some(Some(u.account_id.clone())), ..Row::plain(u.display_name.clone()) }));
+                        // Unassigned and the capped users: the list never scrolls.
+                        names.truncate(crate::app::ASSIGN_USERS + 1);
                         for (i, n) in names.iter_mut().enumerate() {
                             n.current = now == Some(i);
                         }
@@ -71,47 +87,70 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                         }
                         let note = assign_note(filter, shown.len(), assign_matches(items, filter, current.as_ref()), cut);
                         // The field sits under the title; the rows' own top gap is ASSIGN_FIELD_GAP (above).
-                        rows(ui, p, names, &mut confirm, cursor, Some(note.as_deref()), None)
+                        rows(ui, p, names, live, &mut confirm, cursor, Some(note.as_deref()), None)
                     }
-                    Picker::Sprint { key, items, cursor } => {
-                        let below = title_line(ui, p, &format!("Move {key} to sprint"));
-                        let now = sprint_current_row(items, sprint.as_deref());
-                        let mut names = vec![Row::plain("Backlog".to_string())];
-                        names.extend(items.iter().map(|s| Row::plain(sprint_row_label(&s.name, &s.state))));
-                        for (i, n) in names.iter_mut().enumerate() {
-                            n.current = now == Some(i);
-                        }
-                        rows(ui, p, names, &mut confirm, cursor, None, Some(below))
+                }
+                Picker::Sprint { key, items, cursor } => {
+                    let below = title_with_note(ui, p, &format!("Move {key} to sprint"), note);
+                    let now = sprint_current_row(items, sprint.as_deref());
+                    let mut names = vec![Row::plain("Backlog".to_string())];
+                    names.extend(items.iter().map(|s| {
+                        let (name, tag) = sprint_row_label(&s.name, &s.state);
+                        Row { tag, ..Row::plain(name) }
+                    }));
+                    for (i, n) in names.iter_mut().enumerate() {
+                        n.current = now == Some(i);
                     }
-                    Picker::Edit { key, labels, priority, points, .. } => {
-                        let below = title_line(ui, p, &format!("Edit {key}"));
-                        ui.add_space(edit_title_space(ui, below, "Labels, comma separated"));
-                        let labels_id = egui::Id::new("edit-labels");
-                        let r = edit_group(ui, p, "Labels, comma separated", labels, |t| field(t, "", p).id(labels_id));
-                        // Labels takes focus on open (and whenever no field holds it); Tab moves on.
-                        if !help_open && ui.memory(|m| m.focused().is_none()) {
-                            r.request_focus();
-                        }
-                        ui.add_space(group_space(ui, "Priority"));
+                    rows(ui, p, names, live, &mut confirm, cursor, None, Some(below))
+                }
+                Picker::Edit { key, labels, priority, points, orig_priority, .. } => {
+                    let below = title_with_note(ui, p, &format!("Edit {key}"), note);
+                    ui.add_space(edit_title_space(ui, below, "Labels, comma separated"));
+                    let labels_id = egui::Id::new("edit-labels");
+                    let r = edit_group(ui, p, "Labels, comma separated", labels, |t| field_if(t, "", live, p).id(labels_id));
+                    // Labels takes focus on open (and whenever no field holds it); Tab moves on.
+                    if !help_open && live && ui.memory(|m| m.focused().is_none()) {
+                        r.request_focus();
+                    }
+                    ui.add_space(group_space(ui, "Priority"));
+                    if !live {
+                        // View-only: the priority as a disabled field, like the two beside it.
+                        let mut shown = read_only_priority(priority).to_string();
+                        edit_group(ui, p, "Priority", &mut shown, |t| field_if(t, "", false, p));
+                    } else if custom_priority(orig_priority) {
+                        // A priority outside Jira's five defaults: this site has its own, so type it.
                         edit_group(ui, p, "Priority", priority, |t| field(t, crate::app::PRIORITY_HINT, p));
-                        ui.add_space(group_space(ui, "Story points"));
-                        edit_group(ui, p, "Story points", points, |t| field(t, crate::app::POINTS_HINT, p));
-                        BUTTONS_GAP
+                    } else {
+                        edit_label(ui, p, "Priority");
+                        // An issue with no priority yet shows "Not set" as the first, selected segment.
+                        let unset = orig_priority.trim().is_empty();
+                        let options = priority_options(unset);
+                        if let Some(i) = crate::views::components::segmented(ui, p, &options, priority_segment(priority, unset)) {
+                            *priority = priority_from_segment(i, unset).to_string();
+                        }
                     }
-                };
-                ui.add_space(buttons_gap);
-                // The hint bar carries the keys; the dialog carries one primary action.
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 8.0;
-                    if ui.add(primary_button("Confirm", p)).clicked() {
-                        confirm = true;
-                    }
-                    if ui.add(crate::views::dialog_button("Cancel", p)).clicked() {
-                        cancel = true;
-                    }
-                });
-            },
-        );
+                    ui.add_space(group_space(ui, "Story points"));
+                    edit_group(ui, p, "Story points", points, |t| field_if(t, crate::app::POINTS_HINT, live, p));
+                    BUTTONS_GAP
+                }
+            };
+            ui.add_space(buttons_gap);
+            can_confirm &= picker.changes(&status, sprint.as_deref());
+            if read_only.is_some() {
+                can_confirm = false;
+            }
+            // The hint bar carries the keys; the dialog carries one primary action.
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 8.0;
+                if ui.add(crate::views::primary_button_if("Confirm", can_confirm, p)).clicked() && can_confirm {
+                    confirm = true;
+                }
+                // The app's one secondary button, as beside Copy link and Open in Jira.
+                if ui.add(crate::views::button("Cancel", p)).clicked() {
+                    cancel = true;
+                }
+            });
+        });
     });
     if confirm {
         app.actions.push(Action::PickerConfirm);
@@ -121,15 +160,58 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
     }
 }
 
-/// The issue a picker acts on.
-fn picker_key(p: &Picker) -> &str {
-    match p {
-        Picker::Transition { key, .. }
-        | Picker::Resolution { key, .. }
-        | Picker::Assign { key, .. }
-        | Picker::Sprint { key, .. }
-        | Picker::Edit { key, .. } => key,
+/// The space before the buttons after Assign's empty state (its hint's descenders are its ink).
+fn return_gap(ui: &egui::Ui) -> f32 {
+    let ink = theme::Ink::of(ui.ctx(), &theme::body(theme::spacing(ui.ctx()).small), None);
+    LIST_INK_GAP - f32::from(ROW_PAD_Y) - (ink.line - (ink.base + ink.descent)) - ui.spacing().item_spacing.y
+}
+
+/// Why Confirm is off in read-only mode, naming the picker's action: "Read-only mode is on, so Close is off. …",
+/// the restart hint on its own line so the note breaks the same way in every picker.
+pub fn read_only_note(picker: &Picker) -> String {
+    let (name, verb) = match picker {
+        Picker::Resolution { close: true, .. } => ("Close", "close"),
+        Picker::Transition { .. } | Picker::Resolution { .. } => ("Transition", "transition"),
+        Picker::Assign { .. } => ("Assign", "assign"),
+        Picker::Sprint { .. } => ("Move", "move"),
+        Picker::Edit { .. } => ("Edit", "edit"),
+    };
+    format!("Read-only mode is on, so {name} is off.\nRestart without JIRA_TICKETS_READONLY to {verb}.")
+}
+
+/// The Edit dialog's priority is free text only when the issue's own priority is not one of Jira's five
+/// defaults (the site has custom priorities); otherwise it is a choice.
+pub fn custom_priority(orig: &str) -> bool {
+    !orig.trim().is_empty() && Picker::priority_index(orig).is_none()
+}
+
+/// The Edit dialog's priority segment for "no priority". Choosing it writes nothing (`edit_fields` skips an empty
+/// priority), so it only shows for an issue that has none: Jira's five defaults are never cleared by it.
+pub const PRIORITY_UNSET: &str = "Not set";
+
+/// The priority segments: Jira's five defaults, after PRIORITY_UNSET when the issue has no priority (`unset`).
+pub fn priority_options(unset: bool) -> Vec<&'static str> {
+    unset.then_some(PRIORITY_UNSET).into_iter().chain(Picker::PRIORITIES).collect()
+}
+
+/// The selected segment for `priority` among `priority_options(unset)`; "Not set" while it is empty.
+pub fn priority_segment(priority: &str, unset: bool) -> usize {
+    let shift = usize::from(unset);
+    Picker::priority_index(priority).map_or(if unset { 0 } else { usize::MAX }, |i| i + shift)
+}
+
+/// The priority text a click on segment `i` stores ("" for "Not set").
+pub fn priority_from_segment(i: usize, unset: bool) -> &'static str {
+    match (unset, i) {
+        (true, 0) => "",
+        (true, i) => Picker::PRIORITIES[i - 1],
+        (false, i) => Picker::PRIORITIES[i],
     }
+}
+
+/// The Edit dialog's priority in read-only mode, where it shows as a disabled field: "Not set" when empty.
+pub fn read_only_priority(priority: &str) -> &str {
+    if priority.trim().is_empty() { PRIORITY_UNSET } else { priority }
 }
 
 /// The dialog's top edge: 20% down the window less DIALOG_LIFT, so at 900 (167) it covers the detail pane's pill row
@@ -153,7 +235,9 @@ const PILLS_MARGIN: f32 = 8.0;
 const DIALOG_LIFT: f32 = 13.0;
 
 /// The dialog's margin: 16 at the sides and bottom; the top is the title's (`title`), set to its ink.
-const DIALOG_MARGIN: Margin = Margin { left: 16, right: 16, top: 0, bottom: 16 };
+pub(crate) const DIALOG_MARGIN: Margin = Margin { left: 16, right: 16, top: 0, bottom: 16 };
+/// Every modal's content width (pickers and go-to), inside DIALOG_MARGIN.
+pub(crate) const DIALOG_W: f32 = 440.0;
 /// The dialog edge's stroke: egui starts the frame's content inside it, and the title's ink is measured from it.
 #[cfg(test)]
 const DIALOG_EDGE: f32 = 1.0;
@@ -200,8 +284,6 @@ pub fn gap_space(gap: f32, item_spacing_y: f32) -> f32 {
     (gap - item_spacing_y).max(0.0)
 }
 
-/// Rows the Assign list holds: Unassigned, up to ASSIGN_USERS users, and the "9 of N · type to see more" line.
-const ASSIGN_ROWS: f32 = (crate::app::ASSIGN_USERS + 2) as f32;
 /// One picker row: 14 px text plus 6 px above and below.
 const ROW_H: f32 = 30.0;
 
@@ -214,10 +296,29 @@ const BUTTONS_GAP: f32 = 18.0;
 const LIST_INK_GAP: f32 = 24.0;
 
 /// The dialog's title, TITLE_INK_TOP under the dialog's inner edge to its ink, then TITLE_GAP.
-fn title(ui: &mut egui::Ui, p: &Palette, text: &str) {
+pub(crate) fn title(ui: &mut egui::Ui, p: &Palette, text: &str) {
     title_line(ui, p, text);
     ui.add_space(TITLE_GAP);
 }
+
+/// The title line, then (read-only mode, or why an action is off) `note` under it in the small muted step, wrapped at
+/// the dialog's full content width (every picker's and the Grooming dialogs'). Returns how far the last line box runs below its ink, like `title_line`.
+pub(crate) fn title_with_note(ui: &mut egui::Ui, p: &Palette, text: &str, note: Option<&str>) -> f32 {
+    let below = title_line(ui, p, text);
+    let Some(note) = note else { return below };
+    let sp = theme::spacing(ui.ctx());
+    let job = egui::text::LayoutJob::simple(note.to_string(), theme::body(sp.small), crate::views::dialog_muted(p), ui.available_width());
+    let g = ui.painter().layout_job(job);
+    let ink = theme::ink_rect(&g);
+    // NOTE_INK_GAP from the title's ink to the note's.
+    ui.add_space(gap_space(NOTE_INK_GAP - below - ink.top(), ui.spacing().item_spacing.y));
+    let after = g.size().y - ink.bottom();
+    ui.add(egui::Label::new(g).selectable(false));
+    after
+}
+
+/// A picker title's ink → its read-only note's ink.
+const NOTE_INK_GAP: f32 = 8.0;
 
 /// The dialog's title line, TITLE_INK_TOP under the dialog's inner edge to its ink; returns how far its line box
 /// runs below its ink.
@@ -231,12 +332,6 @@ fn title_line(ui: &mut egui::Ui, p: &Palette, text: &str) -> f32 {
     below
 }
 
-/// Assign's fixed block: the note row ("N matches", "9 of N · type to see more") right after the last row, then the
-/// space that keeps the block one height however few rows the filter leaves. Returns (note top, space after).
-pub fn assign_block(block_h: f32, rows_h: f32, note_h: f32) -> (f32, f32) {
-    (rows_h, (block_h - rows_h - note_h).max(0.0))
-}
-
 /// A picker row's text inset (its frame margin): fields in pickers share it.
 pub const ROW_INSET: f32 = 8.0;
 
@@ -245,29 +340,45 @@ pub(crate) fn field<'a>(text: &'a mut String, hint: &str, p: &Palette) -> egui::
     crate::views::input_field_in(text, hint, theme::body(14.0), p, crate::views::input_margin(ROW_INSET))
 }
 
+/// `field`, or (`live` false: read-only mode) the same box view-only: muted text, no caret, no focus ring.
+fn field_if<'a>(text: &'a mut String, hint: &str, live: bool, p: &Palette) -> egui::TextEdit<'a> {
+    let f = field(text, hint, p);
+    if live { f } else { f.interactive(false).text_color(crate::views::dialog_muted(p)) }
+}
+
 /// A small muted label, LABEL_TO_FIELD_INK from its descenders, then the field (full width).
 fn edit_group(ui: &mut egui::Ui, p: &Palette, label: &str, text: &mut String, field: impl FnOnce(&mut String) -> egui::TextEdit<'_>) -> egui::Response {
+    edit_label(ui, p, label);
+    crate::views::add_field(ui, None, text, field)
+}
+
+/// An Edit group's small muted label, then the space for LABEL_TO_FIELD_INK to the control under it.
+fn edit_label(ui: &mut egui::Ui, p: &Palette, label: &str) {
     ui.label(RichText::new(label).color(crate::views::dialog_muted(p)).size(12.0));
     let ink = theme::Ink::of(ui.ctx(), &theme::body(12.0), None);
     // The layout's item spacing comes on top of the space (it may be negative: a space backs the cursor up).
     ui.add_space(ink.pad_deep(LABEL_TO_FIELD_INK) - ui.spacing().item_spacing.y);
-    crate::views::add_field(ui, None, text, field)
 }
 
-/// One picker row's text; `muted` for the synthetic "no value" row (Unassigned); `current` marks the
-/// issue's present value with a muted "current" after it, wherever the cursor is.
+/// One picker row's text; `muted` for the synthetic "no value" row (Unassigned); `tag` a secondary note after it
+/// ("future"); `current` marks the issue's present value in semibold with a muted "current" tag, wherever the
+/// cursor is, so the value and the cursor (fill and ring) never share a look.
 struct Row {
     text: String,
     muted: bool,
     current: bool,
+    tag: Option<String>,
+    /// A person row's avatar slot (Assign): `Some(Some(id))` draws theirs, `Some(None)` keeps the slot blank so
+    /// "Unassigned" lines up with the names.
+    avatar: Option<Option<String>>,
 }
 
 impl Row {
     fn plain(text: String) -> Self {
-        Row { text, muted: false, current: false }
+        Row { text, muted: false, current: false, tag: None, avatar: None }
     }
     fn muted(text: &str) -> Self {
-        Row { text: text.to_string(), muted: true, current: false }
+        Row { muted: true, ..Row::plain(text.to_string()) }
     }
     fn current_if(mut self, current: bool) -> Self {
         self.current = current;
@@ -275,14 +386,32 @@ impl Row {
     }
 }
 
+/// A row's secondary tags in order: its own (`tag`, "future"), then "current" for the issue's present value.
+fn row_tags(tag: Option<&str>, current: bool) -> Vec<&str> {
+    tag.into_iter().chain(current.then_some("current")).collect()
+}
+
+/// A row's text → its first tag, and between tags.
+const ROW_TAG_GAP: f32 = 8.0;
+
 /// Draws the rows with `cursor` highlighted. A click picks the row and confirms;
 /// hover does not move the cursor, so a resting mouse can't fight the keys.
-/// `fixed`: Assign's capped list. It keeps one height (Unassigned, the users, a note row) whatever the
-/// filter leaves, and the note ("9 of N · type to see more") shows when matches were cut.
+/// `fixed`: Assign's capped list (never scrolls; at most ASSIGN_USERS users), sized to the rows the filter leaves,
+/// with its note ("2 matches", "9 of N · type to see more") right under them.
 /// `title_below`: how far the title's line box runs below its ink, when the rows follow the title directly; the
 /// space before them puts LIST_INK_GAP from the title's ink to the first row's text ink. Returns the space before
 /// the buttons for LIST_INK_GAP from the last row's (or the note's) text ink to the buttons' edge.
-fn rows(ui: &mut egui::Ui, p: &Palette, names: Vec<Row>, confirm: &mut bool, cursor: &mut usize, fixed: Option<Option<&str>>, title_below: Option<f32>) -> f32 {
+#[allow(clippy::too_many_arguments)]
+fn rows(
+    ui: &mut egui::Ui,
+    p: &Palette,
+    names: Vec<Row>,
+    live: bool,
+    confirm: &mut bool,
+    cursor: &mut usize,
+    fixed: Option<Option<&str>>,
+    title_below: Option<f32>,
+) -> f32 {
     let item_y = ui.spacing().item_spacing.y;
     if let (Some(below), Some(first)) = (title_below, names.first()) {
         ui.add_space(LIST_INK_GAP - below - f32::from(ROW_PAD_Y) - row_ink(ui, &first.text).top() - item_y);
@@ -292,27 +421,23 @@ fn rows(ui: &mut egui::Ui, p: &Palette, names: Vec<Row>, confirm: &mut bool, cur
         return BUTTONS_GAP;
     }
     if let Some(note) = fixed {
-        let h = ASSIGN_ROWS * ROW_H;
-        ui.allocate_ui_with_layout(vec2(ui.available_width(), h), egui::Layout::top_down(egui::Align::Min), |ui| {
-            ui.set_min_height(h);
-            let top = ui.cursor().top();
-            row_list(ui, p, &names, confirm, cursor);
-            if let Some(note) = note {
-                // Right under the rows, then the rest of the block, so the buttons stay where they are.
-                let (_, after) = assign_block(h, ui.cursor().top() - top, ROW_H);
-                Frame::new().inner_margin(Margin::symmetric(ROW_INSET as i8, 6)).show(ui, |ui| {
-                    ui.set_min_height(ROW_H - 12.0);
-                    ui.label(RichText::new(note).size(12.0).color(crate::views::dialog_muted(p)));
-                });
-                ui.add_space(after);
-            }
-        });
-        // The block keeps its height, so the gap is set for the note at its foot (its descenders are its ink).
-        let note = theme::Ink::of(ui.ctx(), &theme::body(12.0), None);
-        let under = f32::from(ROW_PAD_Y) + (ROW_H - 12.0).max(note.line) - (note.base + note.descent);
-        return LIST_INK_GAP - under - item_y;
+        // Sized to its rows (the dialog grows and shrinks with the filter), the note right under them.
+        ui.scope(|ui| row_list(ui, p, &names, live, confirm, cursor));
+        if let Some(note) = note {
+            Frame::new().inner_margin(Margin::symmetric(ROW_INSET as i8, ROW_PAD_Y)).show(ui, |ui| {
+                ui.set_min_height(ROW_H - 12.0);
+                ui.label(RichText::new(note).size(12.0).color(crate::views::dialog_muted(p)));
+            });
+            // The note's descenders are its ink.
+            let note = theme::Ink::of(ui.ctx(), &theme::body(12.0), None);
+            let under = f32::from(ROW_PAD_Y) + (ROW_H - 12.0).max(note.line) - (note.base + note.descent);
+            return LIST_INK_GAP - under - item_y;
+        }
+        let last = names.last().map(|n| row_ink(ui, &n.text)).unwrap_or(egui::Rect::NOTHING);
+        let line = theme::Ink::of(ui.ctx(), &theme::body(14.0), None).line;
+        return LIST_INK_GAP - (f32::from(ROW_PAD_Y) + (ROW_H - 12.0).max(line) - last.bottom()) - item_y;
     }
-    egui::ScrollArea::vertical().max_height(360.0).show(ui, |ui| row_list(ui, p, &names, confirm, cursor));
+    egui::ScrollArea::vertical().max_height(360.0).show(ui, |ui| row_list(ui, p, &names, live, confirm, cursor));
     let last = names.last().map(|n| row_ink(ui, &n.text)).unwrap_or(egui::Rect::NOTHING);
     let line = theme::Ink::of(ui.ctx(), &theme::body(14.0), None).line;
     LIST_INK_GAP - (f32::from(ROW_PAD_Y) + (ROW_H - 12.0).max(line) - last.bottom()) - item_y
@@ -323,31 +448,70 @@ fn row_ink(ui: &egui::Ui, text: &str) -> egui::Rect {
     theme::ink_rect(&ui.painter().layout_no_wrap(text.to_string(), theme::body(14.0), egui::Color32::WHITE))
 }
 
-fn row_list(ui: &mut egui::Ui, p: &Palette, names: &[Row], confirm: &mut bool, cursor: &mut usize) {
+/// A row name's colour: `text`, or `muted` for a synthetic row (Unassigned) and for every row of a view-only
+/// (read-only) picker, so its rows read as off.
+fn row_text_color(synthetic: bool, live: bool, text: egui::Color32, muted: egui::Color32) -> egui::Color32 {
+    if synthetic || !live { muted } else { text }
+}
+
+/// A picker row's font: bold for the current value.
+fn font_for(current: bool) -> egui::FontId {
+    if current { theme::bold(14.0) } else { theme::body(14.0) }
+}
+
+/// `live` false (read-only mode): the rows are view-only, in the disabled style: no cursor fill or ring, every
+/// name muted, no clicks. The current value keeps its semibold and "current" tag.
+fn row_list(ui: &mut egui::Ui, p: &Palette, names: &[Row], live: bool, confirm: &mut bool, cursor: &mut usize) {
     {
         ui.spacing_mut().item_spacing.y = 0.0;
         for (i, n) in names.iter().enumerate() {
-            let on_cursor = i == *cursor;
+            let on_cursor = live && i == *cursor;
             let fill = if on_cursor { crate::views::dialog_cursor_fill(p) } else { egui::Color32::TRANSPARENT };
+            // The cursor is fill-only: an accent ring round a full-width row in a short list reads as a focused text
+            // field. The clear 1 px edge stays so the rows keep their size.
+            let edge = egui::Stroke::new(1.0, egui::Color32::TRANSPARENT);
             let r = Frame::new()
                 .fill(fill)
-                .corner_radius(4)
-                .inner_margin(Margin::symmetric(ROW_INSET as i8, ROW_PAD_Y))
+                .stroke(edge)
+                .corner_radius(crate::views::components::ROW_RADIUS)
+                // The edge takes 1 px of the padding, so the text stays at ROW_INSET / ROW_PAD_Y.
+                .inner_margin(Margin::symmetric(ROW_INSET as i8 - 1, ROW_PAD_Y - 1))
                 .show(ui, |ui| {
                     ui.set_width(ui.available_width());
                     ui.set_min_height(ROW_H - 12.0);
                     // Secondary text lifts on the cursor fill where muted would fall under 5.0:1.
                     let muted = if on_cursor { crate::views::muted_on_selected(p) } else { crate::views::dialog_muted(p) };
-                    let color = if n.muted { muted } else { p.text };
+                    let color = row_text_color(n.muted, live, p.text, muted);
                     let mut job = egui::text::LayoutJob::default();
-                    job.append(&n.text, 0.0, egui::TextFormat { font_id: theme::body(14.0), color, ..Default::default() });
-                    if n.current {
-                        job.append("current", 8.0, egui::TextFormat { font_id: theme::body(12.0), color: muted, ..Default::default() });
+                    let font = font_for(n.current);
+                    job.append(&n.text, 0.0, egui::TextFormat { font_id: font, color, ..Default::default() });
+                    for tag in row_tags(n.tag.as_deref(), n.current) {
+                        job.append(tag, ROW_TAG_GAP, egui::TextFormat { font_id: theme::body(12.0), color: muted, ..Default::default() });
                     }
-                    ui.add(egui::Label::new(job).truncate().selectable(false));
+                    let label = egui::Label::new(job).truncate().selectable(false);
+                    match &n.avatar {
+                        Some(id) => {
+                            ui.horizontal_top(|ui| {
+                                ui.spacing_mut().item_spacing.x = theme::AVATAR_GAP;
+                                let line_h = ui.painter().layout_no_wrap(n.text.clone(), font_for(n.current), p.text).size().y;
+                                match id {
+                                    Some(id) => {
+                                        crate::avatar::inline(ui, Some(id), &n.text, theme::AVATAR, line_h);
+                                    }
+                                    None => {
+                                        ui.allocate_exact_size(egui::vec2(theme::AVATAR, line_h), egui::Sense::hover());
+                                    }
+                                }
+                                ui.add(label);
+                            });
+                        }
+                        None => {
+                            ui.add(label);
+                        }
+                    }
                 })
                 .response
-                .interact(egui::Sense::click());
+                .interact(if live { egui::Sense::click() } else { egui::Sense::hover() });
             if r.clicked() {
                 *cursor = i;
                 *confirm = true;
@@ -359,10 +523,62 @@ fn row_list(ui: &mut egui::Ui, p: &Palette, names: &[Row], confirm: &mut bool, c
 #[cfg(test)]
 mod tests {
     #[test]
-    fn assign_count_follows_the_rows() {
-        assert_eq!(super::assign_block(300.0, 60.0, 30.0), (60.0, 210.0), "two rows: the count right after them, the rest below");
-        assert_eq!(super::assign_block(300.0, 270.0, 30.0), (270.0, 0.0), "a full list");
-        assert_eq!(super::assign_block(300.0, 290.0, 30.0), (290.0, 0.0));
+    fn read_only_says_what_is_off() {
+        let close = crate::app::Picker::Resolution { key: "CI-1".into(), transition_id: "2".into(), items: vec![], cursor: 0, close: true };
+        assert_eq!(super::read_only_note(&close), "Read-only mode is on, so Close is off.\nRestart without JIRA_TICKETS_READONLY to close.");
+        let sprint = crate::app::Picker::Sprint { key: "CI-1".into(), items: vec![], cursor: 0 };
+        assert!(super::read_only_note(&sprint).contains("so Move is off"));
+    }
+
+    #[test]
+    fn read_only_pickers_are_view_only() {
+        let (text, muted) = (egui::Color32::BLACK, egui::Color32::GRAY);
+        assert_eq!(super::row_text_color(false, true, text, muted), text);
+        assert_eq!(super::row_text_color(true, true, text, muted), muted, "Unassigned is muted");
+        assert_eq!(super::row_text_color(false, false, text, muted), muted, "read-only: every row reads as off");
+        assert_eq!(super::read_only_priority(" "), "Not set");
+        assert_eq!(super::read_only_priority("High"), "High");
+        // No cursor fill or ring on a view-only list, wherever the cursor is.
+        for p in [crate::theme::LIGHT, crate::theme::DARK] {
+            let shapes = crate::testutil::paint_at2(egui::vec2(800.0, 600.0), |ui| {
+                ui.set_width(440.0);
+                let names = vec![super::Row::plain("Done".into()), super::Row::plain("Won't Do".into())];
+                super::rows(ui, &p, names, false, &mut false, &mut 0, None, None);
+            });
+            let cursor = crate::views::dialog_cursor_fill(&p);
+            assert!(crate::testutil::fills(&shapes).iter().all(|(_, c)| *c != cursor), "no cursor row");
+        }
+    }
+
+    #[test]
+    fn row_tags_share_one_style_and_order() {
+        assert_eq!(super::row_tags(Some("future"), true), ["future", "current"]);
+        assert_eq!(super::row_tags(None, true), ["current"]);
+        assert!(super::row_tags(None, false).is_empty());
+    }
+
+    #[test]
+    fn only_a_custom_priority_is_typed() {
+        assert!(!super::custom_priority("High"));
+        assert!(!super::custom_priority(""), "no priority yet: choose one");
+        assert!(super::custom_priority("P1 - Critical"));
+    }
+
+    #[test]
+    fn an_unset_priority_is_a_selected_segment() {
+        use super::{priority_from_segment, priority_options, priority_segment};
+        assert_eq!(priority_options(true), ["Not set", "Highest", "High", "Medium", "Low", "Lowest"]);
+        assert_eq!(priority_options(false).len(), 5, "an issue with a priority cannot pick Not set");
+        assert_eq!(priority_segment("", true), 0, "Not set is selected, inside the control");
+        assert_eq!(priority_segment("High", true), 2);
+        assert_eq!(priority_segment("High", false), 1);
+        for unset in [true, false] {
+            for (i, o) in priority_options(unset).iter().enumerate() {
+                let stored = priority_from_segment(i, unset);
+                assert_eq!(priority_segment(stored, unset), i, "{o} round-trips");
+            }
+        }
+        assert_eq!(priority_from_segment(0, true), "", "Not set writes nothing");
     }
 
     #[test]
@@ -391,16 +607,16 @@ mod tests {
                         ui.set_width(440.0);
                         let below = super::title_line(ui, &p, "Transition CI-3779");
                         let names = vec![super::Row::plain("New".into()), super::Row::plain("Backlog".into()), super::Row::plain("Closed".into())];
-                        let gap = super::rows(ui, &p, names, &mut false, &mut cursor.clone(), None, Some(below));
+                        let gap = super::rows(ui, &p, names, true, &mut false, &mut cursor.clone(), None, Some(below));
                         ui.add_space(gap);
                         let b = ui.add(crate::views::primary_button("Confirm", &p)).rect;
                         gaps.0 = b.top();
                         // A full list: the cut note sits at the block's foot.
                         let mut names = vec![super::Row::muted("Unassigned")];
                         names.extend((0..crate::app::ASSIGN_USERS).map(|i| super::Row::plain(format!("User {i}"))));
-                        let gap = super::rows(ui, &p, names, &mut false, &mut cursor.clone(), Some(Some("9 of 40 · type to see more")), None);
+                        let gap = super::rows(ui, &p, names, true, &mut false, &mut cursor.clone(), Some(Some("9 of 40 · type to see more")), None);
                         ui.add_space(gap);
-                        gaps.1 = ui.add(crate::views::dialog_button("Cancel", &p)).rect.top();
+                        gaps.1 = ui.add(crate::views::button("Cancel", &p)).rect.top();
                     });
                 });
                 let title = crate::testutil::ink_of(&shapes, "Transition CI-3779");
@@ -457,7 +673,7 @@ mod tests {
                 crate::views::add_field(ui, None, &mut filter, |t| super::field(t, "Type a name", &p));
                 ui.add_space(super::assign_field_space(ui));
                 let names = vec![super::Row::muted("Unassigned"), super::Row::plain("Ada Lovelace".into())];
-                super::rows(ui, &p, names, &mut false, &mut 1, Some(None), None);
+                super::rows(ui, &p, names, true, &mut false, &mut 1, Some(None), None);
             });
             let field = crate::testutil::fills(&shapes).iter().find(|(_, c)| *c == crate::theme::dialog_input_fill(&p)).expect("field").0;
             let gap = crate::testutil::ink_of(&shapes, "Unassigned").top() - field.bottom();

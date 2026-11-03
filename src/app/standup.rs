@@ -40,12 +40,16 @@ pub struct StandupState {
     pub adding: HashSet<String>,
     /// The focused card's title field takes focus on its next frame (`e`).
     pub focus_title: bool,
+    /// A stopped run's thread has not ended yet; a new run waits for it, so its late answer is never taken.
+    pub stopping: bool,
+    /// The running review's stop flag (`standup::set_run_stop`).
+    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl App {
     /// Each frame: on a standup day the review starts by itself, once.
     pub(super) fn standup_auto_run(&mut self) {
-        let today = chrono::Local::now().date_naive();
+        let today = (self.today)();
         if self.standup.phase.is_none() && standup::should_auto_run(today, self.standup.saved.last_run) {
             self.standup_run();
         }
@@ -53,10 +57,13 @@ impl App {
 
     /// Starts a review: the Jira activity, then `claude`, on a background thread. A no-op while one runs.
     pub(super) fn standup_run(&mut self) {
-        if self.standup.phase.is_some() || self.client.is_none() {
+        if self.standup.phase.is_some() || self.standup.stopping || self.client.is_none() {
             return;
         }
-        let today = chrono::Local::now().date_naive();
+        // Each run has its own stop flag, so a stopped run's request never reaches this one.
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        self.standup.stop = stop.clone();
+        let today = (self.today)();
         let since = standup::window_start(today);
         self.standup.saved.last_run = Some(today);
         self.save_standup();
@@ -66,8 +73,14 @@ impl App {
         self.standup.error = None;
         let (me, cfg, runner) = (self.me.clone(), self.cfg.clone(), self.review_runner);
         self.spawn(move |c, tx| {
+            standup::set_run_stop(stop);
             let me = me.unwrap_or_else(|| c.myself().unwrap_or_default());
-            let activity = match standup::fetch_activity(c, since, &me.account_id) {
+            let activity = standup::fetch_activity(c, since, &me.account_id);
+            if standup::stop_requested() {
+                let _ = tx.send(Msg::StandupReview(Err(standup::STOPPED.into())));
+                return;
+            }
+            let activity = match activity {
                 Ok(a) => a,
                 Err(e) => {
                     let _ = tx.send(Msg::StandupActivity(Err(e)));
@@ -81,8 +94,26 @@ impl App {
         });
     }
 
+    /// Stops the running review: its `claude` is killed (`standup::set_run_stop`), the last good review stays,
+    /// and the run's late answer is dropped. A no-op when nothing runs.
+    pub(super) fn standup_stop(&mut self) {
+        if self.standup.phase.is_none() {
+            return;
+        }
+        self.standup.stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        self.standup.phase = None;
+        self.standup.started = None;
+        self.standup.activity_count = None;
+        self.standup.stopping = true;
+        self.toast_kind("Stopped the review", ToastKind::Info);
+    }
+
     pub(super) fn standup_activity_loaded(&mut self, result: jira::Result<usize>) {
         if self.standup.phase.is_none() {
+            // A stopped run whose Jira read failed ends here; one that read Jira still answers with a review.
+            if result.is_err() {
+                self.standup.stopping = false;
+            }
             return;
         }
         match result {
@@ -103,6 +134,10 @@ impl App {
     }
 
     pub(super) fn standup_reviewed(&mut self, result: Result<Review, String>) {
+        if std::mem::take(&mut self.standup.stopping) {
+            // The stopped run's answer (its `claude` was killed): not this screen's any more.
+            return;
+        }
         self.standup.phase = None;
         match result {
             Ok(review) => {
@@ -215,7 +250,7 @@ impl App {
     pub fn standup_text(&self) -> Option<String> {
         let saved = &self.standup.saved;
         let review = saved.review.as_ref()?;
-        let since = standup::window_start(saved.ran_on.unwrap_or_else(|| chrono::Local::now().date_naive()));
+        let since = standup::window_start(saved.ran_on.unwrap_or_else(self.today));
         Some(standup::summary_text(&review.summary, since))
     }
 
@@ -274,9 +309,12 @@ mod tests {
         let mut app = App::for_test(cfg(), Some(client(&base)));
         app.me = Some(jira::User { account_id: "me-1".into(), display_name: "Me".into() });
         app.review_runner = fake_review;
+        // The fixture's dates are fixed, so the run's "today" is too: Monday 2 November 2026, whose window opens
+        // the Friday before.
+        app.today = || chrono::NaiveDate::from_ymd_opt(2026, 11, 2).unwrap();
         app.apply(Action::StandupRun, &egui::Context::default());
         assert_eq!(app.standup.phase, Some(StandupPhase::Jira));
-        assert_eq!(app.standup.saved.last_run, Some(chrono::Local::now().date_naive()), "today counts as run, so it does not start again");
+        assert_eq!(app.standup.saved.last_run, Some((app.today)()), "today counts as run, so it does not start again");
         app.standup_auto_run();
         app.apply(Action::StandupRun, &egui::Context::default());
         pump(&mut app, 1);
@@ -301,6 +339,38 @@ mod tests {
         assert_eq!(app.standup.phase, None);
         assert!(app.standup.error.as_deref().is_some_and(|e| e.contains("was stopped")));
         assert_eq!(app.standup_keys().len(), 3);
+    }
+
+    fn slow_review(_: &crate::config::Standup, _: &str) -> Result<Review, String> {
+        // Like `run_review`: ends as soon as a stop is asked for.
+        let t = Instant::now();
+        while !standup::stop_requested() && t.elapsed() < std::time::Duration::from_secs(10) {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        Err(standup::STOPPED.into())
+    }
+
+    #[test]
+    fn stop_ends_the_run_and_drops_its_answer() {
+        let (base, _rx) = jira::tests::stub_server(vec![("POST", "/rest/api/3/search/jql", serde_json::json!({ "issues": [] }))]);
+        let mut app = App::for_test(cfg(), Some(client(&base)));
+        app.me = Some(jira::User::default());
+        app.review_runner = slow_review;
+        with_review(&mut app);
+        app.apply(Action::StandupRun, &egui::Context::default());
+        pump(&mut app, 1);
+        assert_eq!(app.standup.phase, Some(StandupPhase::Claude));
+        // The view pushes the Stop action; `apply` carries it out after the frame.
+        app.apply(Action::StandupStop, &egui::Context::default());
+        assert_eq!((app.standup.phase, app.standup.stopping), (None, true));
+        assert!(app.toast.as_ref().is_some_and(|t| t.text == "Stopped the review"));
+        app.apply(Action::StandupRun, &egui::Context::default());
+        assert_eq!(app.standup.phase, None, "no new run until the stopped one has ended");
+        pump(&mut app, 1);
+        assert_eq!((app.standup.phase, app.standup.stopping, app.standup.error.as_deref()), (None, false, None), "the stop is not an error");
+        assert_eq!(app.standup_keys().len(), 3, "the last good review stays");
+        app.standup_stop();
+        assert!(!app.standup.stopping, "nothing runs: nothing to stop");
     }
 
     #[test]
@@ -385,7 +455,10 @@ mod tests {
         with_review(&mut app);
         app.apply(Action::StandupAdd(Target::Backlog), &egui::Context::default());
         assert!(app.standup.adding.is_empty());
-        assert_eq!(app.toast.as_ref().map(|t| (t.text.as_str(), t.kind)), Some(("Read-only mode: create not sent to Jira", ToastKind::Info)));
+        assert_eq!(
+            app.toast.as_ref().map(|t| (t.text.as_str(), t.kind)),
+            Some(("Read-only mode is on, so the create was not sent. Restart without JIRA_TICKETS_READONLY to send changes.", ToastKind::Info))
+        );
         assert!(rx.try_recv().is_err());
     }
 

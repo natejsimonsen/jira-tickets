@@ -3,6 +3,7 @@
 mod adf;
 mod app;
 mod auth;
+mod avatar;
 mod cache;
 mod config;
 mod filter;

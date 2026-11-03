@@ -103,7 +103,8 @@ pub struct Initiative {
     pub jira_key: String,
 }
 
-const NO_LANE: &str = "No lane";
+/// The lane of an epic with no lane label: named after the timeline's "Subteam" column.
+pub const NO_LANE: &str = "No subteam";
 
 /// A custom field value as plain text: strings, `{"value": ..}` options, and ADF documents.
 fn field_text(v: &Value) -> Option<String> {
@@ -234,7 +235,7 @@ pub fn shipped(items: &[Initiative]) -> Vec<&Initiative> {
     items.iter().filter(|i| i.horizon == Horizon::Done).collect()
 }
 
-/// Lanes (alphabetical by lane name because no config is passed, "No lane" last, empty lanes omitted) holding items targeted in `year`, ordered by
+/// Lanes (alphabetical by lane name because no config is passed, NO_LANE last, empty lanes omitted) holding items targeted in `year`, ordered by
 /// start quarter (target when no start); plus the tray of non-Done items with no target. An item sits in a lane when its
 /// start..=target quarter range (start defaults to, and never falls after, the target; as `bar_span`) overlaps `year`.
 pub fn timeline(items: &[Initiative], year: i32) -> (Vec<(String, Vec<&Initiative>)>, Vec<&Initiative>) {
@@ -387,7 +388,7 @@ mod tests {
         let i = derive(&epic("CI-1", "New", "new", &["dashboards"]), &[], &cfg());
         assert_eq!(i.horizon, Horizon::Later);
         assert_eq!(i.health, Health::None);
-        assert_eq!(i.lane, "No lane");
+        assert_eq!(i.lane, NO_LANE);
         assert_eq!(i.target, None);
         let i2 = derive(&epic("CI-2", "Weird", "indeterminate", &["horizon:later"]), &[], &cfg());
         assert_eq!(i2.horizon, Horizon::Later, "label overrides status");
@@ -423,7 +424,7 @@ mod tests {
         let items = vec![
             mk("A", Horizon::Now, Health::OnTrack, None, "Platform", Some(4), &["Cost"]),
             mk("B", Horizon::Now, Health::OffTrack, Some("P0"), "Platform", Some(3), &["Cost", "Toil"]),
-            mk("C", Horizon::Next, Health::None, None, "No lane", None, &["Toil"]),
+            mk("C", Horizon::Next, Health::None, None, NO_LANE, None, &["Toil"]),
             mk("D", Horizon::Done, Health::None, None, "Platform", Some(2), &[]),
         ];
         let [now, next, later] = now_next_later(&items);

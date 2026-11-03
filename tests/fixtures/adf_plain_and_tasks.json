@@ -1,0 +1,52 @@
+{
+  "type": "doc",
+  "version": 1,
+  "content": [
+    { "type": "paragraph", "content": [
+      { "type": "text", "text": "blocks unset " },
+      { "type": "text", "text": "x/", "marks": [ { "type": "strike" } ] },
+      { "type": "text", "text": "-export and a real " },
+      { "type": "text", "text": "old", "marks": [ { "type": "strike" } ] },
+      { "type": "text", "text": " here." }
+    ] },
+    { "type": "taskList", "attrs": { "localId": "l" }, "content": [
+      { "type": "taskItem", "attrs": { "localId": "a", "state": "TODO" }, "content": [ { "type": "text", "text": "Find out" } ] },
+      { "type": "taskItem", "attrs": { "localId": "b", "state": "DONE" }, "content": [ { "type": "text", "text": "Determine if CSV2 data can do it" } ] },
+      { "type": "taskItem", "attrs": { "localId": "c", "state": "TODO" }, "content": [ { "type": "text", "text": "Evaluate options" } ] }
+    ] },
+    { "type": "paragraph", "content": [ { "type": "text", "text": "--------------------------------------------------------------------------------" } ] },
+    { "type": "paragraph", "content": [ { "type": "text", "text": "YOUR API TOKEN IS ABOUT TO EXPIRE" } ] },
+    { "type": "paragraph", "content": [ { "type": "text", "text": "Hi Team Support," } ] },
+    { "type": "paragraph", "content": [
+      { "type": "text", "text": "To avoid losing access to product APIs:" },
+      { "type": "hardBreak" },
+      { "type": "text", "text": "1. Visit " },
+      { "type": "text", "text": "https://id.example.com", "marks": [ { "type": "link", "attrs": { "href": "https://id.example.com" } } ] },
+      { "type": "hardBreak" },
+      { "type": "text", "text": "and create a new token." },
+      { "type": "hardBreak" },
+      { "type": "text", "text": "2. Replace the old one." },
+      { "type": "hardBreak" },
+      { "type": "text", "text": "3. Revoke your old token." }
+    ] },
+    { "type": "paragraph", "content": [
+      { "type": "text", "text": "Privacy Policy" },
+      { "type": "hardBreak" },
+      { "type": "text", "text": "•    Contact us" },
+      { "type": "hardBreak" },
+      { "type": "text", "text": "   " },
+      { "type": "hardBreak" },
+      { "type": "text", "text": "•    Read our blog" }
+    ] },
+    { "type": "table", "content": [
+      { "type": "tableRow", "content": [
+        { "type": "tableHeader", "content": [ { "type": "paragraph", "content": [ { "type": "text", "text": "Area" } ] } ] },
+        { "type": "tableHeader", "content": [ { "type": "paragraph", "content": [ { "type": "text", "text": "Reason" } ] } ] }
+      ] },
+      { "type": "tableRow", "content": [
+        { "type": "tableCell", "content": [ { "type": "paragraph", "content": [ { "type": "text", "text": "a " }, { "type": "text", "text": "b", "marks": [ { "type": "strong" } ] } ] } ] },
+        { "type": "tableCell", "content": [ { "type": "paragraph", "content": [ { "type": "text", "text": "one" } ] }, { "type": "paragraph", "content": [ { "type": "text", "text": "two" } ] } ] }
+      ] }
+    ] }
+  ]
+}

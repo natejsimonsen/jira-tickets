@@ -116,6 +116,8 @@ pub enum Action {
     MeOpen,
     /// Runs the standup review now (Run again).
     StandupRun,
+    /// Stops the running standup review (Stop).
+    StandupStop,
     /// Moves the Standup cursor down (or up) the suggested tickets.
     StandupMove(i32),
     /// Puts the Standup cursor on this card.
@@ -321,6 +323,7 @@ impl App {
             Action::MeMove(d) => self.me_move(d, ctx),
             Action::MeOpen => self.me_open(ctx),
             Action::StandupRun => self.standup_run(),
+            Action::StandupStop => self.standup_stop(),
             Action::StandupMove(d) => self.standup_move(d),
             Action::StandupFocus(i) => self.standup_focus(i),
             Action::StandupDismiss => self.standup_dismiss(),
@@ -366,8 +369,10 @@ impl App {
             }
             Action::OpenUrl(u) => open_url(&u),
             Action::Copy(t) => {
+                let toast = copied_toast(&t);
                 ctx.copy_text(t);
-                self.toast("Copied", false);
+                // A plain notice, like read-only refusals: the dot marks only a write's outcome (`views::toast_mark`).
+                self.toast_kind(toast, ToastKind::Info);
             }
             Action::Select(key) => {
                 self.selected = Some(key.clone());
@@ -393,6 +398,7 @@ impl App {
                 auth::forget_token();
                 self.token_error = None;
                 self.client = None;
+                crate::avatar::set_client(&self.ctx, None);
                 self.login = None;
                 self.me = None;
             }
@@ -561,7 +567,7 @@ impl App {
             Action::CycleTheme => {
                 let next = super::Appearance { theme: self.appearance.theme.next(), ..self.appearance };
                 self.set_appearance(next, ctx);
-                self.toast_kind(format!("Theme: {}", next.theme.name()), ToastKind::Info);
+                self.toast_kind(format!("Theme: {}", next.theme.label(ctx.system_theme())), ToastKind::Info);
             }
             Action::ToggleDensity => {
                 let next = super::Appearance { density: self.appearance.density.toggled(), ..self.appearance };
@@ -630,9 +636,23 @@ pub fn rank_target(rows: &[String], key: &str, delta: i32) -> Option<(String, bo
     Some((rows[j as usize].clone(), delta < 0))
 }
 
+/// The copy toast says what went to the clipboard: "Copied link to CI-2400" for an issue's browse link.
+pub fn copied_toast(text: &str) -> String {
+    match text.contains("/browse/").then(|| crate::filter::parse_goto(text, "")).flatten() {
+        Some(key) => format!("Copied link to {key}"),
+        None => "Copied".to_string(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_copy_toast_names_the_issue() {
+        assert_eq!(copied_toast("https://x.atlassian.net/browse/CI-2400"), "Copied link to CI-2400");
+        assert_eq!(copied_toast("Yesterday I shipped CI-1"), "Copied", "standup text is not a link");
+    }
 
     #[test]
     fn moves_start_from_the_selected_row() {

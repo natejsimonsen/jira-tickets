@@ -31,6 +31,22 @@ impl App {
             let _ = tx.send(Msg::BoardSprints(c.board_sprints(board, "active,future")));
         });
         self.refresh_done_recent();
+        self.load_done_counts();
+    }
+
+    /// Every member's done count, so each closed footer shows how many it holds. Only the ids come back: the list
+    /// itself loads when a footer opens.
+    fn load_done_counts(&mut self) {
+        for member in self.cfg.team.members.clone() {
+            if !should_load(self.client.is_some(), self.team.done_count_loading.contains(&member)) {
+                continue;
+            }
+            self.team.done_count_loading.insert(member.clone());
+            let jql = crate::teamview::jql_done_recent(&self.cfg.scope.projects, &member);
+            self.spawn(move |c, tx| {
+                let _ = tx.send(Msg::DoneCount { member, result: c.search(&jql, &["status"]).map(|v| v.len()) });
+            });
+        }
     }
 
     /// The Team footers' done lists go stale like any other list: a closed footer's cached list is dropped (it

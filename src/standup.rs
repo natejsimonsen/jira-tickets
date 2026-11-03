@@ -9,6 +9,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 /// The analysis prompt; `prompt` fills in its `{{…}}` placeholders.
@@ -244,9 +246,34 @@ fn local_dirs() -> Vec<PathBuf> {
     search_dirs(std::env::var_os("PATH").as_deref(), &home, &user, &flox)
 }
 
-/// Runs `bin args` with `input` on stdin and `path` as PATH, and returns its stdout. Stopped (and an error) after
-/// `timeout`; a non-zero exit is an error carrying the end of its output.
-pub fn run_with_timeout(bin: &Path, args: &[String], input: &str, path: &std::ffi::OsStr, timeout: Duration) -> Result<String, String> {
+/// What a stopped review ends with.
+pub const STOPPED: &str = "stopped";
+
+std::thread_local! {
+    /// The stop flag of the review running on this thread (`set_run_stop`).
+    static RUN_STOP: std::cell::RefCell<Arc<AtomicBool>> = std::cell::RefCell::default();
+}
+
+/// Gives this thread's review its stop flag: once it is set, `run_review` kills its `claude` within a poll
+/// (100 ms) and ends with `STOPPED`. Call it on the run's own thread, before the runner.
+pub fn set_run_stop(flag: Arc<AtomicBool>) {
+    RUN_STOP.with(|s| *s.borrow_mut() = flag);
+}
+
+/// This thread's review stop flag.
+fn run_stop() -> Arc<AtomicBool> {
+    RUN_STOP.with(|s| s.borrow().clone())
+}
+
+/// Whether this thread's review was asked to stop.
+pub fn stop_requested() -> bool {
+    run_stop().load(Ordering::Relaxed)
+}
+
+/// Runs `bin args` with `input` on stdin and `path` as PATH, and returns its stdout. Killed (and an error) after
+/// `timeout`, or with the error `STOPPED` once `stop` is set; a non-zero exit is an error carrying the end of its
+/// output.
+pub fn run_with_timeout(bin: &Path, args: &[String], input: &str, path: &std::ffi::OsStr, timeout: Duration, stop: &AtomicBool) -> Result<String, String> {
     let name = bin.display().to_string();
     let mut child = std::process::Command::new(bin)
         .args(args)
@@ -278,6 +305,11 @@ pub fn run_with_timeout(bin: &Path, args: &[String], input: &str, path: &std::ff
     let status = loop {
         match child.try_wait() {
             Ok(Some(st)) => break st,
+            Ok(None) if stop.load(Ordering::Relaxed) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(STOPPED.into());
+            }
             Ok(None) if start.elapsed() >= timeout => {
                 let _ = child.kill();
                 let _ = child.wait();
@@ -300,6 +332,10 @@ pub fn run_with_timeout(bin: &Path, args: &[String], input: &str, path: &std::ff
 
 /// Finds `claude`, runs the review, and parses its answer.
 pub fn run_review(cfg: &crate::config::Standup, prompt: &str) -> Result<Review, String> {
+    let stop = run_stop();
+    if stop.load(Ordering::Relaxed) {
+        return Err(STOPPED.into());
+    }
     let dirs = local_dirs();
     let home = dirs::home_dir().unwrap_or_default();
     let bin = find_binary(&cfg.claude, &home, &dirs, |p| p.is_file())
@@ -308,7 +344,7 @@ pub fn run_review(cfg: &crate::config::Standup, prompt: &str) -> Result<Review, 
     let mut path_dirs: Vec<PathBuf> = bin.parent().map(Path::to_path_buf).into_iter().collect();
     path_dirs.extend(dirs);
     let path: OsString = std::env::join_paths(path_dirs).map_err(|e| e.to_string())?;
-    let out = run_with_timeout(&bin, &claude_args(&cfg.model), prompt, &path, Duration::from_secs(cfg.timeout_secs.max(30)))?;
+    let out = run_with_timeout(&bin, &claude_args(&cfg.model), prompt, &path, Duration::from_secs(cfg.timeout_secs.max(30)), &stop)?;
     parse_review(&out)
 }
 
@@ -566,6 +602,292 @@ pub fn add_ticket(c: &Client, fields: Value, board: u64, target: Target) -> jira
     Ok((key, placed))
 }
 
+// ---------- Showing a suggestion ----------
+
+/// The simple Markdown the review writes (paragraphs, "- " and "1." lists, `#` headings, `> ` quotes, fenced code,
+/// `inline code`, **bold**, *italic*, [links](url) and bare URLs) as the rich-text renderer's document. A short
+/// line ending in ":" on its own ("Done when:") is a small heading. Nested lists are flattened.
+pub fn description_doc(md: &str) -> crate::adf::Doc {
+    use crate::adf::Block;
+    let mut blocks: Vec<Block> = Vec::new();
+    let mut para: Vec<String> = Vec::new();
+    let mut quote: Vec<String> = Vec::new();
+    // (ordered, items' text)
+    let mut list: Option<(bool, Vec<String>)> = None;
+    let mut code: Option<Vec<String>> = None;
+    let mut blank = false;
+
+    fn flush_para(para: &mut Vec<String>, blocks: &mut Vec<Block>) {
+        if para.is_empty() {
+            return;
+        }
+        let text = para.join(" ");
+        para.clear();
+        let t = text.trim();
+        match t.strip_suffix(':') {
+            Some(label) if t.chars().count() <= 60 && !label.contains(". ") && !label.trim().is_empty() => {
+                blocks.push(Block::Heading { level: 3, spans: inline_spans(label.trim()) })
+            }
+            _ => blocks.push(Block::Paragraph(inline_spans(t))),
+        }
+    }
+    fn flush_quote(quote: &mut Vec<String>, blocks: &mut Vec<Block>) {
+        if !quote.is_empty() {
+            blocks.push(Block::Quote(vec![Block::Paragraph(inline_spans(&quote.join(" ")))]));
+            quote.clear();
+        }
+    }
+    fn flush_list(list: &mut Option<(bool, Vec<String>)>, blocks: &mut Vec<Block>) {
+        if let Some((ordered, items)) = list.take() {
+            blocks.push(Block::List { ordered, items: items.iter().map(|t| vec![Block::Paragraph(inline_spans(t.trim()))]).collect() });
+        }
+    }
+
+    for line in md.lines() {
+        if let Some(lines) = code.as_mut() {
+            if line.trim_start().starts_with("```") {
+                blocks.push(Block::Code { lang: None, text: lines.join("\n") });
+                code = None;
+            } else {
+                lines.push(line.to_string());
+            }
+            continue;
+        }
+        let t = line.trim();
+        if t.starts_with("```") {
+            flush_para(&mut para, &mut blocks);
+            flush_quote(&mut quote, &mut blocks);
+            flush_list(&mut list, &mut blocks);
+            code = Some(Vec::new());
+            continue;
+        }
+        if t.is_empty() {
+            flush_para(&mut para, &mut blocks);
+            flush_quote(&mut quote, &mut blocks);
+            blank = true;
+            continue;
+        }
+        let was_blank = std::mem::take(&mut blank);
+        let hashes = t.chars().take_while(|c| *c == '#').count();
+        if (1..=6).contains(&hashes) && t[hashes..].starts_with(' ') {
+            flush_para(&mut para, &mut blocks);
+            flush_quote(&mut quote, &mut blocks);
+            flush_list(&mut list, &mut blocks);
+            blocks.push(Block::Heading { level: hashes as u8, spans: inline_spans(t[hashes..].trim()) });
+            continue;
+        }
+        if let Some(item) = list_item(t) {
+            flush_para(&mut para, &mut blocks);
+            flush_quote(&mut quote, &mut blocks);
+            if list.as_ref().is_some_and(|(o, _)| *o != item.0) {
+                flush_list(&mut list, &mut blocks);
+            }
+            list.get_or_insert_with(|| (item.0, Vec::new())).1.push(item.1.to_string());
+            continue;
+        }
+        if let Some(q) = t.strip_prefix('>') {
+            flush_para(&mut para, &mut blocks);
+            flush_list(&mut list, &mut blocks);
+            quote.push(q.trim().to_string());
+            continue;
+        }
+        // An indented line right under an item continues it.
+        if let Some((_, items)) = list.as_mut()
+            && !was_blank
+            && line.starts_with([' ', '\t'])
+            && let Some(last) = items.last_mut()
+        {
+            last.push(' ');
+            last.push_str(t);
+            continue;
+        }
+        flush_list(&mut list, &mut blocks);
+        flush_quote(&mut quote, &mut blocks);
+        para.push(t.to_string());
+    }
+    if let Some(lines) = code {
+        blocks.push(Block::Code { lang: None, text: lines.join("\n") });
+    }
+    flush_para(&mut para, &mut blocks);
+    flush_quote(&mut quote, &mut blocks);
+    flush_list(&mut list, &mut blocks);
+    crate::adf::Doc { blocks }
+}
+
+/// A list item's (ordered, text): "- x", "* x", "+ x", "1. x", "1) x".
+fn list_item(t: &str) -> Option<(bool, &str)> {
+    if let Some(rest) = t.strip_prefix("- ").or_else(|| t.strip_prefix("* ")).or_else(|| t.strip_prefix("+ ")) {
+        return Some((false, rest));
+    }
+    let digits = t.chars().take_while(char::is_ascii_digit).count();
+    if (1..=3).contains(&digits) {
+        let rest = &t[digits..];
+        if let Some(r) = rest.strip_prefix(". ").or_else(|| rest.strip_prefix(") ")) {
+            return Some((true, r));
+        }
+    }
+    None
+}
+
+/// One line of simple Markdown as spans: `code`, **bold**, *italic*, [text](url), and bare URLs as links.
+pub fn inline_spans(text: &str) -> Vec<crate::adf::Span> {
+    use crate::adf::Span;
+    let mut out: Vec<Span> = Vec::new();
+    let mut plain = String::new();
+    let flush = |plain: &mut String, out: &mut Vec<Span>| {
+        if !plain.is_empty() {
+            out.push(Span { text: std::mem::take(plain), ..Default::default() });
+        }
+    };
+    let mut rest = text;
+    while let Some(c) = rest.chars().next() {
+        let after = &rest[c.len_utf8()..];
+        if c == '`'
+            && let Some(end) = after.find('`')
+            && end > 0
+        {
+            flush(&mut plain, &mut out);
+            out.push(Span { text: after[..end].to_string(), code: true, ..Default::default() });
+            rest = &after[end + 1..];
+            continue;
+        }
+        if let Some(inner) = rest.strip_prefix("**")
+            && let Some(end) = inner.find("**")
+            && end > 0
+            && !inner.starts_with(' ')
+        {
+            flush(&mut plain, &mut out);
+            out.push(Span { text: inner[..end].to_string(), bold: true, ..Default::default() });
+            rest = &inner[end + 2..];
+            continue;
+        }
+        if c == '*'
+            && !after.starts_with([' ', '*'])
+            && let Some(end) = after.find('*')
+            && end > 0
+            && !after[..end].ends_with(' ')
+        {
+            flush(&mut plain, &mut out);
+            out.push(Span { text: after[..end].to_string(), italic: true, ..Default::default() });
+            rest = &after[end + 1..];
+            continue;
+        }
+        if c == '['
+            && let Some(close) = after.find("](")
+            && let Some(paren) = after[close + 2..].find(')')
+            && close > 0
+        {
+            let url = after[close + 2..close + 2 + paren].trim();
+            if url.contains("://") {
+                flush(&mut plain, &mut out);
+                out.push(Span { text: after[..close].to_string(), link: Some(url.to_string()), ..Default::default() });
+                rest = &after[close + 2 + paren + 1..];
+                continue;
+            }
+        }
+        plain.push(c);
+        rest = after;
+    }
+    flush(&mut plain, &mut out);
+    crate::adf::linkify(&out)
+}
+
+/// A list of plain lines (a summary section) as one bulleted list.
+pub fn bullets_doc(items: &[String]) -> crate::adf::Doc {
+    use crate::adf::Block;
+    let items = items.iter().map(|t| vec![Block::Paragraph(inline_spans(t.trim()))]).collect();
+    crate::adf::Doc { blocks: vec![Block::List { ordered: false, items }] }
+}
+
+/// A block's words as plain text: marks dropped, list items, tasks and table cells joined with "; ".
+fn block_text(b: &crate::adf::Block) -> String {
+    use crate::adf::Block;
+    let spans = |s: &[crate::adf::Span]| s.iter().map(|x| x.text.as_str()).collect::<String>();
+    let blocks = |bs: &[Block]| bs.iter().map(block_text).filter(|t| !t.is_empty()).collect::<Vec<_>>().join(" ");
+    let text = match b {
+        Block::Paragraph(s) | Block::Heading { spans: s, .. } => spans(s),
+        Block::List { items, .. } => items.iter().map(|i| blocks(i)).filter(|t| !t.is_empty()).collect::<Vec<_>>().join("; "),
+        Block::Tasks(items) => items.iter().map(|(_, i)| blocks(i)).filter(|t| !t.is_empty()).collect::<Vec<_>>().join("; "),
+        Block::Code { text, .. } => text.clone(),
+        Block::Quote(bs) | Block::Panel { blocks: bs, .. } => blocks(bs),
+        Block::Table(rows) => rows.iter().flat_map(|r| r.iter().map(|c| spans(c))).filter(|t| !t.trim().is_empty()).collect::<Vec<_>>().join("; "),
+        Block::Rule => String::new(),
+    };
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// A collapsed card's description in plain words: its first block that is not a heading (a heading only when
+/// nothing else has words), and whether the description holds more than that.
+pub fn preview_text(doc: &crate::adf::Doc) -> (String, bool) {
+    use crate::adf::Block;
+    let worded: Vec<&Block> = doc.blocks.iter().filter(|b| !block_text(b).is_empty()).collect();
+    let Some(first) = worded.iter().find(|b| !matches!(b, Block::Heading { .. })).or(worded.first()) else { return (String::new(), false) };
+    (block_text(first), worded.len() > 1)
+}
+
+/// The description as an opened card shows it: every heading at the smallest step (h3, body size), so none
+/// reaches the card title.
+pub fn card_doc(mut doc: crate::adf::Doc) -> crate::adf::Doc {
+    for b in &mut doc.blocks {
+        if let crate::adf::Block::Heading { level, .. } = b {
+            *level = (*level).max(3);
+        }
+    }
+    doc
+}
+
+/// Where to cut `chars` to keep at most `n`: at a word boundary (a hard cut at `n` when the first `n` hold none),
+/// trailing spaces and punctuation dropped. None when the whole text fits.
+fn word_cut(chars: &[char], n: usize) -> Option<usize> {
+    if chars.len() <= n {
+        return None;
+    }
+    let mut k = if chars[n].is_whitespace() { n } else { chars[..n].iter().rposition(|c| c.is_whitespace()).unwrap_or(n) };
+    while k > 0 && (chars[k - 1].is_whitespace() || ",;:.-–—".contains(chars[k - 1])) {
+        k -= 1;
+    }
+    Some(if k == 0 { n } else { k })
+}
+
+/// `text` cut to at most `n` characters at a word boundary, with "…" after it; the whole text when it fits.
+pub fn clip_words(text: &str, n: usize) -> String {
+    let chars: Vec<char> = text.trim().chars().collect();
+    match word_cut(&chars, n) {
+        Some(k) => chars[..k].iter().collect::<String>() + "…",
+        None => chars.into_iter().collect(),
+    }
+}
+
+/// A short name for a source link: "PR #129316", "Issue #12", "Commit 1a2b3c4", "Slack thread", "CI-9600", else the
+/// host.
+pub fn source_label(url: &str) -> String {
+    let u = url.trim().trim_end_matches('/');
+    let path = u.split_once("://").map_or(u, |(_, r)| r);
+    let (host, rest) = path.split_once('/').unwrap_or((path, ""));
+    let parts: Vec<&str> = rest.split(['/', '?', '#']).filter(|s| !s.is_empty()).collect();
+    if host.ends_with("github.com") {
+        for (i, w) in parts.iter().enumerate() {
+            let next = parts.get(i + 1).copied().unwrap_or_default();
+            match *w {
+                "pull" | "pulls" if next.chars().all(|c| c.is_ascii_digit()) && !next.is_empty() => return format!("PR #{next}"),
+                "issues" if next.chars().all(|c| c.is_ascii_digit()) && !next.is_empty() => return format!("Issue #{next}"),
+                "commit" if !next.is_empty() => return format!("Commit {}", next.chars().take(7).collect::<String>()),
+                _ => {}
+            }
+        }
+        return "GitHub".to_string();
+    }
+    if host.ends_with("slack.com") {
+        return "Slack thread".to_string();
+    }
+    if let Some(i) = parts.iter().position(|w| *w == "browse")
+        && let Some(key) = parts.get(i + 1)
+    {
+        return key.to_string();
+    }
+    if host.is_empty() { u.to_string() } else { host.trim_start_matches("www.").to_string() }
+}
+
 // ---------- What is kept between launches ----------
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -711,14 +1033,95 @@ mod tests {
     }
 
     #[test]
+    fn descriptions_become_rich_text() {
+        use crate::adf::{Block, Span};
+        let md = "First line\nsame paragraph with `code`.\n\nWhat the ticket should cover:\n- One **step**\n- Two, see https://x.y/z.\n  more of two\n\nDone when:\n1. A\n2) B\n\n> quoted\n\n```\nlet x = 1;\n```\n## Head";
+        let doc = description_doc(md);
+        let plain = |t: &str| Span { text: t.into(), ..Default::default() };
+        assert_eq!(doc.blocks[0], Block::Paragraph(vec![plain("First line same paragraph with "), Span { code: true, ..plain("code") }, plain(".")]));
+        assert_eq!(doc.blocks[1], Block::Heading { level: 3, spans: vec![plain("What the ticket should cover")] });
+        let Block::List { ordered: false, items } = &doc.blocks[2] else { panic!("{:?}", doc.blocks[2]) };
+        assert_eq!(items[0], vec![Block::Paragraph(vec![plain("One "), Span { bold: true, ..plain("step") }])]);
+        let Block::Paragraph(two) = &items[1][0] else { panic!() };
+        assert_eq!(two.iter().map(|s| s.text.as_str()).collect::<String>(), "Two, see https://x.y/z. more of two");
+        assert!(two.iter().any(|s| s.link.as_deref() == Some("https://x.y/z")), "bare URLs are links: {two:?}");
+        assert!(matches!(&doc.blocks[3], Block::Heading { .. }));
+        assert!(matches!(&doc.blocks[4], Block::List { ordered: true, items } if items.len() == 2));
+        assert!(matches!(&doc.blocks[5], Block::Quote(_)));
+        assert_eq!(doc.blocks[6], Block::Code { lang: None, text: "let x = 1;".into() });
+        assert_eq!(doc.blocks[7], Block::Heading { level: 2, spans: vec![plain("Head")] });
+        assert_eq!(doc.blocks.len(), 8);
+        // A sentence that ends in a colon is still a paragraph; a list after a paragraph with no blank line splits.
+        let doc = description_doc("This is long enough to be a sentence. It ends with a colon:\n- a");
+        assert!(matches!(&doc.blocks[0], Block::Paragraph(_)) && matches!(&doc.blocks[1], Block::List { .. }));
+        assert!(description_doc("").blocks.is_empty());
+    }
+
+    #[test]
+    fn inline_markdown() {
+        let s = inline_spans("see [the PR](https://g/p/1) and *this* but not 2 * 3 or snake_case");
+        let texts: Vec<_> = s.iter().map(|x| (x.text.as_str(), x.italic, x.link.as_deref())).collect();
+        assert_eq!(
+            texts,
+            [
+                ("see ", false, None),
+                ("the PR", false, Some("https://g/p/1")),
+                (" and ", false, None),
+                ("this", true, None),
+                (" but not 2 * 3 or snake_case", false, None)
+            ]
+        );
+        assert_eq!(inline_spans("a ` b").iter().map(|x| x.text.as_str()).collect::<String>(), "a ` b", "an unclosed tick is text");
+    }
+
+    #[test]
+    fn clips_end_at_a_word_with_an_ellipsis() {
+        assert_eq!(clip_words("not fixing the failures", 18), "not fixing the…");
+        assert_eq!(clip_words("not fixing the failures", 14), "not fixing the…", "a cut at a word's end keeps it");
+        assert_eq!(clip_words("The PR, and more", 7), "The PR…", "no comma before the ellipsis");
+        assert_eq!(clip_words("short", 10), "short");
+        assert_eq!(clip_words("abcdefgh", 4), "abcd…", "no space: a hard cut");
+    }
+
+    #[test]
+    fn previews_are_the_first_worded_block_in_plain_words() {
+        let doc = description_doc("Fixes the **TIME_WAIT** port\nreuse.\n\n- a\n- b");
+        assert_eq!(preview_text(&doc), ("Fixes the TIME_WAIT port reuse.".to_string(), true));
+        assert_eq!(preview_text(&description_doc("Done when:\n- a `x`\n- b")), ("a x; b".to_string(), true), "a leading heading is skipped");
+        assert_eq!(preview_text(&description_doc("Only.")), ("Only.".to_string(), false));
+        assert_eq!(preview_text(&description_doc("## Head")), ("Head".to_string(), false));
+        assert_eq!(preview_text(&description_doc("")), (String::new(), false));
+        assert!(bullets_doc(&["x".into()]).blocks.len() == 1);
+    }
+
+    #[test]
+    fn opened_cards_show_headings_at_the_smallest_step() {
+        let doc = card_doc(description_doc("# Big\n\n## Mid\n\nDone when:\n- a"));
+        let levels: Vec<u8> = doc.blocks.iter().filter_map(|b| if let crate::adf::Block::Heading { level, .. } = b { Some(*level) } else { None }).collect();
+        assert_eq!(levels, [3, 3, 3]);
+    }
+
+    #[test]
+    fn source_links_get_short_names() {
+        assert_eq!(source_label("https://github.com/acme-corp/widget-stores/pull/129316"), "PR #129316");
+        assert_eq!(source_label("https://github.com/o/r/pull/12/files"), "PR #12");
+        assert_eq!(source_label("https://github.com/o/r/issues/9"), "Issue #9");
+        assert_eq!(source_label("https://github.com/o/r/commit/1a2b3c4d5e"), "Commit 1a2b3c4");
+        assert_eq!(source_label("https://acme.slack.com/archives/C1/p123"), "Slack thread");
+        assert_eq!(source_label("https://x.atlassian.net/browse/CI-9600"), "CI-9600");
+        assert_eq!(source_label("https://www.example.com/a"), "example.com");
+    }
+
+    #[test]
     fn prompt_fills_every_placeholder() {
-        let p = prompt("Nate", d("2026-11-02"), "- CI-1 {{USER}}\n");
-        assert!(p.contains("Nate's standup"));
+        let p = prompt("Sam", d("2026-11-02"), "- CI-1 {{USER}}\n");
+        assert!(p.contains("Sam's standup"));
         assert!(p.contains("from 2026-10-30 00:00 local time up to now (2026-11-02)"));
         assert!(p.contains("after:2026-10-29"), "Slack's after: is exclusive");
         assert!(p.contains("- CI-1 {{USER}}"), "activity text is not substituted");
         let rest = p.replace("- CI-1 {{USER}}", "");
         assert!(!rest.contains("{{"), "no placeholder left: {rest}");
+        assert!(p.contains("under 70 characters") && p.contains("simple Markdown"), "short titles, simple descriptions");
     }
 
     #[test]
@@ -774,21 +1177,32 @@ mod tests {
     fn run_with_timeout_feeds_stdin_and_reports_failures() {
         let dir = tempfile::tempdir().unwrap();
         let path = std::ffi::OsString::from("/usr/bin:/bin");
+        let go = AtomicBool::new(false);
         let echo = script(dir.path(), "printf '%s|' \"$1\" \"$PATH\"; cat");
-        let out = run_with_timeout(&echo, &["-p".into()], "the prompt", &path, Duration::from_secs(10)).unwrap();
+        let out = run_with_timeout(&echo, &["-p".into()], "the prompt", &path, Duration::from_secs(10), &go).unwrap();
         assert_eq!(out, "-p|/usr/bin:/bin|the prompt");
         let fail = script(dir.path(), "echo boom >&2; exit 3");
-        let e = run_with_timeout(&fail, &[], "", &path, Duration::from_secs(10)).unwrap_err();
+        let e = run_with_timeout(&fail, &[], "", &path, Duration::from_secs(10), &go).unwrap_err();
         assert!(e.contains("boom") && e.contains('3'), "{e}");
         let env_err = script(dir.path(), "echo '{\"type\":\"result\",\"is_error\":true,\"result\":\"Credit balance is too low\"}'; exit 1");
-        let e = run_with_timeout(&env_err, &[], "", &path, Duration::from_secs(10)).unwrap_err();
+        let e = run_with_timeout(&env_err, &[], "", &path, Duration::from_secs(10), &go).unwrap_err();
         assert!(e.contains("Credit balance is too low"), "{e}");
         let slow = script(dir.path(), "sleep 5");
         let t = Instant::now();
-        let e = run_with_timeout(&slow, &[], "", &path, Duration::from_millis(300)).unwrap_err();
+        let e = run_with_timeout(&slow, &[], "", &path, Duration::from_millis(300), &go).unwrap_err();
         assert!(e.contains("was stopped"), "{e}");
         assert!(t.elapsed() < Duration::from_secs(4), "killed, not waited out");
-        let e = run_with_timeout(&dir.path().join("missing"), &[], "", &path, Duration::from_secs(1)).unwrap_err();
+        // Stop kills the child at once, long before its timeout.
+        let stop = Arc::new(AtomicBool::new(false));
+        let flag = stop.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(200));
+            flag.store(true, Ordering::Relaxed);
+        });
+        let t = Instant::now();
+        assert_eq!(run_with_timeout(&slow, &[], "", &path, Duration::from_secs(60), &stop).unwrap_err(), STOPPED);
+        assert!(t.elapsed() < Duration::from_secs(4), "killed on stop");
+        let e = run_with_timeout(&dir.path().join("missing"), &[], "", &path, Duration::from_secs(1), &go).unwrap_err();
         assert!(e.starts_with("couldn't start"), "{e}");
     }
 

@@ -225,7 +225,7 @@ Roadmap time is quarters, not dates. All settings live under `[roadmap]` in the 
 | Target quarter | Label `target:YYYY-Qn`, for example `target:2026-Q4` | `target_field`: `duedate` or a custom field holding a date or `YYYY-Qn`; a date maps to its quarter. When set, the label is not read |
 | Start quarter | Label `start:YYYY-Qn`; unset means the bar covers the target quarter only | `start_field`, as `target_field` |
 | Initiative set | Label `initiative_label` (default `roadmap`); with no epic labelled, every epic without "(ongoing)" | `initiative_label` |
-| Lane | `lanes` maps a label to a lane name (default `PLAT = "Platform"`); epics with no lane label go to "No lane" | Add entries to `lanes` |
+| Lane | `lanes` maps a label to a lane name (default `PLAT = "Platform"`); epics with no lane label go to "No subteam" | Add entries to `lanes` |
 | Latest update | Newest epic comment: author, date, first paragraph | None |
 | Confidence, next milestone, definition of done | Not set | `confidence_field`, `next_milestone_field`, `definition_of_done_field` |
 | Metrics | Labels `metric:<name>`, for example `metric:Deployment Frequency` | None |

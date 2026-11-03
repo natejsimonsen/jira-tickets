@@ -36,7 +36,7 @@ For each PR decide its true state, not just that it exists:
 - **Abandoned**: closed without merging.
 
 A PR is tracked when its branch name, title or body names a Jira key (for example `CI-3770` in
-`nate.CI-3770.fix-rollouts`), or when it plainly belongs to one of the Jira issues above.
+`sam.CI-3770.fix-login`), or when it plainly belongs to one of the Jira issues above.
 
 ### Slack (use the Slack MCP tools)
 
@@ -73,12 +73,12 @@ Reply with one JSON object and nothing else: no prose before or after it, no cod
   },
   "suggestions": [
     {
-      "title": "Short imperative summary, at most 80 characters",
-      "description": "Two to five sentences: what the work is, why it matters, and what done looks like",
+      "title": "Short imperative summary, under 70 characters",
+      "description": "A short paragraph on what the work is and why it matters, then what done looks like as a few \"- \" bullets",
       "issue_type": "Task",
       "source_kind": "github",
       "source_url": "https://github.com/org/repo/pull/123",
-      "reason": "Why this needs a ticket: the PR names no ticket and none above covers it",
+      "reason": "One sentence: why this needs a ticket, such as the PR naming no ticket",
       "confidence": 0.8,
       "suggested_target": "current_sprint"
     }
@@ -94,5 +94,11 @@ Rules:
 - `source_url` is the PR, commit, Slack message permalink, or Jira issue the suggestion comes from. Always set it.
 - `confidence` is a number from 0 to 1: how sure you are that this is untracked work that deserves a ticket.
 - `suggested_target` is `current_sprint`, `next_sprint` or `backlog`.
+- `title` is under 70 characters: an imperative phrase, no ticket key, no trailing period.
+- `description` is short and in simple Markdown: one or two short paragraphs (two to three sentences each), then
+  "- " bullets for the steps or the done-when list (at most five, one line each). Separate blocks with a blank line.
+  Use only paragraphs, "- " or "1." lists, `inline code` and [links](https://example.com): no headings, tables or
+  bold. Keep it under 80 words.
+- `reason` is one sentence of at most 20 words.
 - Standup lines are plain sentences of at most 15 words, with no Markdown.
 - Use empty arrays, never null.
