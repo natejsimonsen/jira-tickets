@@ -438,8 +438,8 @@ fn visuals(p: &Palette) -> Visuals {
 }
 
 /// Placeholder text: a step below `muted` in both themes (light #63625e under muted #585753, 1.19:1 apart; dark
-/// #9c9b96, under the dialog's lifted muted #b3b2ad), so an empty field never reads as filled in; light 4.79:1 on
-/// the #e4e4df input, dark 4.85:1 on the #2e2e2c dialog field (#979691 was 4.59; round 13 L2).
+/// #9c9b96, under the dialog's lifted muted #b3b2ad), so an empty field never reads as filled in; 5.35:1 light and
+/// 5.45:1 dark on the one field fill (`Palette::field`; #979691 was 4.59; round 13 L2).
 pub fn placeholder(p: &Palette) -> Color32 {
     p.placeholder()
 }
@@ -463,7 +463,7 @@ pub const AVATAR_GAP: f32 = 8.0;
 pub const DARK_SEGMENT: Color32 = hex(0x424240);
 
 /// How opaque a disabled control is drawn: egui's `disabled_alpha` (every `add_enabled(false, ..)` widget) and the
-/// disabled primary (`views::primary_disabled_colors`), so every disabled button is one look, the resting secondary
+/// disabled primary (`components::primary_button_off`), so every disabled button is one look, the resting secondary
 /// button faded. 0.7 keeps its label ≥ 5.5:1 on every page, card, selection and dialog fill in both themes (egui's
 /// 0.5 read 2.2–3.2:1).
 pub const DISABLED_ALPHA: f32 = 0.7;
@@ -492,54 +492,15 @@ const MUTED_LIFTS_DARK: [Color32; 3] = [hex(0xb3b2ad), hex(0xc0bfba), hex(0xcccb
 /// The contrast `muted` must keep on a fill before `muted_on` lifts it (round 8: 4.5 → 5.0 in both themes).
 pub const MUTED_MIN: f32 = 5.0;
 
-/// Dark surfaces' field (the sign-in panel, the composer): 1.15:1 under `surface` (it used to be the page `bg`,
-/// 1.10, so a field there read as a hole to the page).
-const DARK_SURFACE_FIELD: Color32 = hex(0x121211);
-/// The sunken field on the dark page (the list pane's search box): the ramp's floor, 1.09:1 under `bg`. Nothing in
-/// the ramp clears INPUT_STEP under `bg` short of near-black, so the page field takes the floor; the ruled range is
-/// 1.09–1.11 (round 11 L4, final: #0a0a09 at 1.104 and #0c0c0b both sit in it).
-const DARK_SUNKEN: Color32 = hex(0x0c0c0b);
-/// The dark dialog's field: ≈1.16:1 under DARK_DIALOG, so dark inputs are one even step everywhere (the
-/// dialog's field was `surface`, 1.39).
-const DARK_DIALOG_FIELD: Color32 = hex(0x2e2e2c);
-
-/// The one light page input fill, on the page and on white (sign-in, composer): 1.12:1 past the button fill
-/// (`surface_2`), so a field never reads as a button (#eaeae6 was 1.06).
-const LIGHT_INPUT: Color32 = hex(0xe4e4df);
-/// The light field inside a modal dialog (go-to, pickers): one step toward white from LIGHT_INPUT, so it stands
-/// 1.12:1 off the #dfdfda cursor row (#e4e4df was 1.05 and read as its sibling); placeholder 5.11 on it.
-const LIGHT_DIALOG_INPUT: Color32 = hex(0xebebe7);
-/// An input stands at least this far under its container (dark measured 1.08 page / 1.10 surface before round 10;
-/// light already cleared it everywhere).
-const INPUT_STEP: f32 = 1.12;
-
-/// One fill rule for every text input on the page: the first neutral step at least INPUT_STEP darker than the
-/// container it sits on (a sunken field), never the button fill (`surface_2`), else the ramp's darkest step, in
-/// both themes. Light: white and bg → #e4e4df; dark: dialog → #2e2e2c, surface → #121211, bg → #0c0c0b (the
-/// floor). Modal dialogs use `dialog_input_fill`.
-pub fn input_fill(container: Color32, p: &Palette) -> Color32 {
-    let ramp: &[Color32] = if p.dark {
-        &[DARK_DIALOG, DARK_DIALOG_FIELD, p.surface_2, p.surface, p.bg, DARK_SURFACE_FIELD, DARK_SUNKEN]
-    } else {
-        &[p.surface, p.bg, p.surface_2, LIGHT_INPUT]
-    };
-    let lum = |c: Color32| contrast(c, Color32::BLACK);
-    ramp.iter()
-        .copied()
-        .filter(|&c| c != p.surface_2)
-        .find(|&c| lum(c) < lum(container) && contrast(c, container) >= INPUT_STEP)
-        .unwrap_or(*ramp.last().unwrap_or(&container))
-}
-
-/// A field inside a modal dialog: light #ebebe7 (dialogs only; page fields keep #e4e4df), dark the input rule
-/// under the dialog fill (#2e2e2c).
+/// A field inside a modal dialog: the page's one field fill (`Palette::field`), so every input in a theme is one
+/// surface (round 5: search, dialog and sign-in fields were three fills).
 pub fn dialog_input_fill(p: &Palette) -> Color32 {
-    if p.dark { input_fill(DARK_DIALOG, p) } else { LIGHT_DIALOG_INPUT }
+    p.field()
 }
 
-/// The light-theme chip step on white (code chips and blocks, help keys): 1.20:1 off the page and 1.07 off the
-/// #e4e4df page input, so code never reads as a field (#e3e3de was 1.01 off it; round 11 L2). Chips inside a card
-/// step on to #dfdfda (`chip_fill_on`).
+/// The light-theme chip step on white (code chips and blocks, help keys): 1.20:1 off the page and a step under the
+/// #f0f0ed field fill, so code never reads as a field (round 11 L2). Chips inside a card step on to #dfdfda
+/// (`chip_fill_on`).
 const LIGHT_CHIP: Color32 = hex(0xebebe7);
 /// The dark page's code chip: the first step past `surface_2`, 1.29:1 off the page (light's #ebebe7 is 1.20),
 /// so page code is quieter than the card chip and the dialog fill it used to share (#383836, 1.39; round 14 L1).
@@ -1258,7 +1219,7 @@ mod tests {
         }
         assert_eq!(chip_fill_on(LIGHT.surface, &LIGHT), hex(0xebebe7), "code on the light page");
         assert!(contrast(LIGHT_CHIP, LIGHT.surface) >= 1.19, "{:.3} off white", contrast(LIGHT_CHIP, LIGHT.surface));
-        assert!(contrast(LIGHT_CHIP, LIGHT_INPUT) >= 1.06, "{:.3} off the input", contrast(LIGHT_CHIP, LIGHT_INPUT));
+        assert!(contrast(LIGHT_CHIP, LIGHT.field()) >= 1.04, "{:.3} off the field", contrast(LIGHT_CHIP, LIGHT.field()));
         for p in [&LIGHT, &DARK] {
             for container in [p.surface, p.surface_2] {
                 assert!(contrast(p.text, chip_fill_on(container, p)) >= 7.0, "code text on its chip (dark={})", p.dark);
@@ -1417,52 +1378,15 @@ mod tests {
     }
 
     #[test]
-    fn inputs_sit_one_step_under_their_container() {
-        assert_eq!(input_fill(LIGHT.bg, &LIGHT), LIGHT_INPUT, "search box on the list pane: #e4e4df");
-        assert_eq!(input_fill(LIGHT.surface, &LIGHT), LIGHT_INPUT, "dialog, sign-in panel, composer: the search box's fill");
-        assert_eq!(input_fill(DARK_DIALOG, &DARK), DARK_DIALOG_FIELD, "one step under the dialog");
-        assert_eq!(input_fill(DARK.surface, &DARK), hex(0x121211), "dark surface field (sign-in, composer)");
-        assert_eq!(input_fill(DARK.bg, &DARK), hex(0x0c0c0b), "dark page field: the ramp's floor");
+    fn dialog_fields_share_the_page_field_fill() {
+        // Round 5: search, dialog and sign-in fields were three fills; a dialog field is now `Palette::field`.
         for p in [&LIGHT, &DARK] {
-            for c in [p.bg, p.surface, if p.dark { DARK_DIALOG } else { p.surface }] {
-                let f = input_fill(c, p);
-                assert!(contrast(f, Color32::BLACK) < contrast(c, Color32::BLACK), "darker than its container");
-                assert_ne!(f, p.surface_2, "never the button fill (dark={})", p.dark);
-                assert!(contrast(p.text, f) >= 7.0 && contrast(placeholder(p), f) >= 4.5, "dark={} {c:?}", p.dark);
-            }
+            let f = dialog_input_fill(p);
+            assert_eq!(f, p.field(), "dark={}", p.dark);
+            assert!(contrast(placeholder(p), f) >= 4.5, "dark={}: {:.2}", p.dark, contrast(placeholder(p), f));
+            assert!(contrast(p.text, f) >= 7.0, "dark={}", p.dark);
+            assert!(contrast(f, crate::views::dialog_fill(p)) > 1.05, "it shows on the dialog, dark={}", p.dark);
         }
-        assert!(contrast(placeholder(&DARK), input_fill(DARK_DIALOG, &DARK)) >= 4.5);
-    }
-
-    #[test]
-    fn dark_input_steps_match_light() {
-        // Round 10 (L1): dark fields stood 1.08 page / 1.10 surface / 1.16 dialog under their containers, light
-        // 1.19 / 1.28 / 1.28.
-        let step = |c: Color32| contrast(input_fill(c, &DARK), c);
-        assert!((1.09..=1.11).contains(&step(DARK.bg)), "page {:.3}: the ruled 1.09–1.11", step(DARK.bg));
-        assert!(step(DARK.surface) >= INPUT_STEP && step(DARK.surface) < 1.16, "surface {:.3}", step(DARK.surface));
-        assert_eq!(dialog_input_fill(&DARK), hex(0x2e2e2c), "dialog field unchanged");
-        assert!(contrast(dialog_input_fill(&DARK), DARK_DIALOG) >= INPUT_STEP, "dialog {:.3}", contrast(dialog_input_fill(&DARK), DARK_DIALOG));
-        assert_ne!(input_fill(DARK.surface, &DARK), DARK.bg, "a surface field is not the page");
-        for fill in [input_fill(DARK.bg, &DARK), input_fill(DARK.surface, &DARK), dialog_input_fill(&DARK)] {
-            assert!(contrast(placeholder(&DARK), fill) >= 4.5, "{fill:?}: {:.2}", contrast(placeholder(&DARK), fill));
-            assert!(contrast(DARK.text, fill) >= 7.0);
-        }
-        // Light is unchanged by the 1.12 step.
-        assert_eq!(input_fill(LIGHT.bg, &LIGHT), LIGHT_INPUT);
-        assert_eq!(input_fill(LIGHT.surface, &LIGHT), LIGHT_INPUT);
-    }
-
-    #[test]
-    fn light_dialog_fields_step_off_the_cursor_row() {
-        // L4: the light dialog field moves toward white, apart from the #dfdfda cursor row (1.05 before).
-        let f = dialog_input_fill(&LIGHT);
-        assert_eq!(f, hex(0xebebe7));
-        assert!(contrast(f, LIGHT.selected_row) >= 1.1, "{:.3}", contrast(f, LIGHT.selected_row));
-        assert!(contrast(f, LIGHT.surface) >= INPUT_STEP, "under the white dialog");
-        assert!(contrast(placeholder(&LIGHT), f) >= 5.0, "{:.2}", contrast(placeholder(&LIGHT), f));
-        assert!(contrast(LIGHT.text, f) >= 7.0);
-        assert_ne!(f, LIGHT.surface_2);
     }
 
     #[test]
@@ -1476,16 +1400,15 @@ mod tests {
     #[test]
     fn placeholders_read_apart_from_typed_text() {
         assert_eq!(placeholder(&DARK), hex(0x9c9b96));
-        // L2: 4.85 on the dark dialog field, and still a step under the dialog's muted.
+        // L2: readable on the dark dialog field, and still a step under the dialog's muted.
         assert!(contrast(placeholder(&DARK), dialog_input_fill(&DARK)) >= 4.8, "{:.2}", contrast(placeholder(&DARK), dialog_input_fill(&DARK)));
         assert!(contrast(placeholder(&DARK), DARK.text) > contrast(muted_on(DARK_DIALOG, &DARK), DARK.text), "under the dialog muted");
         assert_eq!(placeholder(&LIGHT), hex(0x63625e));
-        assert!(contrast(placeholder(&LIGHT), LIGHT_INPUT) >= 4.75, "light page input");
-        assert!(contrast(LIGHT_INPUT, LIGHT.surface_2) >= 1.1, "a light field never reads as a button");
+        assert!(contrast(placeholder(&LIGHT), LIGHT.field()) >= 4.75, "light page input");
         for p in [&LIGHT, &DARK] {
             assert_ne!(placeholder(p), p.muted, "placeholders are dimmer than muted (dark={})", p.dark);
             // On every field fill, and the surfaces around them.
-            for fill in [p.bg, p.surface, p.surface_2, input_fill(p.bg, p), input_fill(p.surface, p), input_fill(DARK_DIALOG, p)] {
+            for fill in [p.bg, p.surface, p.surface_2, p.field(), dialog_input_fill(p)] {
                 assert!(contrast(placeholder(p), fill) >= 4.5, "dark={}: {:.2}", p.dark, contrast(placeholder(p), fill));
             }
         }
@@ -1711,7 +1634,7 @@ mod tests {
             let sel = p.selection();
             // A blue cast: the accent's hue, not another grey.
             assert!(i32::from(sel.b()) - i32::from(sel.r()) >= 15, "dark={}: {sel:?}", p.dark);
-            for neutral in [p.surface, p.surface_2, p.hover_row, p.selected_row, chip_fill_on(p.surface, p), input_fill(p.surface, p)] {
+            for neutral in [p.surface, p.surface_2, p.hover_row, p.selected_row, chip_fill_on(p.surface, p), p.field()] {
                 assert_ne!(sel, neutral, "dark={}", p.dark);
             }
             // A quiet tint: the accent ring carries "selected"; the fill only has to read as a different surface.
@@ -1853,7 +1776,7 @@ mod tests {
         // The resting secondary button (button_fill, `text`) faded to DISABLED_ALPHA over every fill a button sits on.
         let fade = |c: Color32, under: Color32| over(c.gamma_multiply(DISABLED_ALPHA), under);
         for p in [&LIGHT, &DARK] {
-            for under in [p.bg, p.surface, p.surface_2, p.selection(), if p.dark { DARK_DIALOG } else { LIGHT_INPUT }] {
+            for under in [p.bg, p.surface, p.surface_2, p.selection(), if p.dark { DARK_DIALOG } else { p.field() }] {
                 let fill = fade(button_fill(p), under);
                 let label = fade(p.text, fill);
                 assert!(contrast(label, fill) >= 5.0, "dark={} on {under:?}: {:.2}", p.dark, contrast(label, fill));

@@ -1,10 +1,12 @@
 //! The Standup screen: one centred reading column. A toolbar row (the window line, Copy and the run or Stop
-//! button), the run's progress or error, the standup summary, one quiet card per suggested ticket (title, meta
-//! line, a short description, the adds), then the review's own notes.
+//! button), the run's progress or error, the standup summary, the window's tickets as Jira-style cards (done since
+//! the window opened, then in progress), one quiet card per suggested ticket (title, meta line, a short
+//! description, the adds and Dismiss), then the review's own notes.
 
 use crate::app::{Action, App, StandupPhase};
 use crate::keys::{StandupHint, StandupRun};
 use crate::standup::{self, Saved, Suggestion, Target};
+use crate::teamview::Card;
 use crate::theme::{self, Palette};
 use crate::views::components as c;
 use crate::views::{adf_view, button, primary_button, text_link};
@@ -106,7 +108,7 @@ pub fn run_button(running: bool, has_review: bool, failed: bool) -> Option<(Stan
 pub fn hint(app: &App) -> StandupHint {
     let s = &app.standup;
     StandupHint {
-        cards: !app.standup_keys().is_empty(),
+        cards: app.standup_cursor().is_some(),
         copy: s.saved.review.is_some(),
         run: run_key(s.phase.is_some(), s.saved.review.is_some(), s.error.is_some()),
         read_only: crate::jira::READ_ONLY.load(std::sync::atomic::Ordering::Relaxed),
@@ -228,20 +230,37 @@ fn page(app: &mut App, ui: &mut Ui, p: &Palette, acts: &mut Vec<Action>) {
             acts.push(Action::StandupRun);
         }
     }
+    // The card the cursor is on is brought into view when the cursor moves, never on opening the screen: the
+    // page opens at its top, the summary first.
+    let cursor = app.standup_cursor();
+    let last_id = egui::Id::new("standup-last-cursor");
+    let last = ui.data(|d| d.get_temp::<Option<usize>>(last_id));
+    ui.data_mut(|d| d.insert_temp(last_id, cursor));
+    let moved = moved_since(last, cursor);
     let Some(review) = app.standup.saved.review.clone() else {
-        // No review: the page's state, in the same block as a running review's.
+        // No review: the page's state, in the same block as a running review's; the tickets still show under it.
         if app.standup.phase.is_none() && app.standup.error.is_none() {
             ui.add_space(sp.section_gap);
             let (msg, hint) = no_cards_text(&app.standup.saved);
             status(ui, p, msg, hint, false);
         }
+        tickets(app, ui, p, cursor, moved, acts);
+        ui.add_space(sp.section_gap);
         return;
     };
-    // Summary first, then the suggestions (or why there are none), then the review's own notes.
-    summary(ui, p, &review);
-    cards(app, ui, p, acts);
+    // Summary first, then the window's tickets, then the suggestions (or why there are none), then the review's own
+    // notes.
+    summary(app, ui, p, &review, acts);
+    tickets(app, ui, p, cursor, moved, acts);
+    cards(app, ui, p, cursor, moved, acts);
     notes(ui, p, &review);
     ui.add_space(sp.section_gap);
+}
+
+/// Whether the cursor moved since the last frame, so its card is scrolled into view. Not on the screen's first
+/// frame (`last` unknown), so opening the screen keeps the page at its top.
+pub fn moved_since(last: Option<Option<usize>>, now: Option<usize>) -> bool {
+    last.is_some_and(|l| l != now) && now.is_some()
 }
 
 /// Wrapped secondary text (reasons, notes, notices, hints): `small`, at the prose line height, so every wrapped
@@ -286,12 +305,23 @@ fn toolbar(app: &App, ui: &mut Ui, p: &Palette, acts: &mut Vec<Action>) -> bool 
 /// A running review: the phase and its clock; then what happens to the review on screen.
 fn progress(app: &App, ui: &mut Ui, p: &Palette) {
     let (Some(phase), Some(started)) = (app.standup.phase, app.standup.started) else { return };
-    let note = match (&app.standup.saved.review, ran_label(&app.standup.saved)) {
-        (None, _) => "Your standup and suggested tickets appear here when it finishes, usually in a minute or two.".to_string(),
-        (Some(_), Some(at)) => format!("Below is the last review, from {at}. It is replaced when this run finishes; tickets you add from it now stay added."),
-        (Some(_), None) => "Below is the last review. It is replaced when this run finishes; tickets you add from it now stay added.".to_string(),
-    };
+    let read_only = crate::jira::READ_ONLY.load(std::sync::atomic::Ordering::Relaxed);
+    let note = running_note(app.standup.saved.review.is_some(), ran_label(&app.standup.saved).as_deref(), read_only);
     status(ui, p, &progress_text(phase, app.standup.activity_count, started.elapsed().as_secs()), &note, true);
+}
+
+/// What happens to the review on screen while a run goes. Only a writable app says that tickets added from it are
+/// kept: in read-only mode nothing can be added.
+pub fn running_note(has_review: bool, ran: Option<&str>, read_only: bool) -> String {
+    if !has_review {
+        return "Your standup and suggested tickets appear here when it finishes, usually in a minute or two.".to_string();
+    }
+    let last = match ran {
+        Some(at) => format!("Below is the last review, from {at}."),
+        None => "Below is the last review.".to_string(),
+    };
+    let adds = if read_only { "" } else { " Tickets you add from it before then are still created." };
+    format!("{last} The new review replaces it when this run finishes.{adds}")
 }
 
 /// The page's state block (no review yet, or a review running): the state in `text` body, then what it means in
@@ -310,7 +340,8 @@ fn status(ui: &mut Ui, p: &Palette, title: &str, note: &str, spinning: bool) {
     ui.horizontal_top(|ui| {
         ui.spacing_mut().item_spacing.x = 0.0;
         ui.add_space(lead);
-        ui.add(secondary(sp, note, p.placeholder()));
+        // The one secondary text colour, as the window line, meta lines and notices use.
+        ui.add(secondary(sp, note, p.muted));
     });
 }
 
@@ -333,10 +364,13 @@ fn notice(ui: &mut Ui, p: &Palette, text: &str, next: &str) -> bool {
         .inner
 }
 
-/// The summary as a document: section headers with real bullets, `section_gap` apart like every section.
-fn summary(ui: &mut Ui, p: &Palette, review: &standup::Review) {
+/// The summary as a document: section headers with real bullets, `section_gap` apart like every section. A ticket
+/// key that has a card below draws as a key chip; clicking it focuses that card instead of opening Jira.
+fn summary(app: &App, ui: &mut Ui, p: &Palette, review: &standup::Review, acts: &mut Vec<Action>) {
     let sp = theme::spacing(ui.ctx());
     let s = &review.summary;
+    let site = &app.cfg.site;
+    let keys: std::collections::BTreeSet<String> = app.standup.saved.tickets.all().map(|i| i.key.clone()).collect();
     for (title, items) in [("Since the last standup", &s.done), ("Today", &s.today), ("Blockers", &s.blockers)] {
         ui.add_space(sp.section_gap);
         c::section_header(ui, p, title, None);
@@ -344,9 +378,98 @@ fn summary(ui: &mut Ui, p: &Palette, review: &standup::Review) {
         if items.is_empty() {
             c::missing_value(ui, p, "None");
         } else {
-            adf_view::show(ui, &standup::bullets_doc(items), p, theme::chip_fill_on(p.bg, p));
+            adf_view::show(ui, &standup::bullets_doc(items, site, &keys), p, theme::chip_fill_on(p.bg, p));
         }
     }
+    // A key chip's click asks for its Jira page (`adf_view`); a key with a card focuses the card instead.
+    let rows: Vec<String> = app.standup.saved.tickets.all().map(|i| standup::browse_url(site, &i.key)).collect();
+    ui.ctx().output_mut(|o| {
+        o.commands.retain(|cmd| match cmd {
+            egui::OutputCommand::OpenUrl(u) => match rows.iter().position(|r| *r == u.url) {
+                Some(row) => {
+                    acts.push(Action::StandupFocus(row));
+                    false
+                }
+                None => true,
+            },
+            _ => true,
+        })
+    });
+}
+
+/// The window's tickets as Jira-style cards (the Team and Me card: key, title, status pill, epic): "Done since Fri
+/// Oct 30", then "In progress", each under a quiet section header. The focused card carries Move to Done while it
+/// is not done. Nothing before the first read lands; a failed read with nothing cached says so in one quiet line.
+fn tickets(app: &App, ui: &mut Ui, p: &Palette, cursor: Option<usize>, moved: bool, acts: &mut Vec<Action>) {
+    let sp = theme::spacing(ui.ctx());
+    let t = &app.standup.saved.tickets;
+    let Some(since) = t.since else {
+        if let Some(e) = &app.standup.tickets_error {
+            ui.add_space(sp.section_gap);
+            ui.add(secondary(sp, &format!("Couldn't load your tickets: {e}"), p.muted));
+        }
+        return;
+    };
+    let now = chrono::Utc::now();
+    let target = app.standup_done_target();
+    let done_title = done_header(since);
+    let mut row = 0;
+    for (si, (title, list)) in [(done_title.as_str(), &t.done), ("In progress", &t.in_progress)].into_iter().enumerate() {
+        ui.add_space(sp.section_gap);
+        c::section_header(ui, p, title, Some(list.len()));
+        ui.add_space(sp.paragraph_gap);
+        if list.is_empty() {
+            c::missing_value(ui, p, "None");
+        }
+        for (i, issue) in list.iter().enumerate() {
+            if i > 0 {
+                ui.add_space(sp.card_gap);
+            }
+            let sel = cursor == Some(row);
+            let card = Card { issue, days_in_status: crate::teamview::days_in_status(issue.status_changed.as_deref(), now) };
+            // Ids apart from Team's and Me's cards.
+            let r = crate::views::team::card(app, ui, p, (usize::MAX - 8 - si, i), &card, sel, true);
+            if sel
+                && target.as_deref() == Some(issue.key.as_str())
+                && let Some(a) = done_on_card(ui, p, r.rect, issue)
+            {
+                acts.push(a);
+            }
+            let r = crate::views::tooltip(r, "Open in Jira (o)");
+            if r.clicked() || r.double_clicked() {
+                acts.push(Action::StandupFocus(row));
+            }
+            if r.double_clicked() {
+                acts.push(Action::StandupOpenSource);
+            }
+            if sel && moved {
+                r.scroll_to_me(None);
+            }
+            row += 1;
+        }
+    }
+}
+
+/// "Done since Fri Oct 30".
+pub fn done_header(since: chrono::NaiveDate) -> String {
+    format!("Done since {}", standup::day_label(since))
+}
+
+/// The focused ticket card's Move to Done (`components::done_button`) at the right end of its key line, as on the
+/// Me screen: the key is short, so the line has room, and the card keeps its height as the cursor moves. Drawn
+/// over the card after it, so the button takes the click.
+fn done_on_card(ui: &mut Ui, p: &Palette, card: egui::Rect, issue: &crate::jira::Issue) -> Option<Action> {
+    let sp = theme::spacing(ui.ctx());
+    let key = theme::Ink::of(ui.ctx(), &theme::key_font(), None);
+    // As `team::card` places the key: its capitals card_pad under the frame's top.
+    let key_mid = card.top() + (sp.card_pad - key.top).round().max(0.0) + key.line / 2.0;
+    let slot = egui::Rect::from_x_y_ranges(
+        (card.left() + sp.card_pad)..=(card.right() - sp.card_pad),
+        (key_mid - crate::views::BUTTON_H / 2.0)..=(key_mid + crate::views::BUTTON_H / 2.0),
+    );
+    let mut child =
+        ui.new_child(egui::UiBuilder::new().id_salt(("standup-done", &issue.key)).max_rect(slot).layout(egui::Layout::right_to_left(egui::Align::Center)));
+    c::done_button(&mut child, p, issue, c::card_fill(p, true))
 }
 
 /// The review's own notes (sources it skipped, tools that failed): last, after the suggestions, in quieter text at
@@ -368,7 +491,7 @@ fn notes(ui: &mut Ui, p: &Palette, review: &standup::Review) {
 
 /// "Suggested tickets  N" (with, at the right, the one read-only note and the dismissed count), then the cards, or
 /// why there are none.
-fn cards(app: &mut App, ui: &mut Ui, p: &Palette, acts: &mut Vec<Action>) {
+fn cards(app: &mut App, ui: &mut Ui, p: &Palette, cursor: Option<usize>, moved: bool, acts: &mut Vec<Action>) {
     let sp = theme::spacing(ui.ctx());
     let visible: Vec<Suggestion> = app.standup.saved.visible().into_iter().cloned().collect();
     let dismissed = app.standup.saved.dismissed.len();
@@ -384,27 +507,23 @@ fn cards(app: &mut App, ui: &mut Ui, p: &Palette, acts: &mut Vec<Action>) {
     });
     ui.add_space(sp.paragraph_gap);
     if visible.is_empty() {
+        // The toolbar's window line says so too (`no_cards_note`), so the page can open at its top.
         let (msg, hint) = no_cards_text(&app.standup.saved);
-        let r = ui.scope(|ui| c::empty_state(ui, p, msg, Some(hint))).response;
-        // Like the first card: brought into view once per review, so the first look says there are none.
-        let shown_id = egui::Id::new("standup-empty-shown");
-        let ran = app.standup.saved.ran_at;
-        if ui.data(|d| d.get_temp::<Option<i64>>(shown_id)) != Some(ran) {
-            ui.data_mut(|d| d.insert_temp(shown_id, ran));
-            r.scroll_to_me(None);
-        }
+        c::empty_state(ui, p, msg, Some(hint));
         return;
     }
-    let cursor = app.standup.cursor.min(visible.len().saturating_sub(1));
-    let last_id = egui::Id::new("standup-last-cursor");
-    let moved = ui.data(|d| d.get_temp::<usize>(last_id)) != Some(cursor);
-    ui.data_mut(|d| d.insert_temp(last_id, cursor));
-    for (i, s) in visible.iter().enumerate() {
-        if i > 0 {
+    // The suggestions follow the ticket cards in cursor order; the title edit (`e`) is only for a suggestion.
+    let offset = app.standup_ticket_count();
+    if cursor.is_none_or(|c| c < offset) {
+        app.standup.focus_title = false;
+    }
+    for (vi, s) in visible.iter().enumerate() {
+        if vi > 0 {
             ui.add_space(sp.card_gap);
         }
+        let i = offset + vi;
         let key = standup::dismiss_key(s);
-        let sel = i == cursor;
+        let sel = cursor == Some(i);
         let focus_title = sel && std::mem::take(&mut app.standup.focus_title);
         let added = app.standup.saved.added.get(&key).cloned();
         let adding = app.standup.adding.contains(&key);
@@ -451,9 +570,9 @@ fn key_of(t: Target) -> &'static str {
     }
 }
 
-/// One suggestion, in four parts: its title (a field only while editing); one quiet meta line with the source link
-/// and Dismiss at its right; a short description in quieter text, with More straight after it; one row of adds
-/// (none in read-only mode). More opens the whole description and the reason; Less closes them. Focus changes only
+/// One suggestion, in four parts: its title (a field only while editing); one quiet meta line with the source link;
+/// a short description in quieter text, with More straight after it; one action row, the adds (none in read-only
+/// mode) and Dismiss at its right. More opens the whole description and the reason; Less closes them. Focus changes only
 /// the card's fill and ring, never what it shows.
 fn card(ui: &mut Ui, p: &Palette, s: &Suggestion, title: &mut String, st: &CardState, i: usize, acts: &mut Vec<Action>) -> egui::Response {
     let sp = theme::spacing(ui.ctx());
@@ -520,52 +639,34 @@ fn card(ui: &mut Ui, p: &Palette, s: &Suggestion, title: &mut String, st: &CardS
             }
         }
 
-        if !st.read_only {
-            ui.add_space(sp.paragraph_gap);
-            adds(ui, p, s, st, muted, i, acts);
-        }
+        ui.add_space(sp.paragraph_gap);
+        actions_row(ui, p, s, st, muted, i, acts);
     });
     r.response
 }
 
-/// The meta line, "GitHub · Story · 85% sure · PR #7", with Dismiss at the card's right edge, centred on the line
-/// without making it taller.
+/// The meta line, "GitHub · Story · 85% sure · PR #7": quiet text, the source a link.
 fn meta_line(ui: &mut Ui, p: &Palette, s: &Suggestion, muted: egui::Color32, i: usize, acts: &mut Vec<Action>) {
     let sp = theme::spacing(ui.ctx());
     let small = theme::body(sp.small);
-    let (left, w) = (ui.cursor().left(), ui.available_width());
-    let dismiss = c::ghost("Dismiss", p);
-    // Dismiss's box at rest: its text and one button pad toward the meta text (`components::ghost_layout`).
-    let room = ui.painter().layout_no_wrap("Dismiss".to_string(), theme::body(14.0), muted).size().x + 2.0 * ui.spacing().button_padding.x;
-    let line = ui
-        .scope(|ui| {
-            ui.set_max_width((w - room).max(0.0));
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 0.0;
-                ui.label(RichText::new(meta_text(s)).font(small.clone()).color(muted));
-                if !s.source_url.trim().is_empty() {
-                    ui.label(RichText::new(" · ").font(small.clone()).color(muted));
-                    let link = text_link(ui, &standup::source_label(&s.source_url), small.clone(), p.accent);
-                    if crate::views::tooltip(link, format!("{} (o)", s.source_url.trim())).clicked() {
-                        acts.push(Action::StandupFocus(i));
-                        acts.push(Action::StandupOpenSource);
-                    }
-                }
-            });
-        })
-        .response;
-    let slot = egui::Rect::from_center_size(egui::pos2(left + w - room / 2.0, line.rect.center().y), vec2(room, crate::views::BUTTON_H));
-    let mut right =
-        ui.new_child(egui::UiBuilder::new().id_salt(("standup-dismiss", i)).max_rect(slot).layout(egui::Layout::right_to_left(egui::Align::Center)));
-    if crate::views::tooltip(right.add(dismiss), "Hide this suggestion for good (x)").clicked() {
-        acts.push(Action::StandupFocus(i));
-        acts.push(Action::StandupDismiss);
-    }
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing.x = 0.0;
+        ui.label(RichText::new(meta_text(s)).font(small.clone()).color(muted));
+        if !s.source_url.trim().is_empty() {
+            ui.label(RichText::new(" · ").font(small.clone()).color(muted));
+            let link = text_link(ui, &standup::source_label(&s.source_url), small.clone(), p.accent);
+            if crate::views::tooltip(link, format!("{} (o)", s.source_url.trim())).clicked() {
+                acts.push(Action::StandupFocus(i));
+                acts.push(Action::StandupOpenSource);
+            }
+        }
+    });
 }
 
-/// The adds: the suggested target as the card's one bordered button, the other targets quiet beside it. "Adding…"
-/// while one is in flight.
-fn adds(ui: &mut Ui, p: &Palette, s: &Suggestion, st: &CardState, muted: egui::Color32, i: usize, acts: &mut Vec<Action>) {
+/// The card's action row: the adds at the left (none in read-only mode): the suggested target as a bordered button,
+/// the other targets quiet beside it, "Adding…" while one is in flight; Dismiss at the right, a quiet bordered
+/// button like the toolbar's, so it reads as an action, not as one more meta field.
+fn actions_row(ui: &mut Ui, p: &Palette, s: &Suggestion, st: &CardState, muted: egui::Color32, i: usize, acts: &mut Vec<Action>) {
     let sp = theme::spacing(ui.ctx());
     ui.horizontal(|ui| {
         ui.set_min_height(crate::views::BUTTON_H);
@@ -574,17 +675,25 @@ fn adds(ui: &mut Ui, p: &Palette, s: &Suggestion, st: &CardState, muted: egui::C
             ui.label(RichText::new("Adding…").color(muted).size(sp.small));
             return;
         }
-        let primary = s.suggested_target;
-        if crate::views::tooltip(ui.add(button(add_label(primary), p)), key_of(primary)).clicked() {
-            acts.push(Action::StandupFocus(i));
-            acts.push(Action::StandupAdd(primary));
-        }
-        for t in [Target::CurrentSprint, Target::NextSprint, Target::Backlog].into_iter().filter(|t| *t != primary) {
-            if crate::views::tooltip(ui.add(c::ghost(t.name(), p)), format!("{} ({})", add_label(t), key_of(t))).clicked() {
+        if !st.read_only {
+            let primary = s.suggested_target;
+            if crate::views::tooltip(ui.add(button(add_label(primary), p)), key_of(primary)).clicked() {
                 acts.push(Action::StandupFocus(i));
-                acts.push(Action::StandupAdd(t));
+                acts.push(Action::StandupAdd(primary));
+            }
+            for t in [Target::CurrentSprint, Target::NextSprint, Target::Backlog].into_iter().filter(|t| *t != primary) {
+                if crate::views::tooltip(ui.add(c::ghost(t.name(), p)), format!("{} ({})", add_label(t), key_of(t))).clicked() {
+                    acts.push(Action::StandupFocus(i));
+                    acts.push(Action::StandupAdd(t));
+                }
             }
         }
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if crate::views::tooltip(ui.add(button("Dismiss", p)), "Hide this suggestion for good (x)").clicked() {
+                acts.push(Action::StandupFocus(i));
+                acts.push(Action::StandupDismiss);
+            }
+        });
     });
 }
 
@@ -660,7 +769,7 @@ fn title_field(ui: &mut Ui, p: &Palette, title: &mut String, id: egui::Id, sel: 
     let top = ui.cursor().min - vec2(0.0, m.top as f32);
     let mut field = ui.new_child(egui::UiBuilder::new().id_salt(("standup-title-field", id)).max_rect(egui::Rect::from_min_size(top, vec2(w, f32::INFINITY))));
     let v = field.visuals_mut();
-    v.text_edit_bg_color = Some(if sel { p.surface } else { theme::input_fill(p.surface, p) });
+    v.text_edit_bg_color = Some(if sel { p.surface } else { p.field() });
     v.selection.stroke = egui::Stroke::new(1.0, p.border);
     let edit = egui::TextEdit::multiline(title)
         .id(id)
@@ -737,6 +846,27 @@ mod tests {
     }
 
     #[test]
+    fn running_note_only_promises_adds_when_writable() {
+        assert!(running_note(false, None, true).starts_with("Your standup and suggested tickets appear here"));
+        assert_eq!(running_note(true, Some("Mon 12:54"), true), "Below is the last review, from Mon 12:54. The new review replaces it when this run finishes.");
+        assert_eq!(
+            running_note(true, None, false),
+            "Below is the last review. The new review replaces it when this run finishes. Tickets you add from it before then are still created."
+        );
+        assert!(!running_note(true, Some("Mon 12:54"), true).contains("add"), "read-only: nothing to add");
+    }
+
+    #[test]
+    fn the_page_opens_at_its_top() {
+        assert!(!moved_since(None, Some(0)), "the first frame does not scroll to the focused card");
+        assert!(!moved_since(Some(Some(2)), Some(2)));
+        assert!(moved_since(Some(Some(0)), Some(1)), "j scrolls the new card into view");
+        assert!(moved_since(Some(None), Some(0)), "cards that just landed under an unknown cursor");
+        assert!(!moved_since(Some(Some(1)), None));
+        assert_eq!(done_header(chrono::NaiveDate::from_ymd_opt(2026, 10, 30).unwrap()), "Done since Fri Oct 30");
+    }
+
+    #[test]
     fn one_run_button_per_state() {
         assert_eq!(run_button(true, true, false), None, "the progress line replaces it");
         assert_eq!(run_button(true, false, true), None);
@@ -809,7 +939,7 @@ mod tests {
         let mut app = App::for_test(cfg, None);
         app.screen = crate::app::Screen::Standup;
         let texts = |app: &mut App| {
-            let shapes = crate::testutil::paint_at2(egui::vec2(1200.0, 900.0), |ui| show(app, ui));
+            let shapes = crate::testutil::paint_at2(egui::vec2(1200.0, 1800.0), |ui| show(app, ui));
             crate::testutil::inks(&shapes).into_iter().map(|(t, _)| t).collect::<Vec<_>>()
         };
         let empty = texts(&mut app);
@@ -846,6 +976,17 @@ mod tests {
             notes: "Slack was not available".into(),
         });
         app.standup.saved.added.insert("url:https://github.com/o/r/pull/8".into(), "CI-42".into());
+        let ticket = |key: &str, summary: &str, cat: &str| crate::jira::Issue {
+            key: key.into(),
+            summary: summary.into(),
+            status: crate::jira::Status { name: if cat == "done" { "Done".into() } else { "In Progress".into() }, category: cat.into() },
+            ..Default::default()
+        };
+        app.standup.saved.tickets = standup::Tickets {
+            since: chrono::NaiveDate::from_ymd_opt(2026, 10, 30),
+            done: vec![ticket("CI-1", "Ship the rollout fix", "done")],
+            in_progress: vec![ticket("CI-2", "Canary routing", "indeterminate")],
+        };
         app.standup.phase = Some(StandupPhase::Claude);
         app.standup.started = Some(std::time::Instant::now());
         app.standup.activity_count = Some(2);
@@ -870,6 +1011,13 @@ mod tests {
         }
         let at = |want: &str| drawn.iter().position(|t| t == want).unwrap_or_else(|| panic!("{want} in {drawn:?}"));
         assert!(at("Suggested tickets") < at("Notes from the review"), "summary, then suggestions, then notes: {drawn:?}");
+        assert!(
+            at("Blockers") < at("Done since Fri Oct 30") && at("Done since Fri Oct 30") < at("In progress") && at("In progress") < at("Suggested tickets"),
+            "summary, then the window's tickets, then the suggestions: {drawn:?}"
+        );
+        for want in ["CI-1", "Ship the rollout fix", "Done", "CI-2", "Canary routing", "In Progress"] {
+            assert!(drawn.iter().any(|t| t == want), "{want} as a ticket card in {drawn:?}");
+        }
         assert!(!drawn.iter().any(|t| t == "one" || t.contains("No ticket names")), "a collapsed card hides the rest and the reason: {drawn:?}");
         assert!(!drawn.iter().any(|t| t == READ_ONLY_NOTE), "writable: no read-only note");
         assert!(drawn.iter().any(|t| t.starts_with("Asking Claude")), "progress shows: {drawn:?}");
@@ -882,6 +1030,7 @@ mod tests {
         assert!(app.standup.titles.is_empty(), "untouched titles are not kept as edits");
         assert!(drawn.iter().any(|t| t == "Notes from the review"), "the notes are labelled: {drawn:?}");
         assert!(drawn.iter().any(|t| t.starts_with("Below is the last review")), "the old review is marked while a run goes");
+        assert!(drawn.iter().any(|t| t.contains("still created")), "writable: adds made meanwhile are kept: {drawn:?}");
         assert_eq!(hint(&app), StandupHint { cards: true, copy: true, run: None, read_only: false });
 
         // Read-only: one note at the header, no adds on any card, Dismiss and the source link stay.
@@ -892,6 +1041,7 @@ mod tests {
             assert!(!ro.iter().any(|t| t.starts_with("Add to") || t == "Current sprint" || t == "Backlog"), "no dead adds: {ro:?}");
             assert!(ro.iter().any(|t| t == "Dismiss") && ro.iter().any(|t| t == "PR #7"), "{ro:?}");
             assert!(hint(&app).read_only, "the hint bar drops the add keys too");
+            assert!(!ro.iter().any(|t| t.contains("still created") || t.contains("stay added")), "read-only promises no adds: {ro:?}");
         }
 
         // Every card dismissed: the summary, then the empty state under its section header.
@@ -903,7 +1053,7 @@ mod tests {
         let empty = texts(&mut app);
         let at = |want: &str| empty.iter().position(|t| t == want).unwrap_or_else(|| panic!("{want} in {empty:?}"));
         assert!(at("Since the last standup") < at("Suggested tickets") && at("Suggested tickets") < at("Every suggestion was dismissed"), "{empty:?}");
-        assert_eq!(hint(&app), StandupHint { cards: false, copy: true, run: Some(StandupRun::Again), read_only: false });
+        assert_eq!(hint(&app), StandupHint { cards: true, copy: true, run: Some(StandupRun::Again), read_only: false }, "the ticket cards still take j/k");
         assert!(!empty.iter().any(|t| t == "Stop"), "nothing runs: no Stop");
     }
 }

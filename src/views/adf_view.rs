@@ -1,5 +1,5 @@
-//! Paints an `adf::Doc` with egui widgets, typeset like a document: prose capped at the density's
-//! `prose_max_width`, `prose_line_height` leading, `paragraph_gap` between blocks, headings on the type scale.
+//! Paints an `adf::Doc` with egui widgets, typeset like a document: every block (prose, code, tables, rules)
+//! on one column, the density's `prose_max_width` (`column_width`), `prose_line_height` leading, `paragraph_gap` between blocks, headings on the type scale.
 
 use crate::adf::{self, Block, Span};
 use crate::theme::{self, Palette, Spacing};
@@ -83,15 +83,21 @@ fn heading_line(size: f32) -> f32 {
     (size * HEADING_LEADING).round()
 }
 
-/// Heading sizes, always bold, one step under the host's chrome: a description's h1 sits between the pane's h3
-/// and h2 (18 / 19, under the 22 detail title), h2 on h3 (16 / 17), h3–h6 at body size. A document heading never
-/// outranks the title or the screen's headings it sits under.
+/// Heading sizes, always bold, each level a step over the next: h1 on the pane's h2 (20 / 21, under the 22 detail
+/// title), h2 between h3 and h2 (18 / 19), h3 on h3 (16 / 17), so even h3 reads a size above bold body text;
+/// h4–h6 at body size. A document heading never outranks the title it sits under.
 pub fn heading_px(sp: &Spacing, level: u8) -> f32 {
     match level {
-        0 | 1 => ((sp.h3 + sp.h2) / 2.0).round(),
-        2 => sp.h3,
+        0 | 1 => sp.h2,
+        2 => ((sp.h3 + sp.h2) / 2.0).round(),
+        3 => sp.h3,
         _ => sp.body,
     }
+}
+
+/// Whether document `v` opens with a heading (the pane gives a leading heading more room under its label).
+pub fn starts_with_heading(v: &serde_json::Value) -> bool {
+    matches!(adf::parse(v).blocks.first(), Some(Block::Heading { .. }))
 }
 
 /// The marker slot (left of MARKER_GAP): fixed so text starts LIST_GUTTER in, unless a number is wider.
@@ -134,35 +140,16 @@ fn table_pad(sp: &Spacing) -> egui::Vec2 {
 
 pub fn show(ui: &mut Ui, doc: &adf::Doc, p: &Palette, chip: egui::Color32) {
     ui.scope(|ui| {
-        // The column: never wider than the density's prose_max_width; left-aligned.
-        let full = ui.available_width().min(theme::spacing(ui.ctx()).prose_max_width);
-        // The measure: prose lines of about MEASURE_CHARS characters at the body size.
-        let w = full.min(measure(ui.ctx()));
-        ui.data_mut(|d| d.insert_temp(table_room_id(), full - w));
-        ui.set_max_width(w);
+        // The one column, left-aligned: every block shares its right edge.
+        ui.set_max_width(ui.available_width().min(column_width(ui.ctx())));
         show_blocks(ui, &doc.blocks, p, chip);
     });
 }
 
-/// Prose runs at most this many characters of the lowercase sample to a line; running text (capitals, digits,
-/// inline code) sets wider, so a line holds about 70 characters (the rubric's 70–80, at its low end).
-pub const MEASURE_CHARS: f32 = 75.0;
-
-/// The width of MEASURE_CHARS characters of the sample at the density's body size.
-pub fn measure(ctx: &egui::Context) -> f32 {
-    const SAMPLE: &str = "the quick brown fox jumps over the lazy dog";
-    let body = theme::spacing(ctx).body;
-    let w = ctx.fonts_mut(|f| f.layout_no_wrap(SAMPLE.to_string(), theme::body(body), egui::Color32::BLACK).size().x);
-    (w / SAMPLE.chars().count() as f32 * MEASURE_CHARS).round()
-}
-
-fn table_room_id() -> egui::Id {
-    egui::Id::new("adf_view::table_room")
-}
-
-/// How much wider than the measure a table may run: up to the document's full column.
-fn table_room(ui: &Ui) -> f32 {
-    ui.available_width() + ui.data(|d| d.get_temp::<f32>(table_room_id())).unwrap_or(0.0)
+/// The one description measure: prose, code, tables and rules all run this wide (narrower only when the pane is),
+/// and the detail pane sizes its column and comment cards to it, so nothing in a description moves the fields rail.
+pub fn column_width(ctx: &egui::Context) -> f32 {
+    theme::spacing(ctx).prose_max_width
 }
 
 /// Table rules and the document rule: the edge that holds at least 1.5:1 on the pane in both themes.
@@ -174,20 +161,16 @@ fn show_blocks(ui: &mut Ui, blocks: &[Block], p: &Palette, chip: egui::Color32) 
     // Every gap below is explicit; no implicit item spacing on top of it.
     ui.spacing_mut().item_spacing.y = 0.0;
     let sp = theme::spacing(ui.ctx());
-    // A table may run past the measure and widen this ui; every other block keeps the measure.
-    let measure = ui.available_width();
+    // Every block keeps the column; none widens it.
+    let column = ui.available_width();
     for (i, b) in blocks.iter().enumerate() {
         if i > 0 {
             ui.add_space(block_gap(sp, &blocks[i - 1], b));
         }
-        if matches!(b, Block::Table(_)) {
+        ui.scope(|ui| {
+            ui.set_max_width(column);
             block(ui, b, p, sp.body, chip);
-        } else {
-            ui.scope(|ui| {
-                ui.set_max_width(measure);
-                block(ui, b, p, sp.body, chip);
-            });
-        }
+        });
     }
 }
 
@@ -710,8 +693,8 @@ fn table(ui: &mut Ui, rows: &[Vec<Vec<Span>>], p: &Palette, chip: egui::Color32)
     let header = rows
         .first()
         .is_some_and(|r| r.iter().flatten().filter(|s| !s.text.trim().is_empty()).all(|s| s.bold) && r.iter().flatten().any(|s| !s.text.trim().is_empty()));
-    // A table is not prose: it may run the full column, past the measure.
-    let avail = table_room(ui);
+    // The table fills the one column, as every other block does.
+    let avail = ui.available_width();
     // Gutters between columns only: the first column's text sits on the prose edge, the last ends on the column's.
     let side = |ci: usize| (if ci == 0 { 0.0 } else { pad.x }, if ci + 1 == cols { 0.0 } else { pad.x });
     let pads = (cols - 1) as f32 * 2.0 * pad.x;
@@ -1620,11 +1603,13 @@ mod tests {
     fn prose_rhythm_and_heading_scale() {
         assert_eq!((14.0 * theme::COMPACT.prose_line_height).round(), 21.0, "1.5 × body");
         let c = &theme::COMPACT;
-        assert_eq!((heading_px(c, 1), heading_px(c, 2), heading_px(c, 3), heading_px(c, 4), heading_px(c, 6)), (18.0, 16.0, 14.0, 14.0, 14.0));
+        assert_eq!((heading_px(c, 1), heading_px(c, 2), heading_px(c, 3), heading_px(c, 4), heading_px(c, 6)), (20.0, 18.0, 16.0, 14.0, 14.0));
         let f = &theme::COMFORTABLE;
-        assert_eq!((heading_px(f, 1), heading_px(f, 2), heading_px(f, 3), heading_px(f, 5)), (19.0, f.h3, f.body, f.body));
+        assert_eq!((heading_px(f, 1), heading_px(f, 2), heading_px(f, 3), heading_px(f, 5)), (f.h2, 19.0, f.h3, f.body));
         for sp in [c, f] {
-            assert!(heading_px(sp, 1) < sp.h2 && heading_px(sp, 2) <= sp.h3, "a document heading sits under the pane's chrome");
+            assert!(heading_px(sp, 1) < 22.0, "a document heading sits under the 22 pt detail title");
+            assert!(heading_px(sp, 1) > heading_px(sp, 2) && heading_px(sp, 2) > heading_px(sp, 3), "each level a step down");
+            assert!(heading_px(sp, 3) >= sp.body + 2.0, "h3 reads a size over bold body text");
         }
         let para = Block::Paragraph(vec![span("x")]);
         let h = |level| Block::Heading { level, spans: vec![span("H")] };
@@ -1905,6 +1890,26 @@ mod tests {
             block(ui, &list, &p, 14.0, p.surface_2);
         });
         assert!((crate::testutil::ink_of(&shapes, "Find out").left() - a.left()).abs() <= 0.5);
+    }
+
+    #[test]
+    fn every_block_shares_one_right_edge() {
+        // Round 6: a table ran 47 pt past the prose, so the detail column widened and the fields rail moved.
+        let p = crate::theme::LIGHT;
+        let long = "word ".repeat(200);
+        let rows = vec![vec![vec![span(&long)], vec![span(&long)]]];
+        let doc =
+            adf::Doc { blocks: vec![Block::Paragraph(vec![span(&long)]), Block::Table(rows), Block::Code { text: "x".repeat(400), lang: None }, Block::Rule] };
+        let mut width = 0.0;
+        let shapes = crate::testutil::paint_at2(egui::vec2(1400.0, 3000.0), |ui| {
+            ui.set_width(1000.0);
+            width = ui.scope(|ui| show(ui, &doc, &p, p.surface_2)).response.rect.width();
+        });
+        let col = theme::COMPACT.prose_max_width;
+        assert!(width <= col + 0.5, "the document is the column wide: {width}");
+        let right = crate::testutil::inks(&shapes).iter().map(|(_, r)| r.right()).fold(0.0, f32::max);
+        let rule = walk_lines(&shapes).iter().map(|l| l[1].x.max(l[0].x)).fold(0.0, f32::max);
+        assert!(right <= col + 0.5 && rule <= col + 0.5, "ink {right}, rules {rule} within {col}");
     }
 
     #[test]

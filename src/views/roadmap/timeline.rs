@@ -1,7 +1,7 @@
 //! Roadmap tab 2: the year's lanes with a bar per initiative from start to target quarter, the today line, and the
 //! tray of initiatives with no target.
 
-use super::{CARD_GAP, GAP, LINE_GAP, Mark, PAD, is_p0};
+use super::{CARD_GAP, GAP, LINE_GAP, PAD, is_p0};
 use crate::roadmap::{self, Health, Horizon, Initiative, Quarter};
 use crate::theme::{self, Palette};
 use crate::views::components as c;
@@ -49,23 +49,9 @@ pub fn today_label_left(line_x: f32, label_w: f32, heading_right: f32, right: f3
     if x + label_w <= right { x } else { line_x - gap - label_w }
 }
 
-/// The timeline legend: only the marks the drawn bars use (health ring or dot, the "runs past the year" chevron),
-/// then the today line, so every entry has a mark to find. P0 is its own labelled pill, as on the cards.
-pub fn legend_marks(items: &[Initiative], year: i32) -> Vec<Mark> {
-    let bars: Vec<&Initiative> = items.iter().filter(|i| roadmap::bar_span(i.start, i.target, year).is_some()).collect();
-    let open: Vec<&&Initiative> = bars.iter().filter(|i| i.horizon != Horizon::Done).collect();
-    let mut marks = Vec::new();
-    if open.iter().any(|i| i.health == Health::None) {
-        marks.push(Mark::NoHealth);
-    }
-    if open.iter().any(|i| i.health != Health::None) {
-        marks.push(Mark::Health);
-    }
-    if bars.iter().any(|i| continues(i, year) != (false, false)) {
-        marks.push(Mark::RunsOn);
-    }
-    marks.push(Mark::Today);
-    marks
+/// The initiatives that get a bar in `year`'s grid (the legend lists the marks these use).
+pub fn bars(items: &[Initiative], year: i32) -> Vec<&Initiative> {
+    items.iter().filter(|i| roadmap::bar_span(i.start, i.target, year).is_some()).collect()
 }
 
 /// Whether a bar runs on before and after `year`'s edges: (starts in an earlier year, ends in a later one).
@@ -245,7 +231,7 @@ fn hline(painter: &egui::Painter, rect: Rect, y: f32, p: &Palette) {
 }
 
 /// One bar: a resting neutral (`surface_2`; Done: the grid's `surface` with a "✓ " and `done` text) framed in the
-/// progress track's grey (3:1 off the lane, so the span reads at a glance), never the accent selection look; the
+/// cards' `border` edge, never the accent selection look; the
 /// progress bars' done and in-progress segments as a strip along its bottom; the health dot, the P0 pill (the
 /// cards' one P0 marker), the name cut to fit, and a chevron at an end that runs past the year. Hovering shows
 /// the full name, subteam, quarters and progress.
@@ -287,7 +273,7 @@ fn draw_bar(ui: &mut Ui, painter: &egui::Painter, p: &Palette, i: &Initiative, b
     crate::views::tooltip(resp, bar_tip(i));
 }
 
-/// The progress bars' done (`on_track`) and in-progress (`accent`) segments as a STRIP_H strip on `inner`'s bottom
+/// The progress bars' done (`on_track`, solid) and in-progress (striped, `paint_doing`) segments as a STRIP_H strip on `inner`'s bottom
 /// edge; the to-do rest is the bar's own fill. Its bottom corners follow the bar's.
 fn progress_strip(painter: &egui::Painter, p: &Palette, pr: &roadmap::Progress, inner: Rect, corners: CornerRadius) {
     let total = (pr.todo + pr.doing + pr.done) as f32;
@@ -298,18 +284,26 @@ fn progress_strip(painter: &egui::Painter, p: &Palette, pr: &roadmap::Progress, 
     let clip = painter.with_clip_rect(strip.intersect(painter.clip_rect()));
     // Each segment from the left edge with the bar's bottom-left corner; the bottom-right one only when it reaches
     // the bar's end, so the joins stay square.
+    let round =
+        |n: usize| CornerRadius { nw: 0, ne: 0, sw: corners.sw.saturating_sub(1), se: if n as f32 >= total { corners.se.saturating_sub(1) } else { 0 } };
     let seg = |n: usize, color| {
-        let full = n as f32 >= total;
-        let round = CornerRadius { nw: 0, ne: 0, sw: corners.sw.saturating_sub(1), se: if full { corners.se.saturating_sub(1) } else { 0 } };
-        clip.rect_filled(Rect::from_min_size(strip.min, vec2(strip.width() * n as f32 / total, STRIP_H)), round, color);
+        clip.rect_filled(Rect::from_min_size(strip.min, vec2(strip.width() * n as f32 / total, STRIP_H)), round(n), color);
     };
-    seg(pr.done + pr.doing, p.accent);
+    let doing = pr.done + pr.doing;
+    if doing > pr.done {
+        let w = strip.width() * doing as f32 / total;
+        // Stripes clear of the bar's rounded bottom corners, as on the cards' bars.
+        let lo = if pr.done > 0 { strip.left() + strip.width() * pr.done as f32 / total } else { strip.left() + f32::from(corners.sw) };
+        let hi = (strip.left() + w).min(strip.right() - f32::from(corners.se));
+        super::paint_doing(&clip, Rect::from_min_size(strip.min, vec2(w, STRIP_H)), round(doing), egui::Rangef::new(lo, hi), p);
+    }
     seg(pr.done, p.on_track);
 }
 
-/// A bar's frame: the progress track's grey, 3:1 off the lane surface and the bar fill.
+/// A bar's frame: the cards' resting edge (`components::card_stroke`), so bars weigh no more than the cards and
+/// tiles on the other tabs; the `surface_2` fill already sets the span off the lane.
 pub(super) fn bar_edge(p: &Palette) -> egui::Color32 {
-    super::track(p)
+    c::card_stroke(p, false).color
 }
 
 /// The P0 pill's width at the pill `font` (its text plus the pill's side margins).
@@ -363,10 +357,10 @@ mod tests {
     }
 
     #[test]
-    fn bar_edges_stand_off_the_lane() {
+    fn bar_edges_are_the_card_edge() {
         for p in [&theme::LIGHT, &theme::DARK] {
-            assert!(theme::contrast(bar_edge(p), p.surface) >= 3.0, "edge vs lane, dark={}", p.dark);
-            assert!(theme::contrast(bar_edge(p), bar_colors(p, false).0) >= 3.0, "edge vs fill, dark={}", p.dark);
+            assert_eq!(bar_edge(p), p.border, "one edge role for card-like surfaces, dark={}", p.dark);
+            assert_ne!(bar_colors(p, false).0, p.surface, "the fill, not the edge, sets a bar off the lane");
         }
     }
 

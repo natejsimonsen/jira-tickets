@@ -486,6 +486,12 @@ fn focused_ticket(app: &mut App, ui: &mut Ui, p: &Palette, issue: jira::Issue) {
                 if loading {
                     crate::views::icons::spinner(ui, crate::views::icons::INLINE_SPINNER, p);
                 }
+                // The focused row's one Move to Done (what `D` acts on), at the header's right end.
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if let Some(a) = c::done_button(ui, p, &issue, p.surface) {
+                        app.actions.push(a);
+                    }
+                });
             });
             ui.add_space(8.0);
             ui.add(egui::Label::new(RichText::new(&issue.summary).font(theme::bold(22.0)).color(p.text)).wrap());
@@ -544,7 +550,7 @@ fn summary_pane(app: &mut App, ui: &mut Ui, p: &Palette) {
         }
         ui.add_space(16.0);
         ui.horizontal(|ui| {
-            if ui.add(crate::views::primary_button_if("Review and promote", !promoting, p)).clicked() && !promoting {
+            if ui.add(promote_button("Review and promote", !promoting, p)).clicked() && !promoting {
                 app.actions.push(Action::OpenSummary);
             }
             if promoting {
@@ -728,7 +734,7 @@ fn dialogs(app: &mut App, ctx: &egui::Context, p: &Palette) {
         ui.add_space(sp.section_gap / 2.0 - ui.spacing().item_spacing.y);
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 8.0;
-            if ui.add(crate::views::primary_button_if(&promote_label(plan.promoted.len()), can, p)).clicked() && can {
+            if ui.add(promote_button(&promote_label(plan.promoted.len()), can, p)).clicked() && can {
                 app.actions.push(Action::Promote);
             }
             if ui.add(crate::views::button("Cancel", p)).clicked() {
@@ -739,6 +745,11 @@ fn dialogs(app: &mut App, ctx: &egui::Context, p: &Palette) {
             }
         });
     });
+}
+
+/// A Promote primary: live, or the shared disabled primary (`components::primary_button_off`) while it is off.
+fn promote_button(text: &str, enabled: bool, p: &Palette) -> egui::Button<'static> {
+    if enabled { primary_button(text, p) } else { c::primary_button_off(text, p) }
 }
 
 /// The Promote dialog's width.

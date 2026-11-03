@@ -299,7 +299,8 @@ pub fn hints_panel(app: &App, ui: &mut Ui, p: &Palette) {
         standup_cards: app.screen == Screen::Standup && !app.standup_keys().is_empty(),
     });
     let standup = matches!(c, crate::keys::HintContext::Standup | crate::keys::HintContext::StandupEmpty);
-    let mut hs = if standup { crate::keys::standup_hints(crate::views::standup::hint(app)) } else { crate::keys::hints(c).to_vec() };
+    let hs = if standup { crate::keys::standup_hints(crate::views::standup::hint(app)) } else { crate::keys::hints(c).to_vec() };
+    let mut hs = crate::keys::with_done_hint(c, hs, app.done_target().is_some());
     if edit.is_some() && !app.help_open && crate::jira::check_writable().is_err() {
         hs = view_only_picker_hints(&hs);
     }
@@ -1020,9 +1021,19 @@ pub fn clear_visible(quick: bool, mine: bool, roadmap: bool, box_text: bool) -> 
 }
 
 /// The clear button's height: the 24 px minimum target, centred on the 16 px count row.
-const CLEAR_H: f32 = 24.0;
+const CLEAR_H: f32 = crate::views::MIN_TARGET_H;
 /// Room the clear button may take at the count row's right end.
 const CLEAR_SLOT_W: f32 = 160.0;
+
+/// The Clear filters / Clear search button: `views::button`'s look (fill, `border`, RADIUS) with the count row's
+/// `font`, CLEAR_H tall in both densities (the caller zeroes the vertical padding; the height is min_size).
+fn clear_button(text: &str, font: egui::FontId, p: &Palette) -> egui::Button<'static> {
+    egui::Button::new(RichText::new(text.to_string()).font(font).color(p.text))
+        .fill(theme::button_fill(p))
+        .stroke(Stroke::new(1.0, p.border))
+        .corner_radius(theme::RADIUS)
+        .min_size(vec2(0.0, CLEAR_H))
+}
 
 /// The clear button's slot, left and right x, for a list whose right edge is `edge`: a first ghost in a
 /// right-to-left row ends its text on the slot's edge, so it ends where the search box and the rows do.
@@ -1102,8 +1113,8 @@ pub fn match_cue(i: &Issue, needle: &str) -> Option<String> {
 
 /// A row title with each hit of `needle` on the `search_match` tint (underlined in the accent on the selected
 /// row, whose fill is accent-tinted too).
-pub fn title_job(title: &str, needle: &str, p: &Palette, selected: bool) -> egui::text::LayoutJob {
-    let plain = egui::TextFormat { font_id: theme::bold(13.5), color: p.text, ..Default::default() };
+pub fn title_job(title: &str, needle: &str, font: egui::FontId, p: &Palette, selected: bool) -> egui::text::LayoutJob {
+    let plain = egui::TextFormat { font_id: font, color: p.text, ..Default::default() };
     let hit = egui::TextFormat { background: p.search_match(), underline: if selected { Stroke::new(1.0, p.accent) } else { Stroke::NONE }, ..plain.clone() };
     let mut job = egui::text::LayoutJob::default();
     let mut at = 0;
@@ -1119,6 +1130,20 @@ pub fn title_job(title: &str, needle: &str, p: &Palette, selected: bool) -> egui
     }
     job
 }
+
+/// How a row moves for a title galley `title` other than the tuned 13.5 one (`base`; Comfortable's 16). The title
+/// sits centred in its row, which is at least ROW_SLOT_H tall. The pill line moves by how far the title's bottom
+/// moves, and the key (centred too) by how far the title's baseline moves past the row's own centre shift, so the
+/// two keep one baseline. Both 0 at 13.5 (Compact), so its grid is untouched. Returns (pill shift, key shift).
+pub fn title_growth(base: &egui::Galley, title: &egui::Galley) -> (f32, f32) {
+    let (h0, h1) = (base.size().y, title.size().y);
+    let bottom = |h: f32| (h.max(ROW_SLOT_H) + h) / 2.0;
+    let drop = |g: &egui::Galley| crate::views::galley_baseline(g) - g.size().y / 2.0;
+    (bottom(h1) - bottom(h0), drop(title) - drop(base))
+}
+
+/// The title row's slot: egui's interact height, which a 13.5 title fits inside.
+const ROW_SLOT_H: f32 = 18.0;
 
 /// The last pill → the match cue on the meta line.
 const MATCH_CUE_GAP: f32 = 8.0;
@@ -1185,20 +1210,17 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
             }
         }
         if show_clear {
-            // A text link in the accent (the muted ghost read as the "· text match" metadata beside it), at the
-            // count's size, centred on the count row without growing it (its own child ui), its text ending on
-            // the list's right edge like the search box above. Its click target is CLEAR_H tall.
+            // A small secondary button (the app's bordered `button`, at the count's size), so its CLEAR_H target
+            // shows, centred on the count row without growing it (its own child ui) and ending on the list's right
+            // edge like the search box above.
             let row = ui.max_rect();
             let (left, right) = clear_slot_x(row.right());
             let slot = Rect::from_min_max(egui::pos2(left, row.center().y - CLEAR_H / 2.0), egui::pos2(right, row.center().y + CLEAR_H / 2.0));
             let mut child = ui.new_child(egui::UiBuilder::new().max_rect(slot).layout(egui::Layout::right_to_left(egui::Align::Center)));
             let font = theme::body(theme::spacing(ui.ctx()).caption);
-            let w = ui.painter().layout_no_wrap(clear_label(box_text).to_string(), font.clone(), p.accent).size().x;
-            // The tall target first, so the link drawn over it still takes the hover (its underline).
-            let target = Rect::from_x_y_ranges(right - w..=right, slot.y_range());
-            let hit = child.interact(target, egui::Id::new("clear-filters"), Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
-            let link = crate::views::text_link(&mut child, clear_label(box_text), font, p.accent);
-            if link.clicked() || hit.clicked() {
+            // Its height is CLEAR_H, not the text plus the density's vertical padding.
+            child.spacing_mut().button_padding.y = 0.0;
+            if child.add(clear_button(clear_label(box_text), font, p)).clicked() {
                 app.actions.push(Action::ClearFilters);
             }
         }
@@ -1243,6 +1265,13 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
         ui.spacing_mut().item_spacing.y = ROW_GAP;
         // Comfortable's room above and below each row's content; 0 in Compact, so the tuned grid is untouched.
         let extra = theme::spacing(ui.ctx()).row_extra;
+        // The density's card title (`components::card_title_font`), as on every other screen's tickets.
+        let title_font = crate::views::components::card_title_font(ui);
+        let title_fit = {
+            let painter = ui.painter();
+            let at = |f: egui::FontId| painter.layout_no_wrap("Ag".into(), f, p.text);
+            title_growth(&at(theme::bold(13.5)), &at(title_font.clone()))
+        };
         for (idx, i) in rows.iter().enumerate() {
             let is_sel = selected.as_deref() == Some(&i.key);
             let epic = i.parent_key.as_deref().map(|k| theme::epic_tint_in(k, &slots, p, epic_colors));
@@ -1265,14 +1294,15 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
                         let key_color = row_key_color(is_sel, p);
                         let g = ui.painter().layout_no_wrap(i.key.clone(), theme::mono(12.5), key_color);
                         let (kr, _) = ui.allocate_exact_size(vec2(key_w, g.size().y), Sense::hover());
-                        // The key and the summary share one baseline, TITLE_RAISE above the row's slot.
-                        ui.painter().galley(kr.min - vec2(0.0, TITLE_RAISE - ROW_CONTENT_DROP), g, key_color);
+                        // The key and the summary share one baseline, TITLE_RAISE above the row's slot (the key
+                        // follows a comfortable title's lower baseline by `title_fit.1`).
+                        ui.painter().galley(kr.min - vec2(0.0, TITLE_RAISE - ROW_CONTENT_DROP - title_fit.1), g, key_color);
                         let painter = ui.painter().clone();
                         // The title gets the whole line; why the row matched sits on the meta line below.
                         let title = crate::views::truncate_title(&i.summary, ui.available_width().max(0.0), |t| {
-                            painter.layout_no_wrap(t.to_string(), theme::bold(13.5), p.text).size().x
+                            painter.layout_no_wrap(t.to_string(), title_font.clone(), p.text).size().x
                         });
-                        let job = title_job(&title, needle.as_deref().unwrap_or_default(), p, is_sel);
+                        let job = title_job(&title, needle.as_deref().unwrap_or_default(), title_font.clone(), p, is_sel);
                         let tg = painter.layout_job(job);
                         let (tr, _) = ui.allocate_exact_size(tg.size(), Sense::hover());
                         ui.painter().galley(tr.min - vec2(0.0, TITLE_RAISE - ROW_CONTENT_DROP), tg, p.text);
@@ -1311,7 +1341,7 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
                     let cue = needle.as_deref().and_then(|n| match_cue(i, n));
                     // The pill line at one fixed, pixel-rounded y from the row's top (C1), whatever the title row
                     // laid out to (its slot follows the inherited interact height and the galley).
-                    let line = pill_line_y(row_top + extra + ROW_CONTENT_DROP, ui.ctx().pixels_per_point());
+                    let line = pill_line_y(row_top + extra + ROW_CONTENT_DROP + title_fit.0, ui.ctx().pixels_per_point());
                     ui.add_space(line - ui.cursor().top());
                     ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing = vec2(PILL_GAP, 4.0);
@@ -1413,10 +1443,6 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
                 );
             } else {
                 ui.painter().set(bg, egui::epaint::RectShape::filled(rect, corners, fill));
-            }
-            if RIGHT_EDGE_OPEN {
-                let (x, top, bottom) = right_border_cover(rect);
-                ui.painter().vline(x, top..=bottom, Stroke::new(1.0, fill));
             }
             if is_sel {
                 selected_rect = Some((rect, idx));
@@ -1650,21 +1676,12 @@ pub fn status_fill(t: &theme::Tint, p: &Palette) -> egui::Color32 {
     crate::views::pill_fill(t.bg, p)
 }
 
-/// The list's outer left corners are rounded (6); the seams between rows are square, and so is the right side,
-/// which has no border (`RIGHT_EDGE_OPEN`): the pane divider 16 px away is the one rule there (K3).
+/// The list is one closed card: its outer corners are rounded (6) on both sides and the seams between rows are
+/// square, so the border runs round all four edges like every other card.
 pub fn row_corners(idx: usize, n: usize) -> CornerRadius {
     let r = theme::RADIUS;
     let (top, bottom) = (if idx == 0 { r } else { 0 }, if idx + 1 == n { r } else { 0 });
-    CornerRadius { nw: top, ne: 0, sw: bottom, se: 0 }
-}
-
-/// The list card draws no right border (two parallel rules 16 apart with the pane divider read as noise).
-pub const RIGHT_EDGE_OPEN: bool = true;
-
-/// The span over a row's right border to paint in the row's fill, as (x, top, bottom): the 1 px column inside
-/// its right edge, between the top and bottom borders, so those still run to the edge.
-pub fn right_border_cover(rect: Rect) -> (f32, f32, f32) {
-    (rect.right() - 0.5, rect.top() + 1.0, rect.bottom() - 1.0)
+    CornerRadius { nw: top, ne: top, sw: bottom, se: bottom }
 }
 
 fn row_id(key: &str) -> egui::Id {
@@ -1962,11 +1979,11 @@ mod tests {
     #[test]
     fn title_hits_sit_on_the_search_match_tint() {
         let p = crate::theme::LIGHT;
-        let job = title_job("Unstick canary deploys", "canary", &p, false);
+        let job = title_job("Unstick canary deploys", "canary", theme::bold(13.5), &p, false);
         let parts: Vec<(&str, bool)> =
             job.sections.iter().map(|s| (&job.text[s.byte_range.start.0..s.byte_range.end.0], s.format.background == p.search_match())).collect();
         assert_eq!(parts, [("Unstick ", false), ("canary", true), (" deploys", false)]);
-        assert_eq!(title_job("Plain", "zzz", &p, false).sections.len(), 1);
+        assert_eq!(title_job("Plain", "zzz", theme::bold(13.5), &p, false).sections.len(), 1);
         assert_eq!(clear_slot_x(816.0).1, 816.0, "the clear button's text ends on the column edge");
     }
 
@@ -2419,15 +2436,22 @@ mod tests {
     }
 
     #[test]
+    fn comfortable_titles_push_the_pill_line_not_compact() {
+        crate::testutil::with_ui(|ui| {
+            let at = |size: f32| ui.painter().layout_no_wrap("Ag".into(), theme::bold(size), egui::Color32::WHITE);
+            assert_eq!(title_growth(&at(13.5), &at(13.5)), (0.0, 0.0), "Compact's tuned grid is untouched");
+            let (pills, _) = title_growth(&at(13.5), &at(theme::COMFORTABLE.card_title));
+            assert!(pills > 0.0, "a taller title moves the pill line down: {pills}");
+        });
+    }
+
+    #[test]
     fn only_the_list_ends_are_rounded() {
         let r = |nw, ne, sw, se| CornerRadius { nw, ne, sw, se };
-        assert_eq!(row_corners(0, 1), r(6, 0, 6, 0));
-        assert_eq!(row_corners(0, 3), r(6, 0, 0, 0));
+        assert_eq!(row_corners(0, 1), r(6, 6, 6, 6), "a closed card: both sides rounded");
+        assert_eq!(row_corners(0, 3), r(6, 6, 0, 0));
         assert_eq!(row_corners(1, 3), r(0, 0, 0, 0));
-        assert_eq!(row_corners(2, 3), r(0, 0, 6, 0));
-        // No right border: the cover sits on its 1 px column, inside the top and bottom borders.
-        let rect = Rect::from_min_max(egui::pos2(0.0, 10.0), egui::pos2(300.0, 52.0));
-        assert_eq!(right_border_cover(rect), (299.5, 11.0, 51.0));
+        assert_eq!(row_corners(2, 3), r(0, 0, 6, 6));
     }
 
     #[test]

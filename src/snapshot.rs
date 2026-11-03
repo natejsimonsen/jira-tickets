@@ -59,7 +59,12 @@ fn standup_fixture(app: &mut App) -> bool {
     let Ok(path) = std::env::var("JIRA_TICKETS_STANDUP") else { return false };
     let saved = std::fs::read(&path).map_err(|e| e.to_string()).and_then(|b| serde_json::from_slice(&b).map_err(|e| e.to_string()));
     match saved {
-        Ok(saved) => app.standup.saved = saved,
+        Ok(saved) => {
+            // The ticket cards may have landed while the harness was built, for today's window: read them again for
+            // the fixture's (the cards always come from Jira, the fake one for the demo shots).
+            app.standup.saved = saved;
+            app.load_standup_tickets();
+        }
         Err(e) => eprintln!("snapshot: could not load {path}: {e}"),
     }
     // Today counts as run, and no run can start, so the fixture stays on screen.
@@ -316,6 +321,25 @@ fn run_step(harness: &mut Harness<'_, App>, step: &Step) {
     }
 }
 
+/// The Standup shot waits for its ticket cards (done in the window, in progress) to land, up to IDLE_WAIT, so they
+/// show and do not shift the page mid-shot. A fixture's review stays; the cards always come from Jira (the fake one
+/// for the demo shots).
+fn tickets_wait(harness: &mut Harness<'_, App>) {
+    let start = Instant::now();
+    // Loading, or not yet read for the shown review's window (a read for today's may land first).
+    let pending = |app: &App| {
+        let window = crate::standup::tickets_window(&app.standup.saved, chrono::Local::now().date_naive());
+        app.client.is_some() && app.standup.tickets_error.is_none() && (app.standup.tickets_loading || app.standup.saved.tickets.since != Some(window))
+    };
+    while pending(harness.state()) && start.elapsed() < IDLE_WAIT {
+        frames(harness, 1);
+    }
+    // A read that landed earlier kept the cursor on its card; a script's `j` starts from the first card.
+    harness.state_mut().standup.cursor = 0;
+    let t = &harness.state().standup.saved.tickets;
+    eprintln!("snapshot: standup tickets: {} done, {} in progress after {:.1}s", t.done.len(), t.in_progress.len(), start.elapsed().as_secs_f32());
+}
+
 /// The Standup shot waits for a whole review: with no saved review and none started by itself, it starts one,
 /// then waits for it to end, up to `[standup].timeout_secs` plus a minute for Jira.
 fn standup_wait(harness: &mut Harness<'_, App>) {
@@ -369,6 +393,9 @@ pub fn run(out: Option<&str>, cfg: Config) {
     }
     eprintln!("snapshot: data {} after {:.1}s", if harness.state().shot_ready(screen) { "ready" } else { "not ready" }, start.elapsed().as_secs_f32());
     harness.state_mut().actions.push(Action::SetScreen(screen));
+    if screen == Screen::Standup && !no_wait {
+        tickets_wait(&mut harness);
+    }
     if screen == Screen::Standup && !fixture {
         standup_wait(&mut harness);
     }

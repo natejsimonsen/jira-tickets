@@ -136,7 +136,7 @@ pub struct Issue {
     pub custom: BTreeMap<String, Value>,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct Transition {
     pub id: String,
     pub name: String,
@@ -401,15 +401,23 @@ impl Client {
     }
 
     pub fn transitions(&self, key: &str) -> Result<Vec<Transition>> {
+        Ok(self.transitions_with_category(key)?.into_iter().map(|(t, _)| t).collect())
+    }
+
+    /// The issue's transitions, each with its target status's category key ("new", "indeterminate", "done").
+    pub fn transitions_with_category(&self, key: &str) -> Result<Vec<(Transition, String)>> {
         let v = self.get(&format!("/rest/api/3/issue/{key}/transitions"))?;
         Ok(v["transitions"]
             .as_array()
             .map(|a| {
                 a.iter()
-                    .map(|t| Transition {
-                        id: str_at(t, &["id"]).unwrap_or_default(),
-                        name: str_at(t, &["name"]).unwrap_or_default(),
-                        to: str_at(t, &["to", "name"]).unwrap_or_default(),
+                    .map(|t| {
+                        let tr = Transition {
+                            id: str_at(t, &["id"]).unwrap_or_default(),
+                            name: str_at(t, &["name"]).unwrap_or_default(),
+                            to: str_at(t, &["to", "name"]).unwrap_or_default(),
+                        };
+                        (tr, str_at(t, &["to", "statusCategory", "key"]).unwrap_or_default())
                     })
                     .collect()
             })
