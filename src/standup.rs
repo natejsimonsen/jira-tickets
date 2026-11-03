@@ -1176,11 +1176,14 @@ mod tests {
     #[cfg(unix)]
     fn run_with_timeout_feeds_stdin_and_reports_failures() {
         let dir = tempfile::tempdir().unwrap();
-        let path = std::ffi::OsString::from("/usr/bin:/bin");
+        // The child gets the PATH it is handed, not ours: the temp folder leads it so the echo proves which one it saw.
+        // The rest is the test's own PATH, so `cat` and `sleep` resolve where /usr/bin has neither (the nix sandbox).
+        let path = std::env::join_paths(std::iter::once(dir.path().to_path_buf()).chain(std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())))
+            .unwrap();
         let go = AtomicBool::new(false);
         let echo = script(dir.path(), "printf '%s|' \"$1\" \"$PATH\"; cat");
         let out = run_with_timeout(&echo, &["-p".into()], "the prompt", &path, Duration::from_secs(10), &go).unwrap();
-        assert_eq!(out, "-p|/usr/bin:/bin|the prompt");
+        assert_eq!(out, format!("-p|{}|the prompt", path.to_string_lossy()));
         let fail = script(dir.path(), "echo boom >&2; exit 3");
         let e = run_with_timeout(&fail, &[], "", &path, Duration::from_secs(10), &go).unwrap_err();
         assert!(e.contains("boom") && e.contains('3'), "{e}");

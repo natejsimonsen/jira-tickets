@@ -1828,7 +1828,17 @@ mod tests {
             assert!(sp.caption < sp.small && sp.small < sp.body && sp.body < sp.h3 && sp.h3 < sp.h2 && sp.h2 < sp.h1);
             assert!(sp.h3 - sp.body >= 2.0, "a section header is a clear step over body text");
             assert!((1.4..=1.6).contains(&sp.prose_line_height));
-            // About 70 characters of real prose at body size, measured with the app's fonts.
+        }
+        assert_eq!((COMPACT.caption, COMPACT.small, COMPACT.h3, COMPACT.h2, COMPACT.h1), (12.0, 13.0, 16.0, 20.0, 24.0));
+        let (c, m) = (&COMPACT, &COMFORTABLE);
+        assert!(m.small >= c.small && m.h3 > c.h3 && m.h1 > c.h1 && m.prose_max_width > c.prose_max_width && m.paragraph_gap > c.paragraph_gap);
+    }
+
+    #[test]
+    #[cfg_attr(not(target_os = "macos"), ignore = "glyph-ink metrics are calibrated on macOS font rasterisation")]
+    fn the_prose_column_holds_about_70_characters() {
+        // About 70 characters of real prose at body size, measured with the app's fonts.
+        for sp in [&COMPACT, &COMFORTABLE] {
             let chars = crate::testutil::with_ui(|ui| {
                 let sample = "Done means both are merged and the nightly sweep passes without skipped tests, and the runbook names the new path.";
                 let w = ui.painter().layout_no_wrap(sample.into(), body(sp.body), Color32::WHITE).size().x;
@@ -1836,9 +1846,6 @@ mod tests {
             });
             assert!((65.0..=82.0).contains(&chars), "{chars:.0} characters a line");
         }
-        assert_eq!((COMPACT.caption, COMPACT.small, COMPACT.h3, COMPACT.h2, COMPACT.h1), (12.0, 13.0, 16.0, 20.0, 24.0));
-        let (c, m) = (&COMPACT, &COMFORTABLE);
-        assert!(m.small >= c.small && m.h3 > c.h3 && m.h1 > c.h1 && m.prose_max_width > c.prose_max_width && m.paragraph_gap > c.paragraph_gap);
     }
 
     #[test]
