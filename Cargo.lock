@@ -1689,6 +1689,8 @@ dependencies = [
  "num-traits",
  "png",
  "tiff",
+ "zune-core",
+ "zune-jpeg",
 ]
 
 [[package]]
@@ -1726,6 +1728,7 @@ dependencies = [
  "egui",
  "egui_extras",
  "egui_kittest",
+ "image",
  "serde",
  "serde_json",
  "tempfile",

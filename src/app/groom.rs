@@ -1091,10 +1091,13 @@ mod tests {
     #[test]
     fn an_accept_whose_rank_fails_still_moves_the_ticket() {
         let _g = crate::jira::tests::WRITE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        // The transition succeeds; the rank call has no route (404).
+        // The transition succeeds; the rank call has no route (404). The detail and sprint reloads that follow the
+        // write answer, so their errors cannot replace the rank failure's toast.
         let (base, rx) = crate::jira::tests::stub_server(vec![
             ("GET", "/rest/api/3/issue/CI-1/transitions", transitions_json()),
             ("POST", "/rest/api/3/issue/CI-1/transitions", serde_json::json!({})),
+            ("GET", "/rest/api/3/issue/CI-1", serde_json::json!({"key": "CI-1", "fields": {"status": {"name": "Ready for Work"}}})),
+            ("GET", "/rest/agile/1.0/board/", serde_json::json!({"values": []})),
         ]);
         let mut app = session_app(&base);
         app.grooming.placement = Some(0);
@@ -1224,10 +1227,13 @@ mod tests {
     #[test]
     fn a_bounce_whose_move_fails_keeps_the_posted_comment_and_closes_the_box() {
         let _g = crate::jira::tests::WRITE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        // The comment posts; no transition leads to New from here.
+        // The comment posts; no transition leads to New from here. The detail and sprint reloads that follow the
+        // write answer too: a 404 there would toast and, whenever it lands first, hide the bounce's toast.
         let (base, rx) = crate::jira::tests::stub_server(vec![
             ("POST", "/rest/api/3/issue/CI-1/comment", serde_json::json!({})),
             ("GET", "/rest/api/3/issue/CI-1/transitions", serde_json::json!({"transitions": []})),
+            ("GET", "/rest/api/3/issue/CI-1", serde_json::json!({"key": "CI-1", "fields": {"status": {"name": "Planning"}}})),
+            ("GET", "/rest/agile/1.0/board/", serde_json::json!({"values": []})),
         ]);
         let mut app = session_app(&base);
         app.grooming.bounce_text = Some("Which clusters?".into());

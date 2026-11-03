@@ -7,6 +7,7 @@ mod loads;
 mod msg;
 mod pickers;
 mod shortcuts;
+mod standup;
 
 pub use actions::Action;
 pub use msg::Msg;
@@ -15,12 +16,15 @@ pub use pickers::{
     sprint_current_row, sprint_row_label, transition_row,
 };
 
+pub use standup::{StandupPhase, StandupState};
+
 use shortcuts::close_shortcut;
 
 use crate::auth::{self, Login};
 use crate::config::Config;
 use crate::jira::{self, Client, Sprint, User};
 use crate::store::{ListId, Store};
+use crate::theme::{Appearance, SavedAppearance};
 use crate::{theme, views};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
@@ -29,6 +33,8 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::{Duration, Instant};
 
 const AUTO_REFRESH: Duration = Duration::from_secs(5 * 60);
+/// The disk cache key of the appearance chosen in the app (`SavedAppearance`).
+const APPEARANCE_KEY: &str = "appearance";
 
 /// A write run on the ordered write worker.
 type WriteJob = Box<dyn FnOnce(&Client, &Sender<Msg>) + Send>;
@@ -39,6 +45,8 @@ pub enum Screen {
     Grooming,
     Team,
     Roadmap,
+    Me,
+    Standup,
 }
 
 #[derive(Default)]
@@ -128,6 +136,18 @@ pub struct TeamState {
     pub done: HashMap<String, Vec<jira::Issue>>,
     /// Member ids with a done load in flight.
     pub done_loading: HashSet<String>,
+    /// How many tickets each member finished in the last 7 days, by member id, loaded for every member on each
+    /// refresh, so a closed footer can show its count. Kept through a refresh until the new count lands.
+    pub done_count: HashMap<String, usize>,
+    /// Member ids with a done count load in flight.
+    pub done_count_loading: HashSet<String>,
+}
+
+/// Everything the Me screen keeps between frames.
+#[derive(Default)]
+pub struct MeState {
+    /// The focused row, counting down through the sections (`me::issue_at`).
+    pub cursor: usize,
 }
 
 /// Everything the Roadmap screen keeps between frames.
@@ -250,6 +270,14 @@ pub struct App {
     pub grooming: GroomingState,
     pub team: TeamState,
     pub roadmap: RoadmapState,
+    /// The colour scheme and density in use (`theme::effective_appearance`, then ⌘⇧T / ⌘⇧D).
+    pub appearance: Appearance,
+    pub me_view: MeState,
+    pub standup: StandupState,
+    /// Runs the Standup review's `claude`; tests swap in a stand-in.
+    pub(crate) review_runner: standup::ReviewRunner,
+    /// Today's date for the Standup review's window; tests pin it.
+    pub(crate) today: fn() -> chrono::NaiveDate,
     /// How many report reads were started, for tests.
     #[cfg(test)]
     pub(crate) report_reads: usize,
@@ -269,13 +297,16 @@ pub struct App {
 
 impl App {
     /// True once the lists `screen` draws have loaded; snapshots wait for it. Every screen needs the first team
-    /// list; the Roadmap also needs the epics and, when any epic is an initiative, their children (the progress).
+    /// list; Me needs its own list; the Roadmap also needs the epics and, when any epic is an initiative, their children (the progress).
     #[cfg(feature = "snapshot")]
     pub fn shot_ready(&self, screen: Screen) -> bool {
         use crate::store::ListId;
         let fetched = |id: ListId| self.lists.get(&id).is_some_and(|l| l.fetched.is_some());
         if !fetched(ListId::TeamOpen) {
             return false;
+        }
+        if screen == Screen::Me {
+            return fetched(ListId::Me);
         }
         if screen != Screen::Roadmap {
             return true;
@@ -349,6 +380,11 @@ impl App {
             grooming: GroomingState::default(),
             team: TeamState::default(),
             roadmap: RoadmapState::default(),
+            appearance: Appearance::default(),
+            me_view: MeState::default(),
+            standup: StandupState::default(),
+            review_runner: crate::standup::run_review,
+            today: || chrono::Local::now().date_naive(),
             #[cfg(test)]
             report_reads: 0,
             client: None,
@@ -365,11 +401,9 @@ impl App {
 
     pub fn new(cc: &eframe::CreationContext<'_>, cfg: Config) -> Self {
         theme::apply(&cc.egui_ctx);
-        match std::env::var("JIRA_TICKETS_THEME").as_deref() {
-            Ok("dark") => cc.egui_ctx.set_theme(egui::Theme::Dark),
-            Ok("light") => cc.egui_ctx.set_theme(egui::Theme::Light),
-            _ => cc.egui_ctx.set_theme(egui::ThemePreference::System),
-        }
+        let saved: Option<SavedAppearance> = crate::cache::load(APPEARANCE_KEY);
+        let appearance = launch_appearance(cfg.appearance, saved, std::env::var("JIRA_TICKETS_THEME").ok(), std::env::var("JIRA_TICKETS_DENSITY").ok());
+        apply_appearance(&cc.egui_ctx, appearance);
         if std::env::var_os("JIRA_TICKETS_READONLY").is_some() {
             jira::READ_ONLY.store(true, std::sync::atomic::Ordering::Relaxed);
         }
@@ -377,6 +411,7 @@ impl App {
         let cfg = Arc::new(cfg);
         let mut app = App::empty(cfg.clone(), tx, rx, cc.egui_ctx.clone());
         app.persist_cache = true;
+        app.appearance = appearance;
         app.store = Store::for_launch(Store::load_cached());
         let cached_sprints: Vec<Sprint> = crate::cache::load(&sprints_cache_key(cfg.scope.board_id)).unwrap_or_default();
         let launch_scope = crate::filter::launch_sprint_scope(&cached_sprints);
@@ -385,6 +420,7 @@ impl App {
         }
         app.sprints_cached = launch_scope.is_some();
         app.sprints = cached_sprints;
+        app.standup.saved = crate::cache::load(crate::standup::CACHE_KEY).unwrap_or_default();
         // Finding the token may run `op read`, which can block; keep it off the UI thread.
         let (tx, ctx) = (app.tx.clone(), app.ctx.clone());
         std::thread::spawn(move || {
@@ -425,6 +461,53 @@ impl App {
         let in_progress = self.store.list(ListId::TeamInProgress);
         let team_open = self.store.list(ListId::TeamOpen);
         crate::teamview::columns(&self.cfg.team.members, &in_progress, &team_open, &self.cfg.grooming.status_ready, chrono::Utc::now())
+    }
+
+    /// The Me screen's sections, from the Me list in the store.
+    pub fn me_sections(&self) -> Vec<(crate::me::Section, Vec<crate::teamview::Card<'_>>)> {
+        crate::me::sections(&self.store.list(ListId::Me), chrono::Utc::now())
+    }
+
+    /// The issue under the Me cursor, clamped to the rows there are.
+    pub fn me_focused(&self) -> Option<String> {
+        let s = self.me_sections();
+        let row = crate::me::moved(self.me_view.cursor, 0, crate::me::row_count(&s));
+        crate::me::issue_at(&s, row).map(|i| i.key.clone())
+    }
+
+    /// The epics the current screen shows dots for, in reading order: Grooming's session rail or pre-check rows, the
+    /// Team columns, the Me list. Issues tracks its own rows (`views::issues::track_epics`); Roadmap and Standup show
+    /// no epic dots.
+    fn screen_epics(&self) -> Option<Vec<String>> {
+        let parents = |issues: &mut dyn Iterator<Item = &crate::jira::Issue>| issues.filter_map(|i| i.parent_key.clone()).collect::<Vec<_>>();
+        Some(match self.screen {
+            Screen::Grooming => match self.grooming.mode {
+                GroomMode::Session => self.session_queues().into_iter().filter_map(|q| q.epic).collect(),
+                GroomMode::PreCheck => parents(&mut self.pre_check_candidates().iter().map(|c| c.issue)),
+            },
+            Screen::Team => parents(&mut self.team_columns().iter().flat_map(|c| c.in_progress.iter().chain(&c.ready)).map(|c| c.issue)),
+            Screen::Me => parents(&mut self.store.list(ListId::Me).into_iter()),
+            Screen::Issues | Screen::Roadmap | Screen::Standup => return None,
+        })
+    }
+
+    /// Gives hue slots to the epics on the current screen first, then to the loaded epic list, on every screen,
+    /// not only Issues: Grooming and Team read `epic_slots` too, and with none given every epic fell back to one
+    /// slot (round 3: 10 of 16 Grooming epics one orange). Same phases as Issues (`views::issues::slot_phase`), so a
+    /// hue given here holds when Issues takes over.
+    fn track_screen_epics(&mut self) {
+        let Some(visible) = self.screen_epics() else { return };
+        let resolved = self.sprints_answered || self.sprints_cached || self.client.is_none();
+        match views::issues::slot_phase(resolved, self.epic_slots_final) {
+            views::issues::SlotPhase::Provisional => self.epic_slots.clear(),
+            views::issues::SlotPhase::Reset => {
+                self.epic_slots.clear();
+                self.epic_slots_final = true;
+            }
+            views::issues::SlotPhase::Keep => {}
+        }
+        let rest: Vec<String> = self.store.list(ListId::Epics).iter().map(|e| e.key.clone()).collect();
+        theme::assign_epic_slots(&mut self.epic_slots, visible.iter().map(String::as_str), rest.iter().map(String::as_str));
     }
 
     /// The roadmap's initiatives, derived from the epics in the store and their children, and the summaries of the
@@ -478,8 +561,18 @@ impl App {
         self.toast = Some(Toast { text: text.into(), kind, until: Instant::now() + Duration::from_secs(secs) });
     }
 
+    /// Uses `a` from now on and saves it (with the config value it replaces) for the next launch.
+    pub(super) fn set_appearance(&mut self, a: Appearance, ctx: &egui::Context) {
+        self.appearance = a;
+        apply_appearance(ctx, a);
+        if self.persist_cache {
+            crate::cache::store(APPEARANCE_KEY, &SavedAppearance { config: self.cfg.appearance, chosen: a });
+        }
+    }
+
     fn connect(&mut self, login: Login) {
         self.client = Some(Arc::new(Client::new(&self.cfg.site, &login)));
+        crate::avatar::set_client(&self.ctx, self.client.clone());
         self.login = Some(login);
         self.finding_token = false;
         self.spawn(|c, tx| {
@@ -487,6 +580,24 @@ impl App {
         });
         self.refresh_all();
     }
+}
+
+/// The launch's appearance: the config's, or the choice saved in the app while the config is unchanged
+/// (`theme::effective_appearance`); `JIRA_TICKETS_THEME` and `JIRA_TICKETS_DENSITY` override both (snapshots).
+fn launch_appearance(config: Appearance, saved: Option<SavedAppearance>, env_theme: Option<String>, env_density: Option<String>) -> Appearance {
+    let mut a = theme::effective_appearance(config, saved);
+    if let Some(t) = env_theme.as_deref().and_then(theme::Scheme::parse) {
+        a.theme = t;
+    }
+    if let Some(d) = env_density.as_deref().and_then(theme::Density::parse) {
+        a.density = d;
+    }
+    a
+}
+
+fn apply_appearance(ctx: &egui::Context, a: Appearance) {
+    ctx.set_theme(a.theme.preference());
+    theme::set_density(ctx, a.density);
 }
 
 /// The cache key of a board's sprint list (the first frame's sprint scope, `filter::launch_sprint_scope`).
@@ -526,6 +637,9 @@ impl eframe::App for App {
         if self.client.is_some() && (back || self.last_refresh.elapsed() > AUTO_REFRESH) {
             self.refresh_all();
         }
+        if self.client.is_some() {
+            self.standup_auto_run();
+        }
         ctx.request_repaint_after(AUTO_REFRESH);
 
         // The root ui has no background of its own in eframe 0.36.
@@ -535,6 +649,10 @@ impl eframe::App for App {
             self.shortcuts(&ctx);
             // Set again by the detail pane when its pill row shows.
             self.detail_pills_top = None;
+            // Set again by the screens that show a detail pane (Issues, Me), so nothing centres on a pane that is not
+            // on screen.
+            self.detail_x = None;
+            self.track_screen_epics();
             views::main(self, ui);
             self.text_search_tick(&ctx);
             views::pickers::show(self, &ctx);
@@ -747,11 +865,26 @@ mod tests {
         app.handle(Msg::DoneRecent { member: "abc".into(), result: Ok(vec![done]) });
         assert!(app.team.done_loading.is_empty());
         assert_eq!(app.team.done.get("abc").map(|v| v.iter().map(|i| i.key.as_str()).collect::<Vec<_>>()), Some(vec!["CI-7"]));
+        assert_eq!(app.team.done_count.get("abc"), Some(&1), "the list's length is the count");
         app.team.done_loading.insert("abc".into());
         app.handle(Msg::DoneRecent { member: "abc".into(), result: Err(crate::jira::Error::Network("down".into())) });
         assert!(app.team.done_loading.is_empty());
         assert!(app.team.done.contains_key("abc"), "a failed reload keeps the last list");
         assert!(app.toast.is_some());
+    }
+
+    #[test]
+    fn done_count_result_is_stored_and_kept_on_failure() {
+        let mut app = team_app();
+        app.team.done_count_loading.insert("abc".into());
+        app.handle(Msg::DoneCount { member: "abc".into(), result: Ok(3) });
+        assert!(app.team.done_count_loading.is_empty());
+        assert_eq!(app.team.done_count.get("abc"), Some(&3));
+        app.team.done_count_loading.insert("abc".into());
+        app.handle(Msg::DoneCount { member: "abc".into(), result: Err(crate::jira::Error::Network("down".into())) });
+        assert!(app.team.done_count_loading.is_empty());
+        assert_eq!(app.team.done_count.get("abc"), Some(&3), "a failed reload keeps the last count");
+        assert!(app.toast.is_none(), "a count is a hint, not worth a toast");
     }
 
     #[test]
@@ -770,6 +903,9 @@ mod tests {
         assert!(!app.team.done_loading.contains("def"), "a closed footer does not");
         assert!(app.team.done.contains_key("abc"), "the open footer keeps its list until the reload lands");
         assert!(!app.team.done.contains_key("def"), "a closed footer's list is dropped, so reopening reloads it");
+        for m in &app.cfg.team.members {
+            assert!(app.team.done_count_loading.contains(m), "every member's count reloads: {m}");
+        }
     }
 
     fn roadmap_app() -> App {
@@ -837,6 +973,61 @@ mod tests {
         assert_eq!(app.screen, Screen::Roadmap, "nothing to open");
     }
 
+    fn me_app() -> App {
+        let mut app = App::for_test(cfg(), None);
+        app.screen = Screen::Me;
+        let issue = |key: &str, cat: &str, rank: &str| crate::jira::Issue {
+            key: key.into(),
+            status: crate::jira::Status { name: "x".into(), category: cat.into() },
+            rank: rank.into(),
+            ..Default::default()
+        };
+        app.store.absorb(ListId::Me, vec![issue("CI-3", "done", ""), issue("CI-2", "new", "0|a"), issue("CI-1", "indeterminate", "0|b")]);
+        app
+    }
+
+    #[test]
+    fn me_move_selects_and_open_goes_to_issues() {
+        let mut app = me_app();
+        let ctx = egui::Context::default();
+        assert_eq!(app.me_focused().as_deref(), Some("CI-1"), "opens on the in-progress ticket");
+        app.apply(Action::MeMove(1), &ctx);
+        assert_eq!((app.me_view.cursor, app.selected.as_deref()), (1, Some("CI-2")), "then To do");
+        app.apply(Action::MeMove(9), &ctx);
+        assert_eq!((app.me_view.cursor, app.selected.as_deref()), (2, Some("CI-3")), "clamped to the last done ticket");
+        app.apply(Action::MeMove(-9), &ctx);
+        assert_eq!(app.me_view.cursor, 0);
+        app.apply(Action::MeOpen, &ctx);
+        assert_eq!((app.screen, app.selected.as_deref()), (Screen::Issues, Some("CI-1")));
+    }
+
+    #[test]
+    fn me_list_loads_only_with_a_client() {
+        let mut app = App::for_test(cfg(), None);
+        app.refresh_all();
+        assert!(!app.lists.get(&ListId::Me).is_some_and(|l| l.loading), "no client: nothing would clear the flag");
+        let (base, _rx) = crate::jira::tests::stub_server(vec![]);
+        let login = crate::auth::Login { email: "a@b.c".into(), token: "t".into(), source: crate::auth::Source::Env };
+        app.client = Some(std::sync::Arc::new(crate::jira::Client::new(&base, &login)));
+        app.refresh_all();
+        assert!(app.lists.get(&ListId::Me).is_some_and(|l| l.loading), "a refresh loads the Me list");
+    }
+
+    #[test]
+    fn me_keys() {
+        let mut app = me_app();
+        press(&mut app, egui::Key::J, egui::Modifiers::NONE);
+        press(&mut app, egui::Key::Enter, egui::Modifiers::NONE);
+        assert!(matches!(app.actions.as_slice(), [Action::MeMove(1), Action::MeOpen]));
+        app.actions.clear();
+        press(&mut app, egui::Key::O, egui::Modifiers::COMMAND);
+        assert!(matches!(app.actions.as_slice(), [Action::OpenUrl(u)] if u.ends_with("/browse/CI-1")));
+        app.actions.clear();
+        app.screen = Screen::Issues;
+        press(&mut app, egui::Key::Num5, egui::Modifiers::COMMAND);
+        assert!(matches!(app.actions.as_slice(), [Action::SetScreen(Screen::Me)]), "⌘5 is the Me screen");
+    }
+
     /// Runs the shortcuts over one pass that presses `key` with `mods`.
     fn press(app: &mut App, key: egui::Key, mods: egui::Modifiers) {
         let ctx = egui::Context::default();
@@ -859,6 +1050,30 @@ mod tests {
         app.screen = Screen::Team;
         press(&mut app, egui::Key::Num3, egui::Modifiers::NONE);
         assert!(!app.actions.iter().any(|a| matches!(a, Action::RoadmapTab(_))), "only on Roadmap");
+    }
+
+    #[test]
+    fn launch_appearance_env_overrides_config_and_saved() {
+        use crate::theme::{Density, Scheme};
+        let config = Appearance::default();
+        let chosen = Appearance { theme: Scheme::Light, density: Density::Comfortable };
+        let saved = Some(SavedAppearance { config, chosen });
+        assert_eq!(launch_appearance(config, saved, None, None), chosen);
+        assert_eq!(launch_appearance(config, saved, Some("dark".into()), None), Appearance { theme: Scheme::Dark, ..chosen });
+        assert_eq!(launch_appearance(config, None, None, Some("comfortable".into())).density, Density::Comfortable);
+        assert_eq!(launch_appearance(config, None, Some("bogus".into()), Some("".into())), config, "unknown values are ignored");
+    }
+
+    #[test]
+    fn theme_and_density_actions_switch_the_context() {
+        let mut app = App::for_test(cfg(), None);
+        let ctx = egui::Context::default();
+        app.apply(Action::CycleTheme, &ctx);
+        assert_eq!(app.appearance.theme, crate::theme::Scheme::Light);
+        assert_eq!(ctx.options(|o| o.theme_preference), egui::ThemePreference::Light);
+        app.apply(Action::ToggleDensity, &ctx);
+        assert_eq!(ctx.style_of(egui::Theme::Light).spacing.item_spacing, crate::theme::COMFORTABLE.item);
+        assert!(app.toast.as_ref().is_some_and(|t| t.text == "Density: Comfortable"));
     }
 
     #[test]

@@ -190,7 +190,43 @@ fn str_at(v: &Value, path: &[&str]) -> Option<String> {
 
 fn user_at(v: &Value) -> Option<User> {
     let display_name = str_at(v, &["displayName"])?;
-    Some(User { account_id: str_at(v, &["accountId"]).unwrap_or_default(), display_name })
+    let account_id = str_at(v, &["accountId"]).unwrap_or_default();
+    if let Some(url) = avatar_url_in(v)
+        && !account_id.is_empty()
+    {
+        AVATAR_URLS.lock().unwrap_or_else(|e| e.into_inner()).insert(account_id.clone(), url);
+    }
+    Some(User { account_id, display_name })
+}
+
+/// Avatar URLs seen in any parsed user, by account id. A side table rather than a `User` field, so the many
+/// `User { .. }` literals stay as they are. `crate::avatar` reads it.
+static AVATAR_URLS: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<String, String>>> = std::sync::LazyLock::new(Default::default);
+
+/// The avatar URL last seen for `account_id`, if any parsed response carried one.
+pub fn known_avatar_url(account_id: &str) -> Option<String> {
+    AVATAR_URLS.lock().unwrap_or_else(|e| e.into_inner()).get(account_id).cloned()
+}
+
+/// The best avatar URL in a user object's `avatarUrls`: 48x48, else the largest smaller one.
+fn avatar_url_in(user: &Value) -> Option<String> {
+    ["48x48", "32x32", "24x24", "16x16"].iter().find_map(|k| user["avatarUrls"][k].as_str().filter(|u| !u.is_empty()).map(String::from))
+}
+
+/// Percent-encodes everything but RFC 3986 unreserved characters, for one query value.
+fn urlencode(s: &str) -> String {
+    s.bytes().map(|b| if b.is_ascii_alphanumeric() || b"-._~".contains(&b) { (b as char).to_string() } else { format!("%{b:02X}") }).collect()
+}
+
+/// True when `url` is on the same scheme and host as `base`, so it may get the Jira credentials.
+/// Avatars on other hosts (Atlassian's avatar CDN, Gravatar) are public and never see the token.
+fn same_origin(base: &str, url: &str) -> bool {
+    let origin = |u: &str| -> Option<String> {
+        let (scheme, rest) = u.split_once("://")?;
+        let host = rest.split(['/', '?', '#']).next()?;
+        Some(format!("{}://{}", scheme.to_ascii_lowercase(), host.to_ascii_lowercase()))
+    };
+    origin(base).is_some_and(|b| origin(url) == Some(b))
 }
 
 /// The issue's sprint as Jira's board sees it: the last one still `active` or `future`. An issue whose
@@ -325,16 +361,29 @@ impl Client {
 
     /// Up to `max_pages` pages (tests use 1).
     pub fn search_pages(&self, jql: &str, fields: &[&str], max_pages: usize) -> Result<Vec<Issue>> {
+        Ok(self.search_raw(jql, fields, None, max_pages)?.iter().map(parse_issue).collect())
+    }
+
+    /// Every page of a JQL search with each issue's changelog, as Jira's raw JSON (the Standup screen reads the
+    /// status changes and comments out of it).
+    pub fn search_with_changelog(&self, jql: &str, fields: &[&str]) -> Result<Vec<Value>> {
+        self.search_raw(jql, fields, Some("changelog"), usize::MAX)
+    }
+
+    fn search_raw(&self, jql: &str, fields: &[&str], expand: Option<&str>, max_pages: usize) -> Result<Vec<Value>> {
         let mut out = Vec::new();
         let mut token: Option<String> = None;
         for _ in 0..max_pages {
             let mut body = json!({ "jql": jql, "fields": fields, "maxResults": 100 });
+            if let Some(e) = expand {
+                body["expand"] = json!(e);
+            }
             if let Some(t) = &token {
                 body["nextPageToken"] = json!(t);
             }
             let v = self.send("POST", "/rest/api/3/search/jql", &body)?;
             let page = v["issues"].as_array().map(Vec::as_slice).unwrap_or_default();
-            out.extend(page.iter().map(parse_issue));
+            out.extend(page.iter().cloned());
             let next = v["nextPageToken"].as_str().map(String::from);
             // Guard against a misbehaving server: stop on an empty page or a repeated token.
             if next.is_none() || page.is_empty() || next == token {
@@ -372,6 +421,31 @@ impl Client {
         Ok(v.as_array()
             .map(|a| a.iter().map(|r| Resolution { id: str_at(r, &["id"]).unwrap_or_default(), name: str_at(r, &["name"]).unwrap_or_default() }).collect())
             .unwrap_or_default())
+    }
+
+    /// A user's avatar URL by account id, for users seen only in cached data.
+    pub fn user_avatar_url(&self, account_id: &str) -> Result<Option<String>> {
+        let v = self.get(&format!("/rest/api/3/user?accountId={}", urlencode(account_id)))?;
+        user_at(&v);
+        Ok(avatar_url_in(&v))
+    }
+
+    /// The raw bytes at `url` (an avatar image), at most 2 MB. Sends the Jira credentials only to the Jira site.
+    pub fn fetch_bytes(&self, url: &str) -> Result<Vec<u8>> {
+        let t = std::time::Instant::now();
+        let mut req = self.agent.get(url).header("Accept", "image/png,image/jpeg,image/*");
+        if same_origin(&self.base, url) {
+            req = req.header("Authorization", &self.auth);
+        }
+        let mut resp = req.call()?;
+        let code = resp.status().as_u16();
+        let out = if (200..300).contains(&code) {
+            resp.body_mut().with_config().limit(2 << 20).read_to_vec().map_err(Error::from)
+        } else {
+            Err(map_status(code, ""))
+        };
+        perf("GET", url, t);
+        out
     }
 
     pub fn assignable_users(&self, project: &str) -> Result<Vec<User>> {
@@ -447,6 +521,13 @@ impl Client {
         check_writable()?;
         self.send("PUT", &format!("/rest/api/3/issue/{key}"), &json!({ "update": { "labels": [{ "add": label }] } }))?;
         Ok(())
+    }
+
+    /// Creates an issue and returns its key. `fields` is Jira's create `fields` object.
+    pub fn create_issue(&self, fields: Value) -> Result<String> {
+        check_writable()?;
+        let v = self.send("POST", "/rest/api/3/issue", &json!({ "fields": fields }))?;
+        str_at(&v, &["key"]).ok_or_else(|| Error::Other("create issue: Jira returned no key".into()))
     }
 
     pub fn add_comment(&self, key: &str, text: &str) -> Result<()> {
@@ -712,6 +793,40 @@ pub mod tests {
     }
 
     #[test]
+    fn avatar_urls_prefer_48_and_are_remembered() {
+        let v = serde_json::json!({ "accountId": "av-1", "displayName": "A", "avatarUrls": { "16x16": "s16", "24x24": "s24", "48x48": "s48" } });
+        assert_eq!(avatar_url_in(&v).as_deref(), Some("s48"));
+        assert_eq!(avatar_url_in(&serde_json::json!({ "avatarUrls": { "16x16": "s16", "24x24": "s24" } })).as_deref(), Some("s24"));
+        assert_eq!(avatar_url_in(&serde_json::json!({ "displayName": "A" })), None);
+        assert_eq!(user_at(&v).unwrap().account_id, "av-1");
+        assert_eq!(known_avatar_url("av-1").as_deref(), Some("s48"));
+        assert_eq!(known_avatar_url("nobody"), None);
+    }
+
+    #[test]
+    fn credentials_go_only_to_the_jira_site() {
+        let base = "https://acme.atlassian.net";
+        assert!(same_origin(base, "https://acme.atlassian.net/secure/useravatar?avatarId=1"));
+        assert!(same_origin(base, "HTTPS://ACME.atlassian.net"));
+        assert!(!same_origin(base, "https://avatar-management--avatars.us-west-2.prod.public.atl-paas.net/x.png"));
+        assert!(!same_origin(base, "https://acme.atlassian.net.evil.com/x"));
+        assert!(!same_origin(base, "http://acme.atlassian.net/x"));
+        assert!(!same_origin(base, "not a url"));
+        assert_eq!(urlencode("557058:f5-8_.~ x"), "557058%3Af5-8_.~%20x");
+    }
+
+    #[test]
+    fn user_avatar_url_and_fetch_bytes() {
+        let user = serde_json::json!({ "accountId": "557058:z", "displayName": "Z", "avatarUrls": { "48x48": "https://cdn.example/z.png" } });
+        let (base, rx) = stub_server(vec![("GET", "/rest/api/3/user", user), ("GET", "/img/", serde_json::json!("PNGDATA"))]);
+        let c = client(&base);
+        assert_eq!(c.user_avatar_url("557058:z").unwrap().as_deref(), Some("https://cdn.example/z.png"));
+        assert_eq!(rx.recv().unwrap().path, "/rest/api/3/user?accountId=557058%3Az");
+        assert_eq!(c.fetch_bytes(&format!("{base}/img/a.png")).unwrap(), b"\"PNGDATA\"");
+        assert!(c.fetch_bytes(&format!("{base}/missing")).is_err());
+    }
+
+    #[test]
     fn base64_known_vectors() {
         assert_eq!(base64_lite::encode("a".into()), "YQ==");
         assert_eq!(base64_lite::encode("ab".into()), "YWI=");
@@ -832,6 +947,42 @@ pub mod tests {
             assert!(err.to_string().contains("read-only"), "{err}");
         }
         assert!(rx.try_recv().is_err(), "nothing was sent");
+    }
+
+    #[test]
+    fn create_issue_posts_fields_and_returns_the_key() {
+        let _g = WRITE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (base, rx) = stub_server(vec![("POST", "/rest/api/3/issue", serde_json::json!({ "id": "10001", "key": "CI-42" }))]);
+        let c = client(&base);
+        {
+            let _ro = ReadOnlyGuard::new();
+            assert!(is_read_only(&c.create_issue(serde_json::json!({})).unwrap_err()));
+        }
+        assert!(rx.try_recv().is_err(), "read-only sent nothing");
+        let fields = serde_json::json!({ "project": { "key": "CI" }, "summary": "Do it", "issuetype": { "name": "Task" }, "labels": ["PLAT"] });
+        assert_eq!(c.create_issue(fields.clone()).unwrap(), "CI-42");
+        let r = rx.recv().unwrap();
+        assert_eq!((r.method.as_str(), r.path.as_str()), ("POST", "/rest/api/3/issue"));
+        assert_eq!(serde_json::from_str::<serde_json::Value>(&r.body).unwrap(), serde_json::json!({ "fields": fields }));
+    }
+
+    #[test]
+    fn create_issue_without_a_key_is_an_error() {
+        let _g = WRITE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (base, _rx) = stub_server(vec![("POST", "/rest/api/3/issue", serde_json::json!({ "id": "10001" }))]);
+        assert!(client(&base).create_issue(serde_json::json!({})).unwrap_err().to_string().contains("no key"));
+    }
+
+    #[test]
+    fn search_with_changelog_asks_for_the_changelog_and_keeps_raw_json() {
+        let page = serde_json::json!({ "issues": [{ "key": "CI-1", "changelog": { "histories": [] }, "fields": { "summary": "a" } }] });
+        let (base, rx) = stub_server(vec![("POST", "/rest/api/3/search/jql", page)]);
+        let got = client(&base).search_with_changelog("updated >= \"2026-10-30\"", &["summary"]).unwrap();
+        assert_eq!(got.len(), 1);
+        assert!(got[0]["changelog"]["histories"].is_array());
+        let body: serde_json::Value = serde_json::from_str(&rx.recv().unwrap().body).unwrap();
+        assert_eq!(body["expand"], "changelog");
+        assert_eq!(body["fields"][0], "summary");
     }
 
     #[test]

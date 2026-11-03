@@ -17,6 +17,9 @@ pub struct Config {
     pub team: Team,
     pub issues: Issues,
     pub roadmap: Roadmap,
+    /// Colour scheme and spacing density; a choice made in the app (⌘⇧T, ⌘⇧D) wins until this table changes.
+    pub appearance: crate::theme::Appearance,
+    pub standup: Standup,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -100,6 +103,23 @@ pub struct Roadmap {
     pub definition_of_done_field: Option<String>,
     /// Epics with this label are roadmap initiatives.
     pub initiative_label: String,
+}
+
+/// The Standup screen's review: the `claude` CLI it runs and the model it asks for.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Standup {
+    /// A path, or a name looked up on PATH and the usual install folders (a Dock launch has a minimal PATH).
+    pub claude: String,
+    pub model: String,
+    /// How long the review may run before it is stopped.
+    pub timeout_secs: u64,
+}
+
+impl Default for Standup {
+    fn default() -> Self {
+        Standup { claude: s("claude"), model: s("claude-opus-5-5"), timeout_secs: 900 }
+    }
 }
 
 fn s(v: &str) -> String {
@@ -385,6 +405,19 @@ horizon_by_status = { "In Progress" = "now", "Work in Progress" = "now", "Ready 
 # confidence_field = "customfield_XXXXX"
 # next_milestone_field = "customfield_XXXXX"
 # definition_of_done_field = "customfield_XXXXX"
+
+[appearance]
+# Changing a value here replaces a choice made in the app (⌘⇧T theme, ⌘⇧D density).
+theme = "system"       # "system" follows macOS; or "light", "dark"
+density = "compact"    # or "comfortable": taller rows, more padding, larger text
+
+[standup]
+# The Claude Code CLI the Standup screen runs: a path, or a name found on PATH,
+# ~/.local/bin, ~/.claude/local, ~/.npm-global/bin, the flox default environment,
+# the nix profiles, /opt/homebrew/bin or /usr/local/bin.
+claude = "claude"
+model = "claude-opus-5-5"
+timeout_secs = 900
 "##;
 
 #[cfg(test)]
@@ -420,6 +453,8 @@ email = "me@example.com"
         assert_eq!(c.roadmap.horizon_by_status.get("In Progress").map(String::as_str), Some("now"));
         assert_eq!(c.roadmap.horizon_by_status.get("Work in Progress").map(String::as_str), Some("now"));
         assert_eq!(c.roadmap.initiative_label, "roadmap");
+        assert_eq!(c.standup.claude, "claude");
+        assert_eq!(c.standup.model, "claude-opus-5-5");
         assert!(c.validate().is_ok());
     }
 
@@ -444,6 +479,8 @@ email = "me@example.com"
         assert_eq!(parsed.scope.parent_board_id, 100);
         assert_eq!(parsed.scope.teams, Scope::default().teams);
         assert!(parsed.issues.status_colors.is_empty() && parsed.issues.epic_colors.is_empty());
+        assert_eq!(parsed.appearance, crate::theme::Appearance::default());
+        assert_eq!((parsed.standup.claude.as_str(), parsed.standup.model.as_str(), parsed.standup.timeout_secs), ("claude", "claude-opus-5-5", 900));
         assert!(c.is_err());
     }
 
@@ -521,6 +558,27 @@ email = "me@example.com"
         let c: Config = toml::from_str(&text).unwrap();
         assert_eq!(c.scope.teams.len(), 1);
         assert_eq!(c.scope.members_of("TOOLS", &c.team.members), ["x"]);
+    }
+
+    #[test]
+    fn appearance_table_parses_and_defaults() {
+        use crate::theme::{Appearance, Density, Scheme};
+        let c: Config = toml::from_str(MINIMAL).unwrap();
+        assert_eq!(c.appearance, Appearance { theme: Scheme::System, density: Density::Compact });
+        let c: Config = toml::from_str(&format!("{MINIMAL}\n[appearance]\ndensity = \"comfortable\"\n")).unwrap();
+        assert_eq!(c.appearance, Appearance { theme: Scheme::System, density: Density::Comfortable });
+        let c: Config = toml::from_str(&format!("{MINIMAL}\n[appearance]\ntheme = \"dark\"\n")).unwrap();
+        assert_eq!(c.appearance.theme, Scheme::Dark);
+        let e = toml::from_str::<Config>(&format!("{MINIMAL}\n[appearance]\ntheme = \"sepia\"\n")).unwrap_err().to_string();
+        assert!(e.contains("sepia"), "{e}");
+    }
+
+    #[test]
+    fn standup_table_parses_partially() {
+        let c: Config = toml::from_str(&format!("{MINIMAL}\n[standup]\nclaude = \"/opt/claude\"\n")).unwrap();
+        assert_eq!(c.standup.claude, "/opt/claude");
+        assert_eq!(c.standup.model, "claude-opus-5-5", "unset keys keep their defaults");
+        assert_eq!(c.standup.timeout_secs, 900);
     }
 
     #[test]

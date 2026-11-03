@@ -8,7 +8,7 @@ mod timeline;
 use crate::app::{Action, App};
 use crate::roadmap::{self, Health, Initiative, Progress};
 use crate::theme::{self, Palette};
-use crate::views::{PILL_MARGIN, pill_sized};
+use crate::views::components as c;
 use chrono::{Datelike, NaiveDate};
 use egui::{Color32, Frame, Margin, Rect, RichText, Sense, Stroke, Ui, vec2};
 
@@ -20,11 +20,9 @@ pub const COLUMNS: [(&str, &str); 3] =
 /// Tab 3's table heads.
 pub const HEADS: [&str; 7] = ["Initiative", "Health", "Confidence", "Latest update", "Next milestone", "Definition of done", "Progress"];
 /// Each table column's share of the table's width.
-const SHARES: [f32; 7] = [0.19, 0.10, 0.09, 0.22, 0.14, 0.16, 0.10];
+const SHARES: [f32; 7] = [0.20, 0.11, 0.10, 0.19, 0.14, 0.14, 0.12];
 /// Under this the table scrolls sideways.
 const TABLE_MIN_W: f32 = 900.0;
-/// Between tabs, as between the header's tabs.
-const TAB_GAP: f32 = 24.0;
 /// Between columns and tiles, and under the tab strip and each section.
 const GAP: f32 = 16.0;
 /// Between cards, and inside a column or the shipped box.
@@ -34,6 +32,111 @@ const PAD: i8 = 12;
 const LINE_GAP: f32 = 4.0;
 /// The progress bar's height.
 const BAR_H: f32 = 6.0;
+/// The widest count a progress bar's label column is sized for, so every track ends on one edge.
+const PROGRESS_TEMPLATE: &str = "0000 / 0000";
+/// The P0 marker's words and its tooltip: one neutral pill on cards, table rows and timeline bars.
+pub const P0_LABEL: &str = "P0";
+pub const P0_TIP: &str = "Top priority: the epic has the P0 label";
+/// What the progress bar's colours mean.
+pub const PROGRESS_TIP: &str = "Green: done. Blue: in progress. Grey: to do.";
+/// The one phrase for a missing value anywhere on the Roadmap (a table cell shows EMPTY_CELL and says this on hover).
+pub const NOT_SET: &str = "Not set";
+/// An empty status-table cell: a quiet dash, so the real values stand out.
+pub const EMPTY_CELL: &str = "—";
+/// Under the status tiles while any row has a gap: how each column gets filled. `code` spans are literal input.
+pub const STATUS_HINT: &str = "Health comes from a `health:on-track`, `health:at-risk` or `health:off-track` label on the epic, and the owner \
+     is its assignee. Map the other columns in the `[roadmap]` section of `config.toml`.";
+/// A legend swatch's box.
+const SWATCH: f32 = 12.0;
+/// Between a legend swatch and its word.
+const SWATCH_GAP: f32 = 6.0;
+
+/// A legend entry: what one mark on the Roadmap's bars and cards means.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Mark {
+    /// The progress bar's green, blue and grey segments.
+    Done,
+    Doing,
+    Todo,
+    /// The hollow health ring, and a filled health dot.
+    NoHealth,
+    Health,
+    /// The timeline's "runs past the year" chevron and today line.
+    RunsOn,
+    Today,
+}
+
+impl Mark {
+    pub fn label(self) -> &'static str {
+        match self {
+            Mark::Done => "Done",
+            Mark::Doing => "In progress",
+            Mark::Todo => "To do",
+            Mark::NoHealth => "No health set",
+            Mark::Health => "Health set",
+            Mark::RunsOn => "Runs past the year",
+            Mark::Today => "Today",
+        }
+    }
+}
+
+/// The legend for a tab: the progress segments plus the health ring (when a shown item has none) on Now / Next /
+/// Later and the status review, the timeline's own marks on tab 2, none on Outcomes.
+pub fn legend_marks(tab: u8, items: &[Initiative], year: i32) -> Vec<Mark> {
+    let shown: Vec<&Initiative> = match tab {
+        1 => roadmap::now_next_later(items).into_iter().flatten().collect(),
+        3 => roadmap::status_rows(items),
+        2 => return timeline::legend_marks(items, year),
+        _ => return Vec::new(),
+    };
+    let mut marks = vec![Mark::Done, Mark::Doing, Mark::Todo];
+    if shown.iter().any(|i| i.health == Health::None) {
+        marks.push(Mark::NoHealth);
+    }
+    marks
+}
+
+/// The status table's columns that carry a value on at least one row, in HEADS order. Initiative and Progress
+/// always show; a column empty on every row is left out (and named by `hidden_note`), so the table is not mostly
+/// dashes.
+pub fn shown_columns(rows: &[&Initiative]) -> Vec<usize> {
+    let any = |f: &dyn Fn(&Initiative) -> bool| rows.iter().any(|i| f(i));
+    let has = [
+        true,
+        any(&|i| i.health != Health::None),
+        any(&|i| i.confidence.is_some()),
+        any(&|i| i.latest_update.as_ref().is_some_and(|u| !u.2.is_empty())),
+        any(&|i| i.next_milestone.is_some()),
+        any(&|i| i.definition_of_done.is_some()),
+        true,
+    ];
+    (0..HEADS.len()).filter(|&c| has[c]).collect()
+}
+
+/// The one line that names the columns `shown_columns` left out: "No initiative has health, confidence or
+/// next milestone set yet." None when every column shows.
+pub fn hidden_note(shown: &[usize]) -> Option<String> {
+    let names: Vec<String> = (0..HEADS.len()).filter(|c| !shown.contains(c)).map(|c| HEADS[c].to_lowercase()).collect();
+    let list = match names.as_slice() {
+        [] => return None,
+        [one] => one.clone(),
+        [rest @ .., last] => format!("{} or {last}", rest.join(", ")),
+    };
+    Some(format!("No initiative has {list} set yet, so the table leaves those columns out."))
+}
+
+/// Whether the status review has a gap the hint explains: any row missing health, owner, confidence, milestone or
+/// definition of done.
+pub fn status_has_gaps(rows: &[&Initiative]) -> bool {
+    rows.iter().any(|i| i.health == Health::None || i.owner.is_none() || i.confidence.is_none() || i.next_milestone.is_none() || i.definition_of_done.is_none())
+}
+
+/// Each column's empty state: what is missing, then how an initiative gets there.
+pub const COLUMN_EMPTY: [(&str, &str); 3] = [
+    ("Nothing in progress", "An epic with the `roadmap` label shows here once it is in progress."),
+    ("Nothing committed next", "Add the `horizon:next` label to an epic to commit it here."),
+    ("Nothing parked for later", "Epics with the `roadmap` label that have not started land here."),
+];
 
 /// The rows `j`/`k` walk on `tab`: tab 1's columns top to bottom, Now then Next then Later; tab 3's table rows.
 pub fn tab_rows(tab: u8, items: &[Initiative]) -> Vec<&Initiative> {
@@ -53,10 +156,11 @@ pub fn health_label(h: Health) -> &'static str {
     }
 }
 
+/// A health glyph's colour (a mark, so at risk takes `at_risk_mark`).
 fn health_color(h: Health, p: &Palette) -> Color32 {
     match h {
         Health::OffTrack => p.off_track,
-        Health::AtRisk => p.at_risk,
+        Health::AtRisk => p.at_risk_mark(),
         Health::OnTrack => p.on_track,
         Health::None => p.no_health,
     }
@@ -77,6 +181,11 @@ pub fn shipped_in(items: &[Initiative], year: i32) -> Vec<&Initiative> {
     roadmap::shipped(items).into_iter().filter(|i| i.target.is_none_or(|t| t.year == year)).collect()
 }
 
+/// Whether lanes tell initiatives apart: false when every one has the same lane, so the lane chip is noise.
+pub fn lanes_vary(items: &[Initiative]) -> bool {
+    items.windows(2).any(|w| w[0].lane != w[1].lane)
+}
+
 /// The KTLO footnote under Now: the ongoing epics by summary, without their "(ongoing)" marker. None when there are none.
 pub fn ktlo_line(ongoing: &[String]) -> Option<String> {
     const MARK: &str = "(ongoing)";
@@ -92,7 +201,7 @@ pub fn ktlo_line(ongoing: &[String]) -> Option<String> {
             rest.split_whitespace().collect::<Vec<_>>().join(" ")
         })
         .collect();
-    (!names.is_empty()).then(|| format!("Also ongoing (KTLO, not initiatives): {}", names.join(", ")))
+    (!names.is_empty()).then(|| format!("Also ongoing (keep-the-lights-on work, not initiatives): {}", names.join(", ")))
 }
 
 /// The owners tile's figure: "2 / 7".
@@ -112,9 +221,13 @@ pub fn show_at(app: &mut App, ui: &mut Ui, today: NaiveDate) {
         .frame(Frame::new().fill(p.bg).inner_margin(Margin { left: 16, right: 16, top: crate::views::issues::PANE_TOP as i8, bottom: 0 }))
         .show(ui, |ui| {
             let tab = app.roadmap.tab;
-            tab_strip(ui, p, tab, &mut acts);
-            ui.add_space(GAP);
             let (items, ongoing) = app.roadmap_items();
+            let marks = if items.is_empty() { Vec::new() } else { legend_marks(tab, &items, today.year()) };
+            ui.horizontal(|ui| {
+                tab_strip(ui, p, tab, &mut acts);
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| legend(ui, p, &marks));
+            });
+            ui.add_space(GAP);
             let rows = tab_rows(tab, &items);
             let cursor = app.roadmap.cursor.min(rows.len().saturating_sub(1));
             let last_id = egui::Id::new("roadmap-last-cursor");
@@ -122,12 +235,13 @@ pub fn show_at(app: &mut App, ui: &mut Ui, today: NaiveDate) {
             ui.data_mut(|d| d.insert_temp(last_id, (tab, cursor)));
             let loading = roadmap_loading(app.client.is_some(), app.lists.get(&crate::store::ListId::TeamOpen), app.lists.get(&crate::store::ListId::Epics));
             let focus = Focus { cursor, moved, count: rows.len() };
-            egui::ScrollArea::vertical().id_salt(("roadmap-tab", tab)).auto_shrink([false, false]).show(ui, |ui| {
+            crate::views::no_scroll_fade(ui);
+            let out = egui::ScrollArea::vertical().id_salt(("roadmap-tab", tab)).auto_shrink([false, false]).show(ui, |ui| {
                 if items.is_empty() {
                     if loading {
                         crate::views::icons::spinner(ui, crate::views::icons::INLINE_SPINNER, p);
                     } else {
-                        crate::views::empty_state(ui, p, "No roadmap initiatives yet");
+                        empty_state(ui, p, "No roadmap initiatives yet", "", p.bg);
                     }
                     return;
                 }
@@ -138,8 +252,66 @@ pub fn show_at(app: &mut App, ui: &mut Ui, today: NaiveDate) {
                     _ => outcomes::show(ui, p, &items),
                 }
             });
+            crate::views::components::scroll_edge_fade(ui, &out, p.bg);
         });
     app.actions.extend(acts);
+}
+
+/// `text` with its `code` spans (between backticks) in the mono code style on a chip `container` steps off, the
+/// rest in `color`: label names and config keys read as literal input, not prose.
+pub fn code_job(text: &str, size: f32, body: f32, color: Color32, container: Color32, p: &Palette) -> egui::text::LayoutJob {
+    let mut job = egui::text::LayoutJob::default();
+    for (n, part) in text.split('`').enumerate() {
+        if part.is_empty() {
+            continue;
+        }
+        let fmt = if n % 2 == 1 {
+            egui::TextFormat {
+                font_id: theme::mono(crate::views::adf_view::code_size(size, body)),
+                color: p.text,
+                background: theme::chip_fill_on(container, p),
+                valign: egui::Align::Center,
+                ..Default::default()
+            }
+        } else {
+            egui::TextFormat { font_id: theme::body(size), color, valign: egui::Align::Center, ..Default::default() }
+        };
+        job.append(part, 0.0, fmt);
+    }
+    job
+}
+
+/// `text` as drawn: its backticks gone.
+#[cfg(test)]
+pub fn plain(text: &str) -> String {
+    text.replace('`', "")
+}
+
+/// A hint at `small` size in `color` with code spans, wrapped at the density's prose measure.
+fn code_hint(ui: &mut Ui, p: &Palette, text: &str, color: Color32, container: Color32) {
+    let sp = theme::spacing(ui.ctx());
+    let job = code_job(text, sp.small, sp.body, color, container, p);
+    ui.scope(|ui| {
+        ui.set_max_width(sp.prose_max_width.min(ui.available_width()));
+        ui.add(egui::Label::new(job).wrap());
+    });
+}
+
+/// The Roadmap's empty state: `components::empty_state`'s look (the message in `text` at body, the hint in `muted`
+/// at `small`, `line_gap` apart), but the hint may carry code spans on `container`. No hint when `hint` is empty.
+fn empty_state(ui: &mut Ui, p: &Palette, message: &str, hint: &str, container: Color32) {
+    if !hint.contains('`') {
+        return c::empty_state(ui, p, message, (!hint.is_empty()).then_some(hint));
+    }
+    let sp = theme::spacing(ui.ctx());
+    ui.label(RichText::new(message).color(p.text).size(sp.body));
+    ui.add_space(sp.line_gap - ui.spacing().item_spacing.y);
+    code_hint(ui, p, hint, theme::muted_on(container, p), container);
+}
+
+/// The column panel (tab 1's columns, the Outcomes empty state): `surface_2`, RADIUS, PAD inside.
+fn panel<R>(ui: &mut Ui, p: &Palette, add: impl FnOnce(&mut Ui) -> R) -> R {
+    Frame::new().fill(p.surface_2).corner_radius(theme::RADIUS).inner_margin(Margin::same(PAD)).show(ui, add).inner
 }
 
 /// Whether an empty Roadmap is still waiting on its data rather than truly empty: Epics load after TeamOpen lands,
@@ -175,64 +347,133 @@ impl Focus {
     }
 }
 
-/// The numbered tabs, the current one in `text` over a 2 px accent underline on the strip's 1 px rule.
+/// The numbered views as the shared segmented switcher.
 fn tab_strip(ui: &mut Ui, p: &Palette, tab: u8, acts: &mut Vec<Action>) {
-    let mut under = None;
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = TAB_GAP;
-        for (i, t) in TABS.iter().enumerate() {
-            let n = i as u8 + 1;
-            let on = n == tab;
-            let label = egui::Label::new(RichText::new(*t).font(theme::body(14.0)).color(if on { p.text } else { p.muted })).sense(Sense::click());
-            let r = ui.add(label).on_hover_cursor(egui::CursorIcon::PointingHand);
-            if r.clicked() {
-                acts.push(Action::RoadmapTab(n));
-            }
-            if on {
-                under = Some(r.rect.x_range());
-            }
-        }
-    });
-    ui.add_space(CARD_GAP);
-    let y = ui.cursor().min.y;
-    let full = ui.max_rect().x_range();
-    ui.painter().rect_filled(Rect::from_x_y_ranges(full, y..=y + 1.0), 0.0, p.border);
-    if let Some(x) = under {
-        ui.painter().rect_filled(Rect::from_x_y_ranges(x, y - 1.0..=y + 1.0), 0.0, p.accent);
+    if let Some(i) = c::segmented(ui, p, &TABS, usize::from(tab.saturating_sub(1))) {
+        acts.push(Action::RoadmapTab(i as u8 + 1));
     }
-    ui.add_space(1.0);
 }
 
 /// A health dot: filled in the health's colour, a hollow `no_health` ring when none is set.
 fn health_dot(ui: &mut Ui, h: Health, p: &Palette) {
     if h == Health::None {
-        let (rect, _) = ui.allocate_exact_size(vec2(9.0, 9.0), Sense::hover());
-        ui.painter().circle_stroke(rect.center(), 3.75, Stroke::new(1.5, p.no_health));
+        let (rect, _) = ui.allocate_exact_size(vec2(HEALTH_DOT, HEALTH_DOT), Sense::hover());
+        paint_health(ui.painter(), rect.center(), h, p);
     } else {
         crate::views::health_dot(ui, health_color(h, p));
     }
 }
 
-/// A missing value: small `off_track` text, so the gap reads as one.
-fn missing(ui: &mut Ui, p: &Palette, text: &str) {
-    ui.label(RichText::new(text).size(12.0).color(p.off_track));
+/// The health glyph then `text`, top-aligned like a plain label: the glyph centred on the first line of `font`, so a
+/// cell or tile with a glyph shares its row's baseline.
+fn health_line(ui: &mut Ui, h: Health, p: &Palette, font: &egui::FontId, text: impl FnOnce(&mut Ui)) -> egui::Response {
+    ui.horizontal_top(|ui| {
+        ui.spacing_mut().item_spacing.x = SWATCH_GAP;
+        let line = ui.fonts_mut(|f| f.row_height(font));
+        let dot = ui.vertical(|ui| {
+            ui.add_space(((line - HEALTH_DOT) / 2.0).max(0.0));
+            health_dot(ui, h, p);
+        });
+        crate::views::tooltip(dot.response, health_label(h));
+        text(ui);
+    })
+    .response
 }
 
-/// The P0 chip: `off_track` outline and text on no fill.
-fn p0_chip(ui: &mut Ui, p: &Palette) {
-    pill_sized(ui, "P0", Color32::TRANSPARENT, p.off_track, Stroke::new(1.0, p.off_track), PILL_MARGIN);
+/// The health glyph's box.
+const HEALTH_DOT: f32 = 9.0;
+
+/// The roadmap's one health glyph centred on `c`: the hollow `no_health` ring, or a dot in the health's colour.
+fn paint_health(painter: &egui::Painter, c: egui::Pos2, h: Health, p: &Palette) {
+    if h == Health::None {
+        painter.circle_stroke(c, 3.75, Stroke::new(1.5, p.no_health));
+    } else {
+        painter.circle_filled(c, 4.0, health_color(h, p));
+    }
 }
 
-/// A 6 px bar of done (`on_track`), doing (`accent`) and to-do (`surface_2`) children, then "done / total".
+/// The one legend line (every tab that has marks): swatch and `muted` caption word per entry, GAP apart, laid out
+/// in the caller's (right-to-left) layout so the line ends on the tab row's right edge.
+fn legend(ui: &mut Ui, p: &Palette, marks: &[Mark]) {
+    let size = theme::spacing(ui.ctx()).caption;
+    ui.spacing_mut().item_spacing.x = SWATCH_GAP;
+    for (n, &m) in marks.iter().rev().enumerate() {
+        if n > 0 {
+            ui.add_space(GAP - SWATCH_GAP);
+        }
+        ui.label(RichText::new(m.label()).size(size).color(p.muted));
+        let (r, _) = ui.allocate_exact_size(vec2(SWATCH, SWATCH), Sense::hover());
+        paint_mark(ui.painter(), r, m, p);
+    }
+}
+
+/// A legend swatch drawn in `r`, with the same colours and shapes as the mark it explains.
+fn paint_mark(painter: &egui::Painter, r: Rect, m: Mark, p: &Palette) {
+    let seg = Rect::from_center_size(r.center(), vec2(r.width(), BAR_H));
+    match m {
+        Mark::Done => {
+            painter.rect_filled(seg, BAR_H / 2.0, p.on_track);
+        }
+        Mark::Doing => {
+            painter.rect_filled(seg, BAR_H / 2.0, p.accent);
+        }
+        Mark::Todo => {
+            painter.rect_filled(seg, BAR_H / 2.0, track(p));
+        }
+        Mark::NoHealth => paint_health(painter, r.center(), Health::None, p),
+        Mark::Health => paint_health(painter, r.center(), Health::OnTrack, p),
+        Mark::RunsOn => timeline::chevron(painter, r.center() + vec2(2.0, 0.0), true, p),
+        Mark::Today => {
+            painter.rect_filled(Rect::from_center_size(r.center(), vec2(2.0, r.height())), 0.0, p.accent);
+        }
+    }
+}
+
+/// A missing value: the shared placeholder role, never the danger colour.
+fn missing(ui: &mut Ui, p: &Palette, text: &str) -> egui::Response {
+    c::missing_value(ui, p, text)
+}
+
+/// The one P0 marker (cards, table rows, timeline bars): a neutral pill with the tooltip that says what it means.
+fn p0_chip(ui: &mut Ui, p: &Palette) -> egui::Response {
+    crate::views::tooltip(c::neutral_pill(ui, p, P0_LABEL), P0_TIP)
+}
+
+/// The P0 pill inline before a title in `font`: centred on the title's first line, so every surface puts it in
+/// the same place (cards, table rows and timeline bars) and a P0 card is no taller than any other.
+fn p0_before_title(ui: &mut Ui, p: &Palette, font: &egui::FontId) {
+    let line = ui.fonts_mut(|f| f.row_height(font));
+    let pill = ui.fonts_mut(|f| f.row_height(&theme::body(12.0))) + 2.0 * crate::views::PILL_MARGIN.y;
+    ui.vertical(|ui| {
+        ui.add_space(((line - pill) / 2.0).max(0.0));
+        p0_chip(ui, p);
+    });
+}
+
+fn is_p0(i: &Initiative) -> bool {
+    i.priority.as_deref() == Some("P0")
+}
+
+/// The progress track (the to-do part, and its legend swatch): the `no_health` neutral, the quietest palette grey
+/// that stands 3:1 off a card (light 3.5, dark 3.9; `surface_2` read 1.1).
+fn track(p: &Palette) -> Color32 {
+    p.no_health
+}
+
+/// A 6 px bar of done (`on_track`), doing (`accent`) and to-do (`track`) children, then "done / total"
+/// right-aligned in a fixed label column (PROGRESS_TEMPLATE wide), so stacked tracks end on one edge.
 fn progress_bar(ui: &mut Ui, p: &Palette, pr: &Progress) {
+    let size = theme::spacing(ui.ctx()).caption;
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = CARD_GAP;
-        let text = ui.painter().layout_no_wrap(progress_text(pr), theme::body(12.0), p.muted);
-        let w = (ui.available_width() - text.size().x - CARD_GAP).max(24.0);
-        let (rect, _) = ui.allocate_exact_size(vec2(w, text.size().y), Sense::hover());
+        let text = ui.painter().layout_no_wrap(progress_text(pr), theme::body(size), p.muted);
+        let col = ui.painter().layout_no_wrap(PROGRESS_TEMPLATE.into(), theme::body(size), p.muted).size().x.ceil();
+        let w = (ui.available_width() - col - CARD_GAP).max(24.0);
+        let (rect, resp) = ui.allocate_exact_size(vec2(w, text.size().y), Sense::hover());
+        crate::views::tooltip(resp, PROGRESS_TIP);
         let bar = Rect::from_center_size(rect.center(), vec2(w, BAR_H));
         let painter = ui.painter();
-        painter.rect_filled(bar, BAR_H / 2.0, p.surface_2);
+        painter.rect_filled(bar, BAR_H / 2.0, track(p));
         let total = (pr.todo + pr.doing + pr.done) as f32;
         if total > 0.0 {
             let done = bar.width() * pr.done as f32 / total;
@@ -242,46 +483,51 @@ fn progress_bar(ui: &mut Ui, p: &Palette, pr: &Progress) {
             clip.rect_filled(Rect::from_min_size(bar.min, vec2(done + doing, BAR_H)), BAR_H / 2.0, p.accent);
             clip.rect_filled(Rect::from_min_size(bar.min, vec2(done, BAR_H)), BAR_H / 2.0, p.on_track);
         }
-        ui.label(text);
+        let (slot, _) = ui.allocate_exact_size(vec2(col, text.size().y), Sense::hover());
+        ui.painter().galley(egui::pos2(slot.right() - text.size().x, slot.top()), text, p.muted);
     });
 }
 
 #[allow(clippy::too_many_arguments)]
 fn now_next_later(ui: &mut Ui, p: &Palette, items: &[Initiative], ongoing: &[String], year: i32, focus: Focus, acts: &mut Vec<Action>) {
     let cols = roadmap::now_next_later(items);
+    let lanes = lanes_vary(items);
+    let sp = theme::spacing(ui.ctx());
     let mut first = 0;
     ui.spacing_mut().item_spacing.x = GAP;
     ui.columns(3, |uis| {
         for (ci, ((ui, col), (title, sub))) in uis.iter_mut().zip(&cols).zip(COLUMNS).enumerate() {
             let start = first;
             first += col.len();
-            Frame::new().fill(p.surface_2).corner_radius(theme::RADIUS).inner_margin(Margin::same(PAD)).show(ui, |ui| {
+            panel(ui, p, |ui| {
                 ui.set_width(ui.available_width());
-                ui.spacing_mut().item_spacing.y = 0.0;
-                ui.horizontal(|ui| {
-                    ui.label(RichText::new(title).font(theme::bold(15.0)).color(p.text));
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.label(RichText::new(col.len().to_string()).size(12.0).color(p.muted));
-                    });
+                // `columns` hands out justified layouts, which stretch wrapped text to both edges: left-align it.
+                ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
+                    ui.spacing_mut().item_spacing.y = 0.0;
+                    c::section_header(ui, p, title, Some(col.len()));
+                    ui.add_space(sp.line_gap);
+                    ui.add(egui::Label::new(RichText::new(sub).size(sp.small).color(p.muted)).wrap());
+                    ui.add_space(PAD as f32);
+                    ui.spacing_mut().item_spacing.y = sp.card_gap;
+                    if col.is_empty() {
+                        let (msg, hint) = COLUMN_EMPTY[ci];
+                        empty_state(ui, p, msg, hint, p.surface_2);
+                    }
+                    let mut bottoms = Vec::with_capacity(col.len());
+                    for (k, i) in col.iter().enumerate() {
+                        let at = start + k;
+                        let resp = card(ui, p, i, lanes, at == focus.cursor, at);
+                        bottoms.push(resp.rect.bottom());
+                        focus.click(at, &resp, acts);
+                    }
+                    more_below(ui, p, below_fold(&bottoms, ui.clip_rect().bottom()));
+                    if ci == 0
+                        && let Some(line) = ktlo_line(ongoing)
+                    {
+                        ui.add_space(PAD as f32 - sp.card_gap);
+                        ui.add(egui::Label::new(RichText::new(line).size(sp.small).color(p.muted)).wrap());
+                    }
                 });
-                ui.add_space(LINE_GAP);
-                ui.add(egui::Label::new(RichText::new(sub).size(12.0).color(p.muted)).wrap());
-                ui.add_space(PAD as f32);
-                ui.spacing_mut().item_spacing.y = CARD_GAP;
-                if col.is_empty() {
-                    ui.label(RichText::new("None").size(12.0).color(p.muted));
-                }
-                for (k, i) in col.iter().enumerate() {
-                    let at = start + k;
-                    let resp = card(ui, p, i, ci == 0, at == focus.cursor, at);
-                    focus.click(at, &resp, acts);
-                }
-                if ci == 0
-                    && let Some(line) = ktlo_line(ongoing)
-                {
-                    ui.add_space(PAD as f32 - CARD_GAP);
-                    ui.add(egui::Label::new(RichText::new(line).size(12.0).color(p.muted)).wrap());
-                }
             });
         }
     });
@@ -289,69 +535,104 @@ fn now_next_later(ui: &mut Ui, p: &Palette, items: &[Initiative], ongoing: &[Str
     shipped(ui, p, items, year);
 }
 
-/// A card: (Now) health dot and name, the P0, lane and up to two metric chips, (Now) the latest update, then the
-/// progress bar.
-fn card(ui: &mut Ui, p: &Palette, i: &Initiative, now: bool, sel: bool, at: usize) -> egui::Response {
+/// How many cards (by their bottom edges) the viewport ending at `fold` cuts off, whole or in part.
+pub fn below_fold(bottoms: &[f32], fold: f32) -> usize {
+    bottoms.iter().filter(|&&b| b > fold + 0.5).count()
+}
+
+/// "↓ 2 more": the cue on a column whose cards run past the bottom of the page, so its count matches what can be found.
+pub fn more_text(n: usize) -> String {
+    format!("↓ {n} more")
+}
+
+/// The `more_text` pill pinned to the bottom right of the viewport in the column, on the card surface so it reads
+/// over the cut card (clear of its title, which starts on the left). Nothing when no card is cut off.
+fn more_below(ui: &mut Ui, p: &Palette, n: usize) {
+    if n == 0 {
+        return;
+    }
+    let text = more_text(n);
+    let galley = ui.painter().layout_no_wrap(text.clone(), theme::body(12.0), p.muted);
+    let size = galley.size() + 2.0 * crate::views::PILL_MARGIN;
+    let clip = ui.clip_rect();
+    let right = ui.max_rect().right() - PAD as f32;
+    let rect = Rect::from_min_size(egui::pos2(right - size.x, clip.bottom() - CARD_GAP - size.y), size);
+    ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
+        crate::views::pill_sized(ui, &text, p.surface, p.muted, Stroke::new(1.0, p.border), crate::views::PILL_MARGIN);
+    });
+}
+
+/// The card's update line's label. A card with no update has no update line.
+pub const UPDATE_LABEL: &str = "Latest update: ";
+
+/// The card's update line: the UPDATE_LABEL in `label` then the update in `text`, on one line cut with "…".
+pub fn update_job(update: &str, size: f32, label: Color32, p: &Palette) -> egui::text::LayoutJob {
+    let mut job = egui::text::LayoutJob::default();
+    let fmt = |color| egui::TextFormat { font_id: theme::body(size), color, ..Default::default() };
+    job.append(UPDATE_LABEL, 0.0, fmt(label));
+    job.append(update, 0.0, fmt(p.text));
+    job.wrap = egui::text::TextWrapping::truncate_at_width(f32::INFINITY);
+    job
+}
+
+/// A card, one anatomy in every column: the health ring, the P0 pill and the name on one row, the chips (lane when
+/// lanes vary, up to two metrics), the labelled latest update on one line when there is one (the full text and its
+/// author on hover), then the progress bar.
+fn card(ui: &mut Ui, p: &Palette, i: &Initiative, lanes: bool, sel: bool, at: usize) -> egui::Response {
     let id = egui::Id::new(("roadmap-card", at));
-    let bg = ui.painter().add(egui::Shape::Noop);
-    // The chips sit one step off the card's fill, which follows last frame's hover.
     let hovered = ui.ctx().read_response(id).is_some_and(|r| r.hovered());
-    let fill = crate::views::issues::row_fill(sel, hovered, p);
-    let r = Frame::new().stroke(Stroke::new(1.0, p.border)).corner_radius(theme::RADIUS).inner_margin(Margin::same(PAD)).show(ui, |ui| {
+    let sp = theme::spacing(ui.ctx());
+    let mut frame = c::card_frame(ui, p, sel);
+    if hovered && !sel {
+        frame = frame.fill(p.hover_row);
+    }
+    let fill = frame.fill;
+    let title = theme::bold(sp.body);
+    let r = frame.show(ui, |ui| {
         ui.set_width(ui.available_width());
-        ui.spacing_mut().item_spacing.y = LINE_GAP;
-        ui.horizontal_top(|ui| {
-            ui.spacing_mut().item_spacing.x = CARD_GAP;
-            if now {
-                let line = ui.fonts_mut(|f| f.row_height(&theme::bold(13.5)));
-                let dot = ui.vertical(|ui| {
-                    ui.add_space(((line - 9.0) / 2.0).max(0.0));
-                    health_dot(ui, i.health, p);
-                });
-                crate::views::tooltip(dot.response, health_label(i.health));
+        ui.spacing_mut().item_spacing.y = sp.line_gap;
+        health_line(ui, i.health, p, &title, |ui| {
+            ui.add_space(CARD_GAP - SWATCH_GAP);
+            if is_p0(i) {
+                p0_before_title(ui, p, &title);
+                ui.add_space(CARD_GAP - SWATCH_GAP);
             }
-            ui.add(egui::Label::new(RichText::new(&i.name).font(theme::bold(13.5)).color(p.text)).wrap());
+            ui.add(egui::Label::new(RichText::new(&i.name).font(title.clone()).color(p.text)).wrap());
         });
-        chips(ui, p, i, fill);
-        if now {
-            match &i.latest_update {
-                Some((_, _, text)) if !text.is_empty() => {
-                    ui.add(egui::Label::new(RichText::new(text).size(12.0).color(p.muted)).wrap());
-                }
-                _ => missing(ui, p, "no update yet"),
-            }
+        chips(ui, p, i, lanes);
+        if let Some((author, date, text)) = i.latest_update.as_ref().filter(|u| !u.2.is_empty()) {
+            let resp = ui.add(egui::Label::new(update_job(text, sp.small, theme::muted_on(fill, p), p)).truncate());
+            crate::views::tooltip(resp, format!("{text}\n{author} · {date}"));
         }
         progress_bar(ui, p, &i.progress);
     });
-    let rect = r.response.rect;
-    let resp = ui.interact(rect, id, Sense::click());
-    ui.painter().set(bg, egui::epaint::RectShape::filled(rect, theme::RADIUS, fill));
-    resp
+    ui.interact(r.response.rect, id, Sense::click())
 }
 
-/// The P0 chip, the lane, and up to two metrics, in chips one step off `on`.
-fn chips(ui: &mut Ui, p: &Palette, i: &Initiative, on: Color32) {
+/// The lane (only when lanes vary) and up to two metrics, all neutral pills (P0 sits on the title row).
+fn chips(ui: &mut Ui, p: &Palette, i: &Initiative, lanes: bool) {
+    let lane = lanes.then_some(&i.lane);
+    if lane.is_none() && i.metrics.is_empty() {
+        return;
+    }
     ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing = vec2(LINE_GAP, LINE_GAP);
-        if i.priority.as_deref() == Some("P0") {
-            p0_chip(ui, p);
-        }
-        let fill = theme::chip_fill_on(on, p);
-        for t in std::iter::once(&i.lane).chain(i.metrics.iter().take(2)) {
-            crate::views::pill(ui, t, fill, p.muted);
+        for t in lane.into_iter().chain(i.metrics.iter().take(2)) {
+            c::neutral_pill(ui, p, t);
         }
     });
 }
 
-/// "Shipped in {year}": the Done initiatives, two columns of name and target quarter.
+/// "Shipped in {year}": the Done initiatives, two columns of name and target quarter, as a plain section on the
+/// page (like the timeline's Unscheduled), so no frame edge peeks above the hint bar when it starts below the fold.
 fn shipped(ui: &mut Ui, p: &Palette, items: &[Initiative], year: i32) {
     let done = shipped_in(items, year);
-    Frame::new().fill(p.surface).stroke(Stroke::new(1.0, p.border)).corner_radius(theme::RADIUS).inner_margin(Margin::symmetric(16, PAD)).show(ui, |ui| {
+    ui.vertical(|ui| {
         ui.set_width(ui.available_width());
-        ui.label(RichText::new(shipped_title(year)).font(theme::bold(12.0)).color(p.muted));
+        c::section_header(ui, p, &shipped_title(year), Some(done.len()));
         ui.add_space(CARD_GAP - ui.spacing().item_spacing.y);
         if done.is_empty() {
-            ui.label(RichText::new("Nothing shipped yet").size(12.0).color(p.muted));
+            empty_state(ui, p, "Nothing shipped yet", "Initiatives show here when their epic is done.", p.bg);
             return;
         }
         let half = done.len().div_ceil(2);
@@ -367,7 +648,9 @@ fn shipped(ui: &mut Ui, p: &Palette, items: &[Initiative], year: i32) {
                             Some(t) => {
                                 ui.label(RichText::new(format!("Q{}", t.q)).size(12.0).color(p.muted));
                             }
-                            None => missing(ui, p, "target not set"),
+                            None => {
+                                missing(ui, p, "Target: Not set");
+                            }
                         }
                     });
                 }
@@ -379,104 +662,178 @@ fn shipped(ui: &mut Ui, p: &Palette, items: &[Initiative], year: i32) {
 fn status_review(ui: &mut Ui, p: &Palette, items: &[Initiative], focus: Focus, acts: &mut Vec<Action>) {
     let rows = roadmap::status_rows(items);
     let counts = roadmap::health_counts(&rows);
+    let lanes = lanes_vary(items);
+    // Five tiles sharing the table's width, so the summary row and the table end on one edge.
+    let tile_w = tile_widths(ui.available_width().max(TABLE_MIN_W), TILES);
     ui.horizontal_wrapped(|ui| {
-        ui.spacing_mut().item_spacing = vec2(PAD as f32, PAD as f32);
-        for (h, n) in [Health::OffTrack, Health::AtRisk, Health::OnTrack, Health::None].into_iter().zip(counts) {
-            tile(ui, p, &n.to_string(), |ui| {
-                health_dot(ui, h, p);
-                ui.label(RichText::new(health_label(h)).size(12.0).color(p.muted));
+        ui.spacing_mut().item_spacing = vec2(GAP, GAP);
+        for (k, (h, n)) in [Health::OffTrack, Health::AtRisk, Health::OnTrack, Health::None].into_iter().zip(counts).enumerate() {
+            tile(ui, p, tile_w[k], &n.to_string(), n == 0, |ui| {
+                let small = theme::spacing(ui.ctx()).small;
+                health_line(ui, h, p, &theme::body(small), |ui| {
+                    ui.label(RichText::new(health_label(h)).size(small).color(p.muted));
+                });
             });
         }
-        tile(ui, p, &owners_text(roadmap::owners_set(&rows)), |ui| {
-            ui.label(RichText::new("owners set").size(12.0).color(p.muted));
+        let (set, total) = roadmap::owners_set(&rows);
+        // No dot here, so no dot slot: the label starts on the figure's edge.
+        tile(ui, p, tile_w[TILES - 1], &owners_text((set, total)), set == 0, |ui| {
+            ui.label(RichText::new(OWNERS_LABEL).size(theme::spacing(ui.ctx()).small).color(p.muted));
         });
     });
+    let shown = shown_columns(&rows);
+    let note = hidden_note(&shown);
+    if status_has_gaps(&rows) {
+        let sp = theme::spacing(ui.ctx());
+        ui.add_space(sp.line_gap + CARD_GAP - ui.spacing().item_spacing.y);
+        let text = match &note {
+            Some(n) => format!("{n} {STATUS_HINT}"),
+            None => STATUS_HINT.to_string(),
+        };
+        code_hint(ui, p, &text, p.muted, p.bg);
+    }
     ui.add_space(GAP);
     if rows.is_empty() {
-        crate::views::empty_state(ui, p, "Nothing in Now");
+        panel(ui, p, |ui| empty_state(ui, p, "Nothing in Now", "Initiatives in progress this quarter are reviewed here.", p.surface_2));
         return;
     }
-    egui::ScrollArea::horizontal().id_salt("roadmap-status").show(ui, |ui| table(ui, p, &rows, focus, acts));
+    egui::ScrollArea::horizontal().id_salt("roadmap-status").show(ui, |ui| table(ui, p, &rows, &shown, lanes, focus, acts));
 }
 
-/// A summary tile: the figure (bold 22) over its label line.
-fn tile(ui: &mut Ui, p: &Palette, figure: &str, label: impl FnOnce(&mut Ui)) {
-    Frame::new().fill(p.surface).stroke(Stroke::new(1.0, p.border)).corner_radius(theme::RADIUS).inner_margin(Margin::symmetric(16, PAD)).show(ui, |ui| {
-        ui.set_min_width(120.0);
+/// The status tiles: four health counts and the owners tile.
+const TILES: usize = 5;
+/// The tile's side padding.
+const TILE_PAD_X: i8 = 16;
+/// The owners tile's label (sentence case, like the health labels beside it).
+pub const OWNERS_LABEL: &str = "Owners set";
+
+/// Each tile's outer width so `n` tiles GAP apart (the horizon columns' gap) fill `avail` exactly: whole points,
+/// the last taking the remainder, so the row ends on the table's right edge.
+pub fn tile_widths(avail: f32, n: usize) -> Vec<f32> {
+    let n = n.max(1);
+    let inner = avail - GAP * (n - 1) as f32;
+    let w = (inner / n as f32).floor();
+    let mut v = vec![w; n];
+    v[n - 1] = inner - w * (n - 1) as f32;
+    v
+}
+
+/// A summary tile `w` wide outside: the figure (bold h2, `muted` when it is zero, so the non-zero ones stand out)
+/// over its label line.
+fn tile(ui: &mut Ui, p: &Palette, w: f32, figure: &str, zero: bool, label: impl FnOnce(&mut Ui)) {
+    let sp = theme::spacing(ui.ctx());
+    let edge = Stroke::new(1.0, p.border);
+    Frame::new().fill(p.surface).stroke(edge).corner_radius(theme::RADIUS).inner_margin(Margin::symmetric(TILE_PAD_X, PAD)).show(ui, |ui| {
+        // Inside: the outer width less the side padding and the edge.
+        let inner = (w - 2.0 * (f32::from(TILE_PAD_X) + edge.width)).max(0.0);
+        ui.set_min_width(inner);
+        ui.set_max_width(inner);
         ui.spacing_mut().item_spacing.y = LINE_GAP;
         ui.vertical(|ui| {
-            ui.label(RichText::new(figure).font(theme::bold(22.0)).color(p.text));
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 6.0;
-                label(ui);
-            });
+            ui.label(RichText::new(figure).font(theme::bold(sp.h2)).color(if zero { p.muted } else { p.text }));
+            label(ui);
         });
     });
 }
 
-/// The status table: a striped grid, the header on `surface_2` and the cursor row on `selected_row`.
-fn table(ui: &mut Ui, p: &Palette, rows: &[&Initiative], focus: Focus, acts: &mut Vec<Action>) {
+/// The widths of the `shown` columns for `total`: each its SHARES of `total`, floored, and the Initiative column
+/// (always first) the rest, so hidden columns give their room to the names and the columns (row fills, cursor
+/// ring) end exactly on the table's right edge.
+pub fn column_widths(total: f32, shown: &[usize]) -> Vec<f32> {
+    let mut w: Vec<f32> = shown.iter().map(|&c| (total * SHARES[c]).floor()).collect();
+    if let Some(first) = w.first_mut() {
+        *first = 0.0;
+        let rest: f32 = w.iter().sum();
+        w[0] = total - rest;
+    }
+    w
+}
+
+/// The status table: the header on `surface_2`, body rows on the card `surface` split by `border` rules (no
+/// stripes, so the table reads as one card), the cursor row in the shared selection (fill and accent ring), the
+/// frame's edge drawn last so no row paints over it.
+fn table(ui: &mut Ui, p: &Palette, rows: &[&Initiative], shown: &[usize], lanes: bool, focus: Focus, acts: &mut Vec<Action>) {
     let total = ui.available_width().max(TABLE_MIN_W);
-    let widths = SHARES.map(|s| (total * s).floor());
-    let (head, sel, stripe) = (p.surface_2, p.selected_row, p.bg);
+    let widths = column_widths(total, shown);
+    let last = shown.len() - 1;
+    let (head, sel) = (p.surface_2, p.selection());
     let cursor = focus.cursor;
     let mut rects: Vec<Rect> = vec![Rect::NOTHING; rows.len()];
-    Frame::new().fill(p.surface).stroke(Stroke::new(1.0, p.border)).corner_radius(theme::RADIUS).show(ui, |ui| {
+    let small = theme::spacing(ui.ctx()).small;
+    let frame = Frame::new().fill(p.surface).corner_radius(theme::RADIUS).show(ui, |ui| {
         ui.set_width(total);
         egui::Grid::new("roadmap-status-grid")
-            .num_columns(HEADS.len())
+            .num_columns(shown.len())
             .spacing([0.0, 0.0])
             .min_row_height(0.0)
             .with_row_color(move |row, _| match row {
                 0 => Some(head),
                 r if r - 1 == cursor => Some(sel),
-                r if r % 2 == 0 => Some(stripe),
                 _ => None,
             })
             .show(ui, |ui| {
-                for (c, h) in HEADS.iter().enumerate() {
-                    cell(ui, widths[c], c, |ui| {
-                        ui.label(RichText::new(*h).font(theme::bold(12.0)).color(p.muted));
+                for (k, &c) in shown.iter().enumerate() {
+                    cell(ui, widths[k], k == last, |ui| {
+                        ui.label(RichText::new(HEADS[c]).font(theme::bold(theme::spacing(ui.ctx()).caption)).color(p.muted));
                     });
                 }
                 ui.end_row();
                 for (ri, i) in rows.iter().enumerate() {
                     let mut row = Rect::NOTHING;
-                    let mut add = |r: Rect| row = row.union(r);
-                    add(cell(ui, widths[0], 0, |ui| initiative_cell(ui, p, i)));
-                    add(cell(ui, widths[1], 1, |ui| {
-                        ui.horizontal(|ui| {
-                            ui.spacing_mut().item_spacing.x = 6.0;
-                            health_dot(ui, i.health, p);
-                            ui.label(RichText::new(health_label(i.health)).color(p.text));
-                        });
-                    }));
-                    add(cell(ui, widths[2], 2, |ui| text_or_missing(ui, p, i.confidence.as_deref(), 14.0, "not set")));
-                    add(cell(ui, widths[3], 3, |ui| match &i.latest_update {
-                        Some((author, date, text)) if !text.is_empty() => {
-                            ui.add(egui::Label::new(RichText::new(text).color(p.text)).wrap());
-                            ui.label(RichText::new(format!("{author} · {date}")).size(12.0).color(p.muted));
-                        }
-                        _ => missing(ui, p, "no update yet"),
-                    }));
-                    add(cell(ui, widths[4], 4, |ui| text_or_missing(ui, p, i.next_milestone.as_deref(), 14.0, "not set")));
-                    add(cell(ui, widths[5], 5, |ui| text_or_missing(ui, p, i.definition_of_done.as_deref(), 12.0, "not defined")));
-                    add(cell(ui, widths[6], 6, |ui| progress_bar(ui, p, &i.progress)));
+                    for (k, &c) in shown.iter().enumerate() {
+                        row = row.union(cell(ui, widths[k], k == last, |ui| match c {
+                            0 => initiative_cell(ui, p, i, lanes),
+                            // No health: the hollow ring alone (it says "No health set" on hover), not ring and dash.
+                            1 => {
+                                health_line(ui, i.health, p, &theme::body(small), |ui| {
+                                    if i.health != Health::None {
+                                        ui.label(RichText::new(health_label(i.health)).size(small).color(p.text));
+                                    }
+                                });
+                            }
+                            2 => text_or_missing(ui, p, i.confidence.as_deref()),
+                            3 => match &i.latest_update {
+                                Some((author, date, text)) if !text.is_empty() => {
+                                    ui.add(egui::Label::new(RichText::new(text).size(small).color(p.text)).wrap());
+                                    ui.label(RichText::new(format!("{author} · {date}")).size(theme::spacing(ui.ctx()).caption).color(p.muted));
+                                }
+                                _ => empty_cell(ui, p),
+                            },
+                            4 => text_or_missing(ui, p, i.next_milestone.as_deref()),
+                            5 => text_or_missing(ui, p, i.definition_of_done.as_deref()),
+                            _ => progress_bar(ui, p, &i.progress),
+                        }));
+                    }
                     ui.end_row();
                     rects[ri] = row;
                 }
             });
     });
+    // Every row spans the frame edge to edge, so the cursor ring sits flush on both sides.
+    let span = frame.response.rect.x_range();
+    for r in rects.iter_mut().filter(|r| r.is_positive()) {
+        *r = Rect::from_x_y_ranges(span, r.y_range());
+    }
+    // A `border` rule between body rows (the head's fill marks its own edge).
+    for r in rects.iter().skip(1).filter(|r| r.is_positive()) {
+        ui.painter().rect_filled(Rect::from_x_y_ranges(span, r.top()..=r.top() + 1.0), 0.0, p.border);
+    }
+    if let Some(r) = rects.get(cursor).filter(|r| r.is_positive()) {
+        ui.painter().rect_stroke(*r, 0.0, Stroke::new(1.0, p.selection_edge()), egui::StrokeKind::Inside);
+    }
+    ui.painter().rect_stroke(frame.response.rect, theme::RADIUS, Stroke::new(1.0, p.border), egui::StrokeKind::Inside);
     for (ri, r) in rects.into_iter().enumerate() {
         let resp = ui.interact(r, egui::Id::new(("roadmap-status-row", ri)), Sense::click());
         focus.click(ri, &resp, acts);
     }
 }
 
-/// One table cell `w` wide: 12 in from its left (and the last column's right), 8 above and below.
-fn cell(ui: &mut Ui, w: f32, col: usize, content: impl FnOnce(&mut Ui)) -> Rect {
-    let right = if col == HEADS.len() - 1 { PAD } else { 0 };
-    let r = Frame::new().inner_margin(Margin { left: PAD, right, top: 8, bottom: 8 }).show(ui, |ui| {
+/// One table cell `w` wide: 12 in from its left (and the `last` column's right), 8 above and below plus the
+/// density's row room.
+fn cell(ui: &mut Ui, w: f32, last: bool, content: impl FnOnce(&mut Ui)) -> Rect {
+    let right = if last { PAD } else { 0 };
+    let y = (8.0 + theme::spacing(ui.ctx()).row_extra) as i8;
+    let r = Frame::new().inner_margin(Margin { left: PAD, right, top: y, bottom: y }).show(ui, |ui| {
         let inner = w - PAD as f32 - right as f32;
         ui.set_width(inner);
         ui.spacing_mut().item_spacing.y = LINE_GAP;
@@ -488,37 +845,49 @@ fn cell(ui: &mut Ui, w: f32, col: usize, content: impl FnOnce(&mut Ui)) -> Rect 
     r.response.rect
 }
 
-/// Name (bold) and P0 chip, then "lane · key · owner Name", the owner red "missing" when unset.
-fn initiative_cell(ui: &mut Ui, p: &Palette, i: &Initiative) {
-    ui.horizontal_wrapped(|ui| {
+/// The P0 marker and name (bold), then "[lane · ]key · Owner: Name", the owner the placeholder "Not set" when unset.
+fn initiative_cell(ui: &mut Ui, p: &Palette, i: &Initiative, lanes: bool) {
+    let sp = theme::spacing(ui.ctx());
+    ui.horizontal_top(|ui| {
         ui.spacing_mut().item_spacing.x = CARD_GAP;
-        ui.label(RichText::new(&i.name).font(theme::bold(13.5)).color(p.text));
-        if i.priority.as_deref() == Some("P0") {
-            p0_chip(ui, p);
+        let font = theme::bold(sp.body);
+        if is_p0(i) {
+            p0_before_title(ui, p, &font);
         }
+        ui.add(egui::Label::new(RichText::new(&i.name).font(font).color(p.text)).wrap());
     });
     ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing.x = 0.0;
-        let small = |t: String| RichText::new(t).size(12.0).color(p.muted);
-        ui.label(small(format!("{} · ", i.lane)));
-        ui.label(RichText::new(&i.jira_key).font(theme::mono(12.5)).color(p.muted));
-        ui.label(small(" · owner ".into()));
+        let small = |t: String| RichText::new(t).size(sp.caption).color(p.muted);
+        if lanes {
+            ui.label(small(format!("{} · ", i.lane)));
+        }
+        ui.label(small(i.jira_key.clone()));
+        ui.label(small(" · Owner: ".into()));
         match &i.owner {
             Some(o) => {
                 ui.label(small(o.clone()));
             }
-            None => missing(ui, p, "missing"),
+            None => {
+                crate::views::tooltip(ui.label(RichText::new(EMPTY_CELL).size(sp.caption).color(p.placeholder())), NOT_SET);
+            }
         }
     });
 }
 
-fn text_or_missing(ui: &mut Ui, p: &Palette, text: Option<&str>, size: f32, gap: &str) {
+/// A value in the table's one cell size, or the empty cell.
+fn text_or_missing(ui: &mut Ui, p: &Palette, text: Option<&str>) {
     match text {
         Some(t) => {
-            ui.add(egui::Label::new(RichText::new(t).size(size).color(p.text)).wrap());
+            ui.add(egui::Label::new(RichText::new(t).size(theme::spacing(ui.ctx()).small).color(p.text)).wrap());
         }
-        None => missing(ui, p, gap),
+        None => empty_cell(ui, p),
     }
+}
+
+/// An empty table cell: the quiet EMPTY_CELL dash in the placeholder role, NOT_SET on hover.
+fn empty_cell(ui: &mut Ui, p: &Palette) {
+    crate::views::tooltip(missing(ui, p, EMPTY_CELL), NOT_SET);
 }
 
 #[cfg(test)]
@@ -599,12 +968,22 @@ mod tests {
         assert_eq!(health_label(Health::None), "No health set");
         assert_eq!(ktlo_line(&[]), None);
         // "İ" lowercases to three bytes from two: an index into the lowercased text would cut a char.
-        assert_eq!(ktlo_line(&["Türkiye İzleme (ongoing)".into()]).as_deref(), Some("Also ongoing (KTLO, not initiatives): Türkiye İzleme"));
-        assert_eq!(ktlo_line(&["İİİİ (ONGOING) x".into()]).as_deref(), Some("Also ongoing (KTLO, not initiatives): İİİİ x"));
+        assert_eq!(ktlo_line(&["Türkiye İzleme (ongoing)".into()]).as_deref(), Some("Also ongoing (keep-the-lights-on work, not initiatives): Türkiye İzleme"));
+        assert_eq!(ktlo_line(&["İİİİ (ONGOING) x".into()]).as_deref(), Some("Also ongoing (keep-the-lights-on work, not initiatives): İİİİ x"));
         assert_eq!(
             ktlo_line(&["Audit (ongoing)".into(), "Support/Enablement (Ongoing) work".into()]).as_deref(),
-            Some("Also ongoing (KTLO, not initiatives): Audit, Support/Enablement work")
+            Some("Also ongoing (keep-the-lights-on work, not initiatives): Audit, Support/Enablement work")
         );
+    }
+
+    #[test]
+    fn lane_chips_show_only_when_lanes_differ() {
+        let app = app();
+        let (mut items, _) = app.roadmap_items();
+        assert!(!lanes_vary(&items));
+        items[0].lane = "Platform".into();
+        assert!(lanes_vary(&items));
+        assert!(!lanes_vary(&items[..1]));
     }
 
     #[test]
@@ -642,20 +1021,22 @@ mod tests {
             "Committed, starts when capacity frees up",
             "Ideas and parked work, not committed",
             "Canary Deployments",
-            "P0",
-            "No lane",
+            P0_LABEL,
             "Lead Time",
-            "no update yet",
             "0 / 0",
             "Autoscaling everywhere",
-            "Also ongoing (KTLO, not initiatives): Audit",
+            "Also ongoing (keep-the-lights-on work, not initiatives): Audit",
             "Shipped in 2026",
             "Cost Insights",
             "Q3",
         ] {
             has(&drawn, want);
         }
-        assert_eq!(drawn.iter().filter(|t| *t == "no update yet").count(), 2, "the update line is drawn in Now only");
+        assert!(!drawn.iter().any(|t| t.starts_with(UPDATE_LABEL)), "no update, no update line: {drawn:?}");
+        for m in [Mark::Done, Mark::Doing, Mark::Todo, Mark::NoHealth] {
+            has(&drawn, m.label());
+        }
+        assert!(!drawn.iter().any(|t| t == roadmap::NO_LANE), "one lane for all: the lane chip is noise");
     }
 
     #[test]
@@ -665,23 +1046,30 @@ mod tests {
         let drawn = texts(&mut app);
         for want in [
             "Initiative",
-            "Definition of done",
+            "Health",
             "Progress",
             "Canary Deployments",
             "Cluster Upgrades",
             "CI-1",
-            "missing",
             "At risk",
             "No health set",
-            "not set",
-            "not defined",
-            "owners set",
+            EMPTY_CELL,
+            OWNERS_LABEL,
+            " · Owner: ",
+            &format!("{} {}", hidden_note(&[0, 1, 6]).unwrap(), plain(STATUS_HINT)),
+            "In progress",
             "0 / 2",
             "Off track",
         ] {
             has(&drawn, want);
         }
         assert!(!drawn.iter().any(|t| t == "Autoscaling everywhere"), "Next items stay off the status review");
+        for gone in ["Confidence", "Latest update", "Next milestone", "Definition of done"] {
+            assert!(!drawn.iter().any(|t| t == gone), "empty on every row: {gone:?} column hidden");
+        }
+        for gone in [NOT_SET, "not set", "not defined", "no update yet", "owners set"] {
+            assert!(!drawn.iter().any(|t| t == gone), "one placeholder phrasing: {gone:?} in {drawn:?}");
+        }
     }
 
     #[test]
@@ -692,11 +1080,128 @@ mod tests {
         app.store.absorb(crate::store::ListId::Epics, all);
         app.roadmap.tab = 2;
         let drawn = texts(&mut app);
-        for want in ["Subteam", "Q1 2026", "Q4 2026", "Platform", "Pilot Rollout", "No lane", "✓ Cost Insights", "Oct 27", "Unscheduled"] {
+        for want in ["Subteam", "Q1 2026", "Q4 2026", "Platform", "Pilot Rollout", roadmap::NO_LANE, "✓ Cost Insights", "Oct 27", "Unscheduled"] {
             has(&drawn, want);
         }
-        has(&drawn, "Canary Deployments · No lane");
-        assert!(!drawn.iter().any(|t| t == "Cost Insights · No lane"), "Done items with no target stay out of the tray");
+        has(&drawn, "Canary Deployments");
+        has(&drawn, P0_LABEL);
+        has(&drawn, Mark::Today.label());
+        assert!(!drawn.iter().any(|t| t == Mark::RunsOn.label()), "no bar runs past 2026: no chevron entry");
+        assert_eq!(drawn.iter().filter(|t| *t == "Cost Insights").count(), 0, "Done items with no target stay out of the tray");
+    }
+
+    #[test]
+    fn legends_list_only_the_marks_shown() {
+        let app = app();
+        let (mut items, _) = app.roadmap_items();
+        assert_eq!(legend_marks(1, &items, 2026), [Mark::Done, Mark::Doing, Mark::Todo, Mark::NoHealth]);
+        assert_eq!(legend_marks(4, &items, 2026), []);
+        for i in &mut items {
+            i.health = Health::OnTrack;
+        }
+        assert_eq!(legend_marks(3, &items, 2026), [Mark::Done, Mark::Doing, Mark::Todo], "no ring to explain");
+        // Timeline: only Cost Insights (Done, 2026-Q3) has a bar; Done bars carry no health glyph.
+        assert_eq!(legend_marks(2, &items, 2026), [Mark::Today]);
+        let k = items.iter().position(|i| i.key == "CI-2").unwrap();
+        items[k].start = Some(roadmap::Quarter { year: 2026, q: 3 });
+        items[k].target = Some(roadmap::Quarter { year: 2027, q: 1 });
+        items[k].priority = Some("P0".into());
+        assert_eq!(legend_marks(2, &items, 2026), [Mark::Health, Mark::RunsOn, Mark::Today], "P0 is a pill, not a legend mark");
+    }
+
+    #[test]
+    fn the_more_cue_counts_cards_the_fold_cuts() {
+        assert_eq!(below_fold(&[100.0, 200.0, 300.0], 250.0), 1, "the third card is cut");
+        assert_eq!(below_fold(&[100.0, 200.0], 200.0), 0, "a card ending on the fold is whole");
+        assert_eq!(more_text(2), "↓ 2 more");
+    }
+
+    #[test]
+    fn empty_columns_hide_and_are_named_once() {
+        let app = app();
+        let (mut items, _) = app.roadmap_items();
+        let rows = roadmap::status_rows(&items);
+        assert_eq!(shown_columns(&rows), [0, 1, 6], "only CI-1 has a health");
+        assert_eq!(
+            hidden_note(&shown_columns(&rows)).as_deref(),
+            Some("No initiative has confidence, latest update, next milestone or definition of done set yet, so the table leaves those columns out.")
+        );
+        for i in &mut items {
+            i.health = Health::None;
+            i.confidence = Some("High".into());
+        }
+        let rows = roadmap::status_rows(&items);
+        assert_eq!(shown_columns(&rows), [0, 2, 6]);
+        assert_eq!(hidden_note(&[0, 1, 2, 4, 5, 6]).as_deref(), Some("No initiative has latest update set yet, so the table leaves those columns out."));
+        assert_eq!(hidden_note(&(0..HEADS.len()).collect::<Vec<_>>()), None);
+    }
+
+    #[test]
+    fn status_hint_shows_while_anything_is_missing() {
+        let app = app();
+        let (mut items, _) = app.roadmap_items();
+        assert!(status_has_gaps(&roadmap::status_rows(&items)));
+        for i in &mut items {
+            i.health = Health::OnTrack;
+            i.owner = Some("Ada".into());
+            i.confidence = Some("High".into());
+            i.next_milestone = Some("Beta".into());
+            i.definition_of_done = Some("All clusters".into());
+        }
+        assert!(!status_has_gaps(&roadmap::status_rows(&items)));
+    }
+
+    #[test]
+    fn table_and_tiles_end_on_one_edge() {
+        for total in [900.0, 1408.0, 1333.0] {
+            let all: Vec<usize> = (0..HEADS.len()).collect();
+            assert_eq!(column_widths(total, &all).iter().sum::<f32>(), total);
+            assert_eq!(column_widths(total, &[0, 1, 6]).iter().sum::<f32>(), total);
+            assert_eq!(column_widths(total, &[0, 6])[1], column_widths(total, &all)[6], "a hidden column widens the names, not Progress");
+            let w = tile_widths(total, TILES);
+            assert_eq!(w.iter().sum::<f32>() + GAP * (TILES as f32 - 1.0), total, "the tiles end on the table's edge");
+        }
+    }
+
+    #[test]
+    fn timeline_marks_keep_red_for_off_track() {
+        for p in [&theme::LIGHT, &theme::DARK] {
+            // Today is the accent: its label reads on the grid; bars are neutral, never the selection tint.
+            assert!(theme::contrast(p.accent, p.surface) >= 4.5, "dark={}", p.dark);
+            let (fill, fg) = timeline::bar_colors(p, false);
+            assert_ne!(fill, p.selection());
+            assert_ne!(fill, p.accent_subtle());
+            assert!(theme::contrast(fg, fill) >= 7.0, "dark={}", p.dark);
+            assert!(theme::contrast(timeline::bar_colors(p, true).1, timeline::bar_colors(p, true).0) >= 4.5, "dark={}", p.dark);
+        }
+    }
+
+    #[test]
+    fn card_update_line_is_always_labelled() {
+        let p = &theme::LIGHT;
+        let job = update_job("app deployed to build", 13.0, p.muted, p);
+        assert_eq!(job.text, "Latest update: app deployed to build");
+        assert_eq!(job.wrap.max_rows, 1, "one line, cut with an ellipsis");
+    }
+
+    #[test]
+    fn code_spans_are_mono_and_drop_their_backticks() {
+        let p = &theme::LIGHT;
+        let job = code_job("Add the `horizon:next` label", 13.0, 14.0, p.muted, p.surface_2, p);
+        assert_eq!(job.text, plain("Add the `horizon:next` label"));
+        let mono: Vec<_> = job.sections.iter().filter(|s| s.format.font_id.family == egui::FontFamily::Monospace).collect();
+        assert_eq!(mono.len(), 1);
+        for h in [STATUS_HINT, COLUMN_EMPTY[1].1, outcomes::NO_METRICS.1] {
+            assert_eq!(h.matches('`').count() % 2, 0, "balanced code spans: {h}");
+        }
+    }
+
+    #[test]
+    fn progress_track_reads_on_every_card() {
+        for p in [&theme::LIGHT, &theme::DARK] {
+            assert!(theme::contrast(track(p), p.surface) >= 3.0, "dark={}", p.dark);
+            assert!(theme::contrast(track(p), p.surface_2) >= 3.0, "legend on the page, dark={}", p.dark);
+        }
     }
 
     #[test]
@@ -715,6 +1220,6 @@ mod tests {
             e.labels.retain(|l| !l.starts_with("metric:"));
         }
         app.store.absorb(crate::store::ListId::Epics, all);
-        has(&texts(&mut app), "No metric: labels on epics yet; add them to see outcomes.");
+        has(&texts(&mut app), outcomes::NO_METRICS.0);
     }
 }

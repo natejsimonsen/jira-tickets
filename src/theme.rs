@@ -42,7 +42,6 @@ pub struct Palette {
     pub off_track: Color32,
     pub no_health: Color32,
     pub done: Color32,
-    pub today: Color32,
     pub selected_row: Color32,
     pub hover_row: Color32,
     pub danger_subtle: Color32,
@@ -71,7 +70,6 @@ pub const LIGHT: Palette = Palette {
     off_track: hex(0xb5352f),
     no_health: hex(0x8a8984),
     done: hex(0x6b6a66),
-    today: hex(0xc8403a),
     selected_row: hex(0xdfdfda),
     hover_row: hex(0xebebe8),
     danger_subtle: hex(0xfbe9e8),
@@ -96,7 +94,6 @@ pub const DARK: Palette = Palette {
     off_track: hex(0xf48a83),
     no_health: hex(0x7d7b76),
     done: hex(0xa3a29d),
-    today: hex(0xec6d66),
     selected_row: hex(0x3d3d3a),
     hover_row: hex(0x343432),
     danger_subtle: hex(0x3a2422),
@@ -111,6 +108,85 @@ pub fn palette(ctx: &egui::Context) -> &'static Palette {
     match ctx.theme() {
         egui::Theme::Dark => &DARK,
         egui::Theme::Light => &LIGHT,
+    }
+}
+
+/// Colour roles derived per theme. They are methods, not fields, so they come from one place (`dark`) and every
+/// palette, test palettes included, gets them.
+impl Palette {
+    /// "Not set", "no update yet", "—", field placeholders: a value that is missing, not a fault. Never use the
+    /// danger colour for it. Light #63625e (6.1:1 on white), dark #9c9b96 (6.2:1 on `surface`).
+    pub fn placeholder(&self) -> Color32 {
+        if self.dark { hex(0x9c9b96) } else { hex(0x63625e) }
+    }
+
+    /// The at-risk health dot: a mark, not text, so in light it is a brighter amber than `at_risk` (#835a07 reads
+    /// brown at 8 px): #b26b00, 4.2:1 on white, 3.5 on `hover_row`, 3.1 on `selected_row`, every fill a roadmap card
+    /// or table row takes. Dark keeps `at_risk`. Text in the at-risk colour stays `at_risk`.
+    pub fn at_risk_mark(&self) -> Color32 {
+        if self.dark { self.at_risk } else { hex(0xb26b00) }
+    }
+
+    /// A quiet accent tint for fills that are not the primary action: progress and timeline bars, an "on"
+    /// toggle chip, a highlighted band. Only `text` goes on it (light 13.1:1, dark 9.6:1).
+    pub fn accent_subtle(&self) -> Color32 {
+        if self.dark { hex(0x2f3a50) } else { hex(0xdce6f7) }
+    }
+
+    /// A search match inside text (the Issues list's matched words): a firmer accent tint than `accent_subtle`, so
+    /// the matched word reads at a glance on a plain row (light #bccff3 1.57:1 on white, 1.39 on `selection`; dark
+    /// #34456a 1.88:1 on `bg`, 1.65 on `selection`). Only `text` goes on it (light 10.5:1, dark 8.0:1); on the
+    /// selected row add a 1 px accent underline (`issues::title_job`).
+    pub fn search_match(&self) -> Color32 {
+        if self.dark { hex(0x34456a) } else { hex(0xbccff3) }
+    }
+
+    /// The one selected / focused fill for cards and list rows: a quiet accent tint, so it never reads as a code
+    /// block, comment card, input or hover (all neutral). Pair it with `selection_edge`, which carries most of the
+    /// "selected" signal. It is chosen to stay clear of every status pill fill, so a pill keeps its shape on a
+    /// selected row with no edge of its own (`components::status_pill`): light #ebf1fd sits lighter and less blue than
+    /// every pill (ΔE OKLab ≥ 8.5, 1.24:1; #e6edf9 was 5.4 from "New"); dark #1d2236 sits a deeper navy than the card,
+    /// under every pill's lift (ΔE ≥ 9.7, 1.34:1; #283040 was 4.9 from Planning and 5.4 from In Progress).
+    pub fn selection(&self) -> Color32 {
+        if self.dark { hex(0x1d2236) } else { hex(0xebf1fd) }
+    }
+
+    /// The selected card's or row's 1 px ring: the accent (light 4.75:1, dark 4.57:1 on `selection`).
+    pub fn selection_edge(&self) -> Color32 {
+        self.accent
+    }
+
+    /// A neutral pill's 1 px outline: `border` in light (1.53:1 on white cards and dialogs), DARK_EDGE in dark,
+    /// where `border` vanishes on the #383836 dialog (1.03:1); DARK_EDGE reads 1.53 there, 2.12 on cards.
+    pub fn pill_edge(&self) -> Color32 {
+        if self.dark { DARK_EDGE } else { self.border }
+    }
+
+    /// The toast's 1 px edge. Light: none, its inverted dark fill already stands 9:1 off the page. Dark: a lifted
+    /// neutral (#6e6d69, 1.7:1 off the #4a4a47 toast, 3.1:1 off the panes), so the toast reads as an overlay with the
+    /// same weight as in light, not as one more grey surface.
+    pub fn toast_edge(&self) -> Option<Color32> {
+        self.dark.then_some(hex(0x6e6d69))
+    }
+
+    /// The one form-field surface on the page: the filter combos and the search box share it (and the `border`
+    /// edge), so a filter bar reads as one set of fields. It is the resting control fill.
+    pub fn field(&self) -> Color32 {
+        button_fill(self)
+    }
+
+    /// The page dimming behind a modal, as black alpha. Dark needs far more to push the page back.
+    pub fn scrim_alpha(&self) -> u8 {
+        if self.dark { 160 } else { 48 }
+    }
+
+    /// A modal dialog's shadow: its elevation off the dimmed page (heavier in dark, where a light one vanishes).
+    pub fn dialog_shadow(&self) -> Shadow {
+        if self.dark {
+            Shadow { offset: [0, 8], blur: 28, spread: 0, color: Color32::from_black_alpha(180) }
+        } else {
+            Shadow { offset: [0, 6], blur: 20, spread: 0, color: Color32::from_black_alpha(40) }
+        }
     }
 }
 
@@ -133,34 +209,31 @@ const GREEN: u32 = 0x2e8b57;
 /// Waiting statuses ("Waiting for External Party"): amber, apart from the In Progress blue.
 const AMBER: u32 = 0xb07a0c;
 
-/// Ten epic colours per theme as (pill text, stripe and outline), perceptually spaced: OKLCH hues 1° + 36°·k at
-/// chroma 0.12 (clipped to sRGB), lightness alternating between hue-adjacent slots (light 0.48 / 0.43, dark 0.81 /
-/// 0.76), the stripe 0.06 toward the row (lighter in light, darker in dark). Every pair is ≥ ΔE2000 13 in each
-/// theme (the old 36° HSL wheel crowded the greens to 6.3). Epic pills are outline only (status is the one
-/// filled pill). Slots go to the epics on screen first, farthest free slot first (`assign_epic_slots`).
-pub const EPIC_LIGHT: [(u32, u32); 10] = [
-    (0x923c5a, 0xa54d6a),
-    (0x843219, 0x98432b),
-    (0x805300, 0x966200),
-    (0x545300, 0x666500),
-    (0x286f2f, 0x3b8040),
-    (0x005d52, 0x007063),
-    (0x00697d, 0x007c93),
-    (0x12508f, 0x2662a2),
-    (0x5d509c, 0x6d61af),
-    (0x6f3473, 0x824585),
+/// Eight epic colours per theme as (dot / pill text, stripe and outline), perceptually spaced: OKLCH hues 56°, 93°,
+/// 122°, 188°, 220°, 250°, 290° and 333° at chroma 0.12 (clipped to sRGB), lightness alternating between
+/// hue-adjacent slots (light 0.48 / 0.43, dark 0.81 / 0.76), the stripe 0.06 toward the row. The hues skip the
+/// danger red (OKLCH ~27°) and the success green (~155°), so an epic never reads as Blocked or Done. Every pair
+/// is ≥ ΔE2000 13.7 in each theme. Show an epic as neutral text with a dot in this hue (`components::epic_label`);
+/// slots go to the epics on screen first, farthest free slot first (`assign_epic_slots`).
+pub const EPIC_LIGHT: [(u32, u32); 8] = [
+    (0x8d4903, 0xa2591a),
+    (0x604e00, 0x745e01),
+    (0x536701, 0x637919),
+    (0x035d57, 0x056f69),
+    (0x05687f, 0x027b96),
+    (0x03528e, 0x1e63a1),
+    (0x5e4f9c, 0x6f61af),
+    (0x75326c, 0x87437d),
 ];
-pub const EPIC_DARK: [(u32, u32); 10] = [
-    (0xffa1bc, 0xec8da9),
-    (0xf2957a, 0xde8268),
-    (0xf0b464, 0xdca150),
-    (0xb7b756, 0xa4a443),
-    (0x8ed690, 0x7bc27e),
-    (0x40cab5, 0x22b6a3),
-    (0x52d4f3, 0x39c0df),
-    (0x78b5fb, 0x66a2e7),
-    (0xbeb6ff, 0xaca1f5),
-    (0xd896db, 0xc483c7),
+pub const EPIC_DARK: [(u32, u32); 8] = [
+    (0xfcac72, 0xe8995f),
+    (0xcbaf4f, 0xb89c3a),
+    (0xb4cd73, 0xa1ba60),
+    (0x37c9bf, 0x0fb6ac),
+    (0x55d3f6, 0x3dbfe2),
+    (0x73b6fa, 0x61a3e6),
+    (0xc0b6ff, 0xada0f5),
+    (0xdf94d2, 0xcb81be),
 ];
 /// The number of epic slots.
 pub const EPIC_SLOTS: usize = EPIC_LIGHT.len();
@@ -187,6 +260,9 @@ const DARK_WASH: u8 = 84;
 /// The grey hue's dark wash ("New" and other to-do statuses): 1.45:1 on a plain row, near light's 1.37 (84 read
 /// 1.64; round 14 L3). Its text holds 4.9:1 over the wash on the selected row.
 const DARK_GREY_WASH: u8 = 66;
+/// The grey hue's light wash ("New" and other to-do statuses): a firmer grey than the coloured washes, so a to-do
+/// pill reads as a filled status, not as an outlined label pill, and stands ≥ 1.3:1 off the selection.
+const LIGHT_GREY_WASH: u8 = 92;
 /// Dark stripe (and epic outline): 42% of the way to white, so it holds ≥4:1 on the selected row.
 const DARK_STRIPE_MIX: f32 = 0.42;
 /// Dark pill text: a little past halfway to white, so it holds 4.5:1 on the lighter selected row too.
@@ -210,7 +286,7 @@ pub fn tint_from_hue(base: Color32, p: &Palette) -> Tint {
     let (alpha, fg, stripe) = if p.dark {
         (if base == hex(GREY) { DARK_GREY_WASH } else { DARK_WASH }, mix(base, 255, dark_text_mix(base)), mix(base, 255, DARK_STRIPE_MIX))
     } else {
-        (LIGHT_WASH, mix(base, 0, 0.45), mix(base, 0, 0.2))
+        (if base == hex(GREY) { LIGHT_GREY_WASH } else { LIGHT_WASH }, mix(base, 0, 0.45), mix(base, 0, 0.2))
     };
     Tint { bg: Color32::from_rgba_unmultiplied(base.r(), base.g(), base.b(), alpha), fg, stripe }
 }
@@ -238,14 +314,17 @@ pub fn status_tint(status_name: &str, category: &str, p: &Palette, overrides: &B
     tint_from_hue(base, p)
 }
 
-/// The order hue slots are handed out in: farthest free hue first, so the first epics on screen sit ≥72° apart.
-pub const EPIC_SLOT_ORDER: [usize; 10] = [0, 5, 2, 7, 1, 6, 3, 8, 4, 9];
+/// The order hue slots are handed out in: farthest free hue first, so the first four epics on screen sit two or
+/// more slots apart.
+pub const EPIC_SLOT_ORDER: [usize; EPIC_SLOTS] = [0, 4, 2, 6, 1, 5, 3, 7];
 
 /// Gives epics their hue slots, kept in `slots` for the session. `visible` are the epics of the rows on screen
 /// (in row order, then the selected issue's), `rest` the loaded epic list. Visible epics come first: one that
 /// already has a slot no other visible epic holds keeps it; a new one, or one whose slot another visible epic
-/// already holds, takes the first free slot in EPIC_SLOT_ORDER. So up to ten visible epics always get ten
+/// already holds, takes the first free slot in EPIC_SLOT_ORDER. So up to EPIC_SLOTS visible epics always get
 /// distinct hues, and an epic keeps its hue across lists unless keeping it would make two visible epics alike.
+/// Past EPIC_SLOTS visible epics, each further one takes the least-used slot on screen (keeping its own when that
+/// is one of them), so 16 epics show each hue twice, never one hue ten times.
 /// The rest of the epic list then takes slots in order. Config overrides are applied on top (`epic_tint_in`).
 pub fn assign_epic_slots<'a>(slots: &mut BTreeMap<String, usize>, visible: impl IntoIterator<Item = &'a str>, rest: impl IntoIterator<Item = &'a str>) {
     let mut seen: Vec<&str> = Vec::new();
@@ -254,26 +333,20 @@ pub fn assign_epic_slots<'a>(slots: &mut BTreeMap<String, usize>, visible: impl 
             seen.push(k);
         }
     }
-    let mut used = [false; EPIC_SLOTS];
+    let mut used = [0usize; EPIC_SLOTS];
     let mut pending = Vec::new();
     for &k in &seen {
         match slots.get(k) {
-            Some(&s) if !used[s % EPIC_SLOTS] => used[s % EPIC_SLOTS] = true,
+            Some(&s) if used[s % EPIC_SLOTS] == 0 => used[s % EPIC_SLOTS] = 1,
             _ => pending.push(k),
         }
     }
     for k in pending {
-        match EPIC_SLOT_ORDER.iter().find(|&&s| !used[s]) {
-            Some(&s) => {
-                used[s] = true;
-                slots.insert(k.to_string(), s);
-            }
-            // More than ten epics on screen: a known epic keeps its hue, a new one takes the next in order.
-            None => {
-                let next = EPIC_SLOT_ORDER[slots.len() % EPIC_SLOTS];
-                slots.entry(k.to_string()).or_insert(next);
-            }
-        }
+        let least = used.iter().copied().min().unwrap_or(0);
+        let own = slots.get(k).map(|s| s % EPIC_SLOTS).filter(|&s| used[s] == least);
+        let s = own.or_else(|| EPIC_SLOT_ORDER.iter().copied().find(|&s| used[s] == least)).unwrap_or(0);
+        used[s] += 1;
+        slots.insert(k.to_string(), s);
     }
     for k in rest {
         if !slots.contains_key(k) {
@@ -283,9 +356,23 @@ pub fn assign_epic_slots<'a>(slots: &mut BTreeMap<String, usize>, visible: impl 
     }
 }
 
-/// An epic's tint: the config override for its exact key wins, else its slot's hue (see `assign_epic_slots`).
+/// A slot for an epic no screen has given one yet (`assign_epic_slots`): spread by its key, so neighbouring epics
+/// differ. A key ending in a number ("CI-1841") walks EPIC_SLOT_ORDER by that number, so any EPIC_SLOTS
+/// consecutive numbers take every slot; any other key is hashed (FNV-1a). It used to be slot 0 for every
+/// unassigned epic, which painted most epics one orange on screens that never assign slots.
+pub fn epic_fallback_slot(epic_key: &str) -> usize {
+    let digits: String = epic_key.chars().rev().take_while(char::is_ascii_digit).collect::<Vec<_>>().into_iter().rev().collect();
+    let n = match digits.parse::<u64>() {
+        Ok(n) => n,
+        Err(_) => epic_key.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |h, b| (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3)),
+    };
+    EPIC_SLOT_ORDER[(n % EPIC_SLOTS as u64) as usize]
+}
+
+/// An epic's tint: the config override for its exact key wins, else its slot's hue (see `assign_epic_slots`), else
+/// `epic_fallback_slot`.
 pub fn epic_tint_in(epic_key: &str, slots: &BTreeMap<String, usize>, p: &Palette, overrides: &BTreeMap<String, String>) -> Tint {
-    let slot = slots.get(epic_key).copied().unwrap_or(0);
+    let slot = slots.get(epic_key).copied().unwrap_or_else(|| epic_fallback_slot(epic_key));
     match overrides.get(epic_key).and_then(|v| parse_hex(v)) {
         Some(base) => tint_from_hue(base, p),
         None => slot_tint(slot, p),
@@ -309,8 +396,9 @@ fn visuals(p: &Palette) -> Visuals {
     v.panel_fill = p.bg;
     v.window_fill = p.surface;
     v.extreme_bg_color = p.surface;
-    // Inputs on the page (the list pane's search box): one step under `bg` (`input_fill`).
-    v.text_edit_bg_color = Some(input_fill(p.bg, p));
+    // Inputs on the page (the list pane's search box): the combos' field surface (`Palette::field`) with the same
+    // `border` edge, so the filter bar is one set of fields. Dialogs, sign-in and the composer set their own.
+    v.text_edit_bg_color = Some(p.field());
     v.faint_bg_color = p.surface_2;
     v.override_text_color = Some(p.text);
     v.hyperlink_color = p.accent;
@@ -321,6 +409,7 @@ fn visuals(p: &Palette) -> Visuals {
     // Hint (placeholder) text uses this; egui's default fades `text`, which drops below 4.5:1 in light.
     v.weak_text_color = Some(placeholder(p));
     v.selection.bg_fill = p.selected_row;
+    v.disabled_alpha = DISABLED_ALPHA;
     v.widgets.noninteractive.bg_stroke = Stroke::new(1.0, p.border);
     v.widgets.inactive.bg_fill = button_fill(p);
     v.widgets.inactive.weak_bg_fill = button_fill(p);
@@ -352,7 +441,7 @@ fn visuals(p: &Palette) -> Visuals {
 /// #9c9b96, under the dialog's lifted muted #b3b2ad), so an empty field never reads as filled in; light 4.79:1 on
 /// the #e4e4df input, dark 4.85:1 on the #2e2e2c dialog field (#979691 was 4.59; round 13 L2).
 pub fn placeholder(p: &Palette) -> Color32 {
-    if p.dark { hex(0x9c9b96) } else { hex(0x63625e) }
+    p.placeholder()
 }
 
 /// A resting control's fill (button, chip, combo): `surface_2` in light (1.06:1 on the page); in dark DARK_BUTTON,
@@ -360,6 +449,24 @@ pub fn placeholder(p: &Palette) -> Color32 {
 pub fn button_fill(p: &Palette) -> Color32 {
     if p.dark { DARK_BUTTON } else { p.surface_2 }
 }
+
+/// Avatar sizes (`avatar::show`): on a pill line (Issues and Grooming rows), beside a name (detail fields,
+/// pickers, the header), and before a section header (Team columns). AVATAR_GAP from the circle to the name.
+pub const AVATAR_PILL: f32 = 16.0;
+pub const AVATAR: f32 = 20.0;
+pub const AVATAR_HEADER: f32 = 24.0;
+pub const AVATAR_GAP: f32 = 8.0;
+
+/// Dark's selected segment (`components::segment_fill`): a raised neutral one step over the DARK_BUTTON track
+/// (1.51:1), ringed with DARK_EDGE (1.97:1 off the track), `text` on it (8.5:1). The light segment is the same idea
+/// (white on `surface_2` with a `border` ring). The old #858480 with `bg` text read as an inverted grey block.
+pub const DARK_SEGMENT: Color32 = hex(0x424240);
+
+/// How opaque a disabled control is drawn: egui's `disabled_alpha` (every `add_enabled(false, ..)` widget) and the
+/// disabled primary (`views::primary_disabled_colors`), so every disabled button is one look, the resting secondary
+/// button faded. 0.7 keeps its label ≥ 5.5:1 on every page, card, selection and dialog fill in both themes (egui's
+/// 0.5 read 2.2–3.2:1).
+pub const DISABLED_ALPHA: f32 = 0.7;
 
 /// The dark resting control fill: 1.18:1 on the page `bg`; `text` 12.7:1 and `muted` 5.9:1 on it.
 pub const DARK_BUTTON: Color32 = hex(0x262624);
@@ -441,12 +548,9 @@ const DARK_PAGE_CHIP: Color32 = hex(0x333331);
 pub const DARK_DIALOG: Color32 = hex(0x383836);
 /// The lifted dark edge: modal dialogs, fields and buttons inside them.
 pub const DARK_EDGE: Color32 = hex(0x545350);
-/// The dark dialog's chip step (help keys): 1.32:1 off the dialog, quieter than DARK_EDGE's 1.54.
-const DARK_DIALOG_CHIP: Color32 = hex(0x454542);
-/// The cursor row in a dark dialog: 1.26:1 off the #383836 dialog (selected_row was 1.16), so muted on it needs
-/// only the second lift, #c0bfba at 5.06:1 and 1.54 off `text` (#4e4e4b forced the last, #cccbc6, 1.36 off text;
-/// round 13 L1).
-pub const DARK_DIALOG_CURSOR: Color32 = hex(0x474744);
+/// The dark dialog's chip step (help keys): 1.32:1 off the dialog (#454542 read 1.22 and the keys floated),
+/// quieter than DARK_EDGE's 1.53; `text` 7.5:1 on it.
+const DARK_DIALOG_CHIP: Color32 = hex(0x4a4a47);
 /// A chip's fill must stand at least this far off its container (1.14:1 read as flat).
 const CHIP_STEP: f32 = 1.17;
 
@@ -486,19 +590,251 @@ pub fn over(fg: Color32, bg: Color32) -> Color32 {
     Color32::from_rgb(m(r, bg.r()), m(g, bg.g()), m(b, bg.b()))
 }
 
+/// Visuals, fonts and the Compact spacing. `set_density` switches the spacing later.
 pub fn apply(ctx: &egui::Context) {
     ctx.set_visuals_of(egui::Theme::Light, visuals(&LIGHT));
     ctx.set_visuals_of(egui::Theme::Dark, visuals(&DARK));
-    ctx.all_styles_mut(|s| {
-        s.spacing.item_spacing = egui::vec2(8.0, 6.0);
-        s.spacing.button_padding = egui::vec2(12.0, 4.0);
-        s.text_styles.insert(egui::TextStyle::Body, body(14.0));
-        s.text_styles.insert(egui::TextStyle::Button, body(14.0));
-        s.text_styles.insert(egui::TextStyle::Small, body(12.0));
-        s.text_styles.insert(egui::TextStyle::Monospace, mono(12.5));
-        s.text_styles.insert(egui::TextStyle::Heading, bold(20.0));
-    });
+    set_density(ctx, Density::Compact);
     ctx.set_fonts(fonts());
+}
+
+/// Which palette the app draws with: the macOS appearance, or one fixed theme.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Scheme {
+    #[default]
+    System,
+    Light,
+    Dark,
+}
+
+impl Scheme {
+    pub fn parse(s: &str) -> Option<Scheme> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "system" => Some(Scheme::System),
+            "light" => Some(Scheme::Light),
+            "dark" => Some(Scheme::Dark),
+            _ => None,
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Scheme::System => "System",
+            Scheme::Light => "Light",
+            Scheme::Dark => "Dark",
+        }
+    }
+
+    /// The theme as a toast or menu says it: "System (dark)" names what System resolved to (`system` is the OS
+    /// appearance, if known); Light and Dark are their names.
+    pub fn label(self, system: Option<egui::Theme>) -> String {
+        match (self, system) {
+            (Scheme::System, Some(t)) => format!("System ({})", if t == egui::Theme::Dark { "dark" } else { "light" }),
+            _ => self.name().to_string(),
+        }
+    }
+
+    /// System, then Light, then Dark, then System again.
+    pub fn next(self) -> Scheme {
+        match self {
+            Scheme::System => Scheme::Light,
+            Scheme::Light => Scheme::Dark,
+            Scheme::Dark => Scheme::System,
+        }
+    }
+
+    pub fn preference(self) -> egui::ThemePreference {
+        match self {
+            Scheme::System => egui::ThemePreference::System,
+            Scheme::Light => egui::ThemePreference::Light,
+            Scheme::Dark => egui::ThemePreference::Dark,
+        }
+    }
+}
+
+/// How much room rows, cards and controls get. Compact is the tuned layout every metric test measures.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Density {
+    #[default]
+    Compact,
+    Comfortable,
+}
+
+impl Density {
+    pub fn parse(s: &str) -> Option<Density> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "compact" => Some(Density::Compact),
+            "comfortable" => Some(Density::Comfortable),
+            _ => None,
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Density::Compact => "Compact",
+            Density::Comfortable => "Comfortable",
+        }
+    }
+
+    pub fn toggled(self) -> Density {
+        match self {
+            Density::Compact => Density::Comfortable,
+            Density::Comfortable => Density::Compact,
+        }
+    }
+
+    pub fn spacing(self) -> &'static Spacing {
+        match self {
+            Density::Compact => &COMPACT,
+            Density::Comfortable => &COMFORTABLE,
+        }
+    }
+}
+
+/// Every density-dependent size in one place, in points. Views read it through `spacing(ctx)`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Spacing {
+    /// egui's gap between widgets.
+    pub item: egui::Vec2,
+    /// egui's button padding.
+    pub button_padding: egui::Vec2,
+    /// The Body and Button text styles.
+    pub body: f32,
+    /// Added above and below the content of every list row (Issues, Grooming, the roadmap table).
+    pub row_extra: f32,
+    /// A card's padding (Team and Roadmap cards, Grooming rows' sides, detail comment cards).
+    pub card_pad: f32,
+    /// Between cards in a column or list.
+    pub card_gap: f32,
+    /// Between a card's or row's lines.
+    pub line_gap: f32,
+    /// The detail pane's ink gap between sections (pills → Description → Comments).
+    pub section_gap: f32,
+    // The type scale. `body` above is the body step; use `theme::bold` for headings.
+    /// Captions, pills, hint-bar words, timestamps.
+    pub caption: f32,
+    /// Secondary lines: meta rows, helper text, empty-state hints.
+    pub small: f32,
+    /// Section headers (`components::section_header`).
+    pub h3: f32,
+    /// Ticket titles on rows and cards (Issues, Grooming, Team, Me, Roadmap, Standup), always `theme::bold`
+    /// (`components::card_title_font`).
+    pub card_title: f32,
+    /// Screen and panel titles.
+    pub h2: f32,
+    /// The one large title on a screen (the detail pane's issue title).
+    pub h1: f32,
+    // Prose (descriptions, comments, suggestion text).
+    /// The widest a block of prose runs: about 70 characters at `body`.
+    pub prose_max_width: f32,
+    /// Prose line height as a multiple of its font size.
+    pub prose_line_height: f32,
+    /// Between paragraphs of prose, ink to ink.
+    pub paragraph_gap: f32,
+    /// The filter bar's controls (combos, toggle chips, the search box): `views::BUTTON_H` in Compact, taller in
+    /// Comfortable so the bar breathes with the rows.
+    pub control_h: f32,
+}
+
+/// The layout as tuned and measured; must not change (the glyph metric tests pin it).
+pub const COMPACT: Spacing = Spacing {
+    item: egui::vec2(8.0, 6.0),
+    button_padding: egui::vec2(12.0, 4.0),
+    body: 14.0,
+    row_extra: 0.0,
+    card_pad: 12.0,
+    card_gap: 8.0,
+    line_gap: 4.0,
+    section_gap: 32.0,
+    caption: 12.0,
+    small: 13.0,
+    h3: 16.0,
+    card_title: 13.5,
+    h2: 20.0,
+    h1: 24.0,
+    prose_max_width: 480.0,
+    prose_line_height: 1.5,
+    paragraph_gap: 12.0,
+    control_h: 28.0,
+};
+
+/// More air: taller rows, roomier cards, a point more body text.
+pub const COMFORTABLE: Spacing = Spacing {
+    item: egui::vec2(10.0, 8.0),
+    button_padding: egui::vec2(14.0, 6.0),
+    body: 15.0,
+    row_extra: 4.0,
+    card_pad: 16.0,
+    card_gap: 12.0,
+    line_gap: 6.0,
+    section_gap: 40.0,
+    caption: 12.0,
+    small: 13.5,
+    h3: 17.0,
+    // A step over body, so a title reads above the prose under it on a roomy card.
+    card_title: 16.0,
+    h2: 21.0,
+    h1: 26.0,
+    prose_max_width: 520.0,
+    prose_line_height: 1.55,
+    paragraph_gap: 16.0,
+    control_h: 32.0,
+};
+
+fn density_id() -> egui::Id {
+    egui::Id::new("jira-tickets-density")
+}
+
+/// The density last set on `ctx`; Compact until `set_density` says otherwise.
+pub fn density(ctx: &egui::Context) -> Density {
+    ctx.data(|d| d.get_temp::<Density>(density_id())).unwrap_or_default()
+}
+
+/// The spacing of `ctx`'s density.
+pub fn spacing(ctx: &egui::Context) -> &'static Spacing {
+    density(ctx).spacing()
+}
+
+/// Stores `d` on `ctx` and sets egui's spacing and text styles to match.
+pub fn set_density(ctx: &egui::Context, d: Density) {
+    ctx.data_mut(|m| m.insert_temp(density_id(), d));
+    let sp = d.spacing();
+    ctx.all_styles_mut(|s| {
+        s.spacing.item_spacing = sp.item;
+        s.spacing.button_padding = sp.button_padding;
+        s.text_styles.insert(egui::TextStyle::Body, body(sp.body));
+        s.text_styles.insert(egui::TextStyle::Button, body(sp.body));
+        s.text_styles.insert(egui::TextStyle::Small, body(sp.caption));
+        s.text_styles.insert(egui::TextStyle::Monospace, mono(12.5));
+        s.text_styles.insert(egui::TextStyle::Heading, bold(sp.h2));
+    });
+}
+
+/// The appearance the user asked for: config's `[appearance]` table, or a choice made in the app.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct Appearance {
+    pub theme: Scheme,
+    pub density: Density,
+}
+
+/// A choice made in the app, saved with the config value it replaced.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct SavedAppearance {
+    /// The config's `[appearance]` when the choice was made.
+    pub config: Appearance,
+    pub chosen: Appearance,
+}
+
+/// What a launch uses: the saved choice while the config still says what it said when the choice was made;
+/// once the config's `[appearance]` is edited, the config wins.
+pub fn effective_appearance(config: Appearance, saved: Option<SavedAppearance>) -> Appearance {
+    match saved {
+        Some(s) if s.config == config => s.chosen,
+        _ => config,
+    }
 }
 
 /// The painted ink box of a galley, relative to its origin: the union of its glyphs' raster boxes (what a
@@ -702,8 +1038,62 @@ mod tests {
     use super::*;
     use std::collections::BTreeSet;
 
+    #[test]
+    fn pill_edges_show_on_cards_and_dialogs() {
+        for (p, dialog) in [(&LIGHT, LIGHT.surface), (&DARK, DARK_DIALOG)] {
+            for fill in [dialog, p.surface, p.selection()] {
+                let c = contrast(p.pill_edge(), fill);
+                assert!(c >= 1.3, "dark={} on {fill:?}: {c:.2}", p.dark);
+            }
+        }
+    }
+
     fn none() -> BTreeMap<String, String> {
         BTreeMap::new()
+    }
+
+    #[test]
+    fn scheme_and_density_parse_and_cycle() {
+        assert_eq!(Scheme::parse(" Dark "), Some(Scheme::Dark));
+        assert_eq!(Scheme::parse("system"), Some(Scheme::System));
+        assert_eq!(Scheme::parse("sepia"), None);
+        assert_eq!(Scheme::System.next().next().next(), Scheme::System);
+        assert_eq!(Scheme::Light.next(), Scheme::Dark);
+        assert_eq!(Density::parse("COMFORTABLE"), Some(Density::Comfortable));
+        assert_eq!(Density::parse("cozy"), None);
+        assert_eq!(Density::Compact.toggled(), Density::Comfortable);
+        assert_eq!(Density::Comfortable.toggled(), Density::Compact);
+    }
+
+    #[test]
+    fn compact_is_the_tuned_layout_and_comfortable_is_roomier() {
+        let (c, m) = (Density::Compact.spacing(), Density::Comfortable.spacing());
+        assert_eq!((c.item, c.button_padding, c.body), (egui::vec2(8.0, 6.0), egui::vec2(12.0, 4.0), 14.0));
+        assert_eq!((c.row_extra, c.card_pad, c.card_gap, c.line_gap, c.section_gap), (0.0, 12.0, 8.0, 4.0, 32.0));
+        assert!(m.item.x > c.item.x && m.item.y > c.item.y && m.button_padding.y > c.button_padding.y);
+        assert!(m.body > c.body && m.row_extra > 0.0 && m.card_pad > c.card_pad);
+        assert!(m.card_gap > c.card_gap && m.line_gap > c.line_gap && m.section_gap > c.section_gap);
+    }
+
+    #[test]
+    fn density_lives_on_the_context() {
+        let ctx = egui::Context::default();
+        assert_eq!(density(&ctx), Density::Compact, "Compact until set");
+        set_density(&ctx, Density::Comfortable);
+        assert_eq!(spacing(&ctx), &COMFORTABLE);
+        assert_eq!(ctx.style_of(egui::Theme::Dark).spacing.item_spacing, COMFORTABLE.item);
+        set_density(&ctx, Density::Compact);
+        assert_eq!(ctx.style_of(egui::Theme::Dark).spacing.item_spacing, egui::vec2(8.0, 6.0));
+    }
+
+    #[test]
+    fn a_saved_choice_holds_until_the_config_changes() {
+        let config = Appearance::default();
+        let chosen = Appearance { theme: Scheme::Dark, density: Density::Comfortable };
+        assert_eq!(effective_appearance(config, None), config);
+        assert_eq!(effective_appearance(config, Some(SavedAppearance { config, chosen })), chosen);
+        let edited = Appearance { theme: Scheme::Light, ..config };
+        assert_eq!(effective_appearance(edited, Some(SavedAppearance { config, chosen })), edited, "an edited config wins");
     }
 
     #[test]
@@ -1107,16 +1497,14 @@ mod tests {
     #[test]
     fn muted_stays_readable_on_cursor_rows() {
         for p in [&LIGHT, &DARK] {
-            for fill in [p.selected_row, p.hover_row, DARK_DIALOG_CURSOR] {
-                if !p.dark && fill == DARK_DIALOG_CURSOR {
-                    continue;
-                }
+            for fill in [p.selected_row, p.hover_row, p.selection()] {
                 assert!(contrast(muted_on(fill, p), fill) >= 4.5, "dark={} {fill:?}: {:.2}", p.dark, contrast(muted_on(fill, p), fill));
             }
         }
-        assert_eq!(muted_on(DARK_DIALOG_CURSOR, &DARK), hex(0xc0bfba), "L1: the cursor row stops at the second lift");
-        assert!(contrast(muted_on(DARK_DIALOG_CURSOR, &DARK), DARK_DIALOG_CURSOR) >= 5.0);
-        assert!(contrast(DARK.text, muted_on(DARK_DIALOG_CURSOR, &DARK)) >= 1.5, "apart from text");
+        for p in [&LIGHT, &DARK] {
+            assert!(contrast(muted_on(p.selection(), p), p.selection()) >= 5.0, "picker cursor rows: dark={}", p.dark);
+            assert!(contrast(p.text, muted_on(p.selection(), p)) >= 1.5, "apart from text: dark={}", p.dark);
+        }
         assert_eq!(muted_on(DARK.surface, &DARK), DARK.muted, "narrow: only where muted falls short");
         // Round 9: light muted #585753 clears 5.0 on the selected row (5.41), so it needs no lift there.
         assert_eq!(muted_on(LIGHT.selected_row, &LIGHT), LIGHT.muted, "light muted 5.41 on the selected row");
@@ -1134,7 +1522,6 @@ mod tests {
                 assert!(contrast(muted_on(fill, p), fill) >= MUTED_MIN, "dark={} {fill:?}: {:.2}", p.dark, contrast(muted_on(fill, p), fill));
             }
         }
-        assert!(contrast(DARK_DIALOG_CURSOR, DARK_DIALOG) >= 1.25, "{:.2}", contrast(DARK_DIALOG_CURSOR, DARK_DIALOG));
     }
 
     #[test]
@@ -1186,17 +1573,17 @@ mod tests {
         let keys: Vec<String> = (100..134).map(|n| format!("CI-{n}")).collect();
         let all: Vec<&str> = keys.iter().map(String::as_str).collect();
         let mut slots = BTreeMap::new();
-        // The full 34-epic list arrives first (nothing on screen yet): slots wrap mod 10.
+        // The full 34-epic list arrives first (nothing on screen yet): slots wrap mod EPIC_SLOTS.
         assign_epic_slots(&mut slots, [], all.iter().copied());
-        // Then rows show nine epics whose list slots collide (CI-100, CI-110 and CI-120 share slot 0, ...).
-        let visible = ["CI-100", "CI-110", "CI-120", "CI-101", "CI-111", "CI-102", "CI-112", "CI-103", "CI-113"];
+        // Then rows show seven epics whose list slots collide (CI-100, CI-108 and CI-116 share slot 0, ...).
+        let visible = ["CI-100", "CI-108", "CI-116", "CI-101", "CI-109", "CI-102", "CI-110"];
         assign_epic_slots(&mut slots, visible, all.iter().copied());
         let hues: BTreeSet<usize> = visible.iter().map(|k| slots[*k]).collect();
-        assert_eq!(hues.len(), visible.len(), "≤10 distinct visible epics, distinct hues: {slots:?}");
-        // Ten on screen: all ten hues.
-        let ten: Vec<&str> = all[20..30].to_vec();
+        assert_eq!(hues.len(), visible.len(), "≤EPIC_SLOTS distinct visible epics, distinct hues: {slots:?}");
+        // A full screen: every hue.
+        let ten: Vec<&str> = all[20..20 + EPIC_SLOTS].to_vec();
         assign_epic_slots(&mut slots, ten.iter().copied(), all.iter().copied());
-        assert_eq!(ten.iter().map(|k| slots[*k]).collect::<BTreeSet<_>>().len(), 10);
+        assert_eq!(ten.iter().map(|k| slots[*k]).collect::<BTreeSet<_>>().len(), EPIC_SLOTS);
         // Stable: running again (every frame) moves nothing.
         let before = slots.clone();
         assign_epic_slots(&mut slots, ten.iter().copied(), all.iter().copied());
@@ -1207,20 +1594,55 @@ mod tests {
     fn epic_hues_go_farthest_first_and_stay_across_lists() {
         let mut slots = BTreeMap::new();
         assign_epic_slots(&mut slots, ["CI-9", "CI-3", "CI-7", "CI-9"], ["CI-1", "CI-2"]);
-        assert_eq!((slots["CI-9"], slots["CI-3"], slots["CI-7"]), (0, 5, 2), "farthest free hue first, row order");
+        assert_eq!((slots["CI-9"], slots["CI-3"], slots["CI-7"]), (0, 4, 2), "farthest free hue first, row order");
         assert_eq!((slots["CI-1"], slots["CI-2"]), (EPIC_SLOT_ORDER[3], EPIC_SLOT_ORDER[4]), "then the rest of the list");
-        // The first four slots are ≥72° apart (36° a slot).
+        // The first four slots are two or more slots apart.
+        let n = EPIC_SLOTS as i32;
         for (i, a) in EPIC_SLOT_ORDER[..4].iter().enumerate() {
             for b in &EPIC_SLOT_ORDER[i + 1..4] {
-                let d = (*a as i32 - *b as i32).rem_euclid(10).min((*b as i32 - *a as i32).rem_euclid(10));
-                assert!(d * 36 >= 72, "{a} {b}");
+                let d = (*a as i32 - *b as i32).rem_euclid(n).min((*b as i32 - *a as i32).rem_euclid(n));
+                assert!(d >= 2, "{a} {b}");
             }
         }
         // Another list: a known key keeps its hue; a new one takes a slot free on screen.
         assign_epic_slots(&mut slots, ["CI-7", "CI-4", "CI-3"], []);
-        assert_eq!((slots["CI-7"], slots["CI-3"]), (2, 5), "same key, same hue in every list");
-        assert!(![2, 5].contains(&slots["CI-4"]));
-        assert_eq!(EPIC_SLOT_ORDER.iter().collect::<BTreeSet<_>>().len(), 10);
+        assert_eq!((slots["CI-7"], slots["CI-3"]), (2, 4), "same key, same hue in every list");
+        assert!(![2, 4].contains(&slots["CI-4"]));
+        assert_eq!(EPIC_SLOT_ORDER.iter().collect::<BTreeSet<_>>().len(), EPIC_SLOTS);
+    }
+
+    #[test]
+    fn unassigned_epics_spread_by_key() {
+        // Round 3: every epic without a slot fell back to slot 0, so 10 of 16 Grooming epics were one orange.
+        let keys: Vec<String> = (1841..1841 + EPIC_SLOTS as u32).map(|n| format!("CI-{n}")).collect();
+        let hues: BTreeSet<usize> = keys.iter().map(|k| epic_fallback_slot(k)).collect();
+        assert_eq!(hues.len(), EPIC_SLOTS, "any EPIC_SLOTS consecutive keys take every slot");
+        assert_ne!(epic_fallback_slot("CI-1841"), epic_fallback_slot("CI-1842"), "neighbours differ");
+        assert_eq!(epic_fallback_slot("CI-9"), epic_fallback_slot("CI-9"), "stable");
+        assert!(epic_fallback_slot("no-number") < EPIC_SLOTS);
+        let none = BTreeMap::new();
+        assert_eq!(epic_tint_in("CI-1842", &BTreeMap::new(), &LIGHT, &none), slot_tint(epic_fallback_slot("CI-1842"), &LIGHT));
+    }
+
+    #[test]
+    fn more_visible_epics_than_slots_share_hues_evenly() {
+        let keys: Vec<String> = (0..16).map(|n| format!("E-{}", n * 8)).collect();
+        let all: Vec<&str> = keys.iter().map(String::as_str).collect();
+        // The epic list first: these keys all land on slots in list order.
+        let mut slots = BTreeMap::new();
+        assign_epic_slots(&mut slots, [], all.iter().copied());
+        for _ in 0..2 {
+            assign_epic_slots(&mut slots, all.iter().copied(), []);
+            let mut count = [0; EPIC_SLOTS];
+            for k in &all {
+                count[slots[*k]] += 1;
+            }
+            assert!(count.iter().all(|&c| c == 2), "16 visible epics, each hue twice: {count:?}");
+        }
+        // Stable once given.
+        let before = slots.clone();
+        assign_epic_slots(&mut slots, all.iter().copied(), []);
+        assert_eq!(slots, before);
     }
 
     #[test]
@@ -1244,6 +1666,16 @@ mod tests {
         for c in [LIGHT.at_risk, LIGHT.no_health, LIGHT.on_track, LIGHT.off_track] {
             assert!(contrast(c, LIGHT.surface) >= 3.0, "{c:?}: {:.2}", contrast(c, LIGHT.surface));
         }
+    }
+
+    #[test]
+    fn the_at_risk_dot_passes_as_a_mark_on_every_row_fill() {
+        for p in [LIGHT, DARK] {
+            for fill in [p.surface, p.bg, p.surface_2, p.selection(), p.hover_row, p.selected_row] {
+                assert!(contrast(p.at_risk_mark(), fill) >= 3.0, "dark={} on {fill:?}: {:.2}", p.dark, contrast(p.at_risk_mark(), fill));
+            }
+        }
+        assert_ne!(LIGHT.at_risk_mark(), LIGHT.at_risk, "light: amber, not the brown text step");
     }
 
     #[test]
@@ -1271,5 +1703,162 @@ mod tests {
         let slots = BTreeMap::from([("CI-1860".to_string(), 3), ("CI-1569".to_string(), 4)]);
         assert_eq!(epic_tint_in("CI-1860", &slots, &LIGHT, &o), tint_from_hue(hex(0x8250df), &LIGHT));
         assert_eq!(epic_tint_in("CI-1569", &slots, &LIGHT, &o), slot_tint(4, &LIGHT));
+    }
+
+    #[test]
+    fn selection_is_accent_tinted_and_apart_from_neutral_surfaces() {
+        for p in [&LIGHT, &DARK] {
+            let sel = p.selection();
+            // A blue cast: the accent's hue, not another grey.
+            assert!(i32::from(sel.b()) - i32::from(sel.r()) >= 15, "dark={}: {sel:?}", p.dark);
+            for neutral in [p.surface, p.surface_2, p.hover_row, p.selected_row, chip_fill_on(p.surface, p), input_fill(p.surface, p)] {
+                assert_ne!(sel, neutral, "dark={}", p.dark);
+            }
+            // A quiet tint: the accent ring carries "selected"; the fill only has to read as a different surface.
+            assert!(delta_e2000(sel, p.surface) >= SEL_OFF_SURFACE, "dark={}: ΔE {:.1} off the card", p.dark, delta_e2000(sel, p.surface));
+            assert!(delta_e2000(sel, p.hover_row) >= SEL_OFF_SURFACE, "dark={}: ΔE {:.1} off hover", p.dark, delta_e2000(sel, p.hover_row));
+            assert!(contrast(p.selection_edge(), sel) >= 3.0, "dark={}: ring {:.2}", p.dark, contrast(p.selection_edge(), sel));
+            assert!(contrast(p.selection_edge(), p.surface) >= 3.0, "dark={}", p.dark);
+            assert!(contrast(p.text, sel) >= 7.0, "dark={}", p.dark);
+            assert!(contrast(muted_on(sel, p), sel) >= 4.5, "dark={}", p.dark);
+            assert!(contrast(p.placeholder(), sel) >= 4.5, "dark={}", p.dark);
+            // Pills keep reading on it: status text over its wash, epic text and dots.
+            for (name, cat) in [("New", "new"), ("In Progress", "indeterminate"), ("Blocked", "new"), ("Done", "done"), ("Ready for Work", "new")] {
+                let t = status_tint(name, cat, p, &none());
+                let c = contrast(t.fg, over(t.bg, sel));
+                assert!(c >= 4.5, "dark={} {name}: {c:.2}", p.dark);
+            }
+            for s in 0..EPIC_SLOTS {
+                let t = slot_tint(s, p);
+                assert!(contrast(t.fg, sel) >= 4.5 && contrast(t.stripe, sel) >= 3.0, "dark={} slot {s}", p.dark);
+            }
+        }
+    }
+
+    /// The selection's least ΔE2000 off the card and the hover fill.
+    const SEL_OFF_SURFACE: f32 = 3.0;
+
+    #[test]
+    fn status_pill_fills_stay_apart_from_the_selection() {
+        // One pill rule in both themes: an opaque fill (the wash over `surface`), no edge. So the selection, not a
+        // stroke, keeps every pill's shape on a selected row: every fill stands off it.
+        let names = [("New", "new"), ("Planning", "new"), ("Ready for Work", "new"), ("Work in Progress", "indeterminate")];
+        let more = [("In Review", "indeterminate"), ("Blocked", "new"), ("Done", "done"), ("Waiting for support", "new")];
+        for p in [&LIGHT, &DARK] {
+            let sel = p.selection();
+            for (name, cat) in names.iter().chain(&more) {
+                let t = status_tint(name, cat, p, &none());
+                let fill = over(t.bg, p.surface);
+                let (de, c) = (delta_e2000(fill, sel), contrast(fill, sel));
+                eprintln!("dark={} {name}: ΔE {de:.1} {c:.2}:1  (on card ΔE {:.1})", p.dark, delta_e2000(fill, p.surface));
+                assert!(de >= PILL_OFF_SELECTION && c >= 1.2, "dark={} {name}: ΔE {de:.1}, {c:.2}:1 off the selection", p.dark);
+                assert!(contrast(t.fg, fill) >= 4.5, "dark={} {name}", p.dark);
+            }
+        }
+    }
+
+    /// A status pill's fill's least ΔE2000 off the selection.
+    const PILL_OFF_SELECTION: f32 = 6.0;
+
+    #[test]
+    fn colour_roles_pass_aa() {
+        for p in [&LIGHT, &DARK] {
+            for fill in [p.surface, p.bg, p.surface_2] {
+                assert!(contrast(p.placeholder(), fill) >= 4.5, "dark={} placeholder {:.2}", p.dark, contrast(p.placeholder(), fill));
+                // Issue keys and other secondary text are `muted`.
+                assert!(contrast(p.muted, fill) >= 4.5, "dark={} muted", p.dark);
+            }
+            assert_ne!(p.placeholder(), p.off_track, "missing is not an error");
+            assert!(contrast(p.text, p.accent_subtle()) >= 7.0, "dark={}", p.dark);
+            assert!(contrast(p.accent_subtle(), p.surface) >= 1.2, "dark={}: a bar shows on a card", p.dark);
+            assert!(contrast(p.on_accent, p.accent) >= 4.5, "dark={}: primary text {:.2}", p.dark, contrast(p.on_accent, p.accent));
+            assert_eq!(placeholder(p), p.placeholder());
+        }
+        assert!(DARK.scrim_alpha() > LIGHT.scrim_alpha());
+        for p in [&LIGHT, &DARK] {
+            // A search match reads at a glance on a plain and a selected row, with body text on it.
+            assert!(contrast(p.search_match(), p.surface) >= 1.5 && contrast(p.search_match(), p.selection()) >= 1.35, "dark={}", p.dark);
+            assert!(contrast(p.text, p.search_match()) >= 7.0, "dark={}", p.dark);
+        }
+        assert!(DARK.dialog_shadow().color.a() > LIGHT.dialog_shadow().color.a());
+    }
+
+    #[test]
+    fn epic_hues_skip_danger_red_and_success_green() {
+        // OKLCH hue of an sRGB colour, in degrees.
+        let hue = |c: Color32| {
+            let lin = |v: u8| {
+                let v = f64::from(v) / 255.0;
+                if v <= 0.040_45 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) }
+            };
+            let (r, g, b) = (lin(c.r()), lin(c.g()), lin(c.b()));
+            let l = (0.412_221_470_8 * r + 0.536_332_536_3 * g + 0.051_445_992_9 * b).cbrt();
+            let m = (0.211_903_498_2 * r + 0.680_699_545_1 * g + 0.107_396_956_6 * b).cbrt();
+            let s = (0.088_302_461_9 * r + 0.281_718_837_6 * g + 0.629_978_700_5 * b).cbrt();
+            let a = 1.977_998_495_1 * l - 2.428_592_205 * m + 0.450_593_709_9 * s;
+            let bb = 0.025_904_037_1 * l + 0.782_771_766_2 * m - 0.808_675_766 * s;
+            bb.atan2(a).to_degrees().rem_euclid(360.0)
+        };
+        let apart = |a: f64, b: f64| {
+            let d = (a - b).rem_euclid(360.0);
+            d.min(360.0 - d)
+        };
+        for p in [&LIGHT, &DARK] {
+            let danger = hue(p.off_track);
+            let success = hue(p.on_track);
+            for s in 0..EPIC_SLOTS {
+                let h = hue(slot_tint(s, p).stripe);
+                assert!(apart(h, danger) >= 25.0, "dark={} slot {s}: {h:.0}° vs danger {danger:.0}°", p.dark);
+                assert!(apart(h, success) >= 25.0, "dark={} slot {s}: {h:.0}° vs success {success:.0}°", p.dark);
+            }
+        }
+    }
+
+    #[test]
+    fn system_theme_says_what_it_resolved_to() {
+        assert_eq!(Scheme::System.label(Some(egui::Theme::Dark)), "System (dark)");
+        assert_eq!(Scheme::System.label(Some(egui::Theme::Light)), "System (light)");
+        assert_eq!(Scheme::System.label(None), "System");
+        assert_eq!(Scheme::Dark.label(Some(egui::Theme::Light)), "Dark");
+    }
+
+    #[test]
+    fn type_scale_steps_and_compact_keeps_its_layout() {
+        for sp in [&COMPACT, &COMFORTABLE] {
+            assert!(sp.caption < sp.small && sp.small < sp.body && sp.body < sp.h3 && sp.h3 < sp.h2 && sp.h2 < sp.h1);
+            assert!(sp.h3 - sp.body >= 2.0, "a section header is a clear step over body text");
+            assert!((1.4..=1.6).contains(&sp.prose_line_height));
+        }
+        assert_eq!((COMPACT.caption, COMPACT.small, COMPACT.h3, COMPACT.h2, COMPACT.h1), (12.0, 13.0, 16.0, 20.0, 24.0));
+        let (c, m) = (&COMPACT, &COMFORTABLE);
+        assert!(m.small >= c.small && m.h3 > c.h3 && m.h1 > c.h1 && m.prose_max_width > c.prose_max_width && m.paragraph_gap > c.paragraph_gap);
+    }
+
+    #[test]
+    #[cfg_attr(not(target_os = "macos"), ignore = "glyph-ink metrics are calibrated on macOS font rasterisation")]
+    fn the_prose_column_holds_about_70_characters() {
+        // About 70 characters of real prose at body size, measured with the app's fonts.
+        for sp in [&COMPACT, &COMFORTABLE] {
+            let chars = crate::testutil::with_ui(|ui| {
+                let sample = "Done means both are merged and the nightly sweep passes without skipped tests, and the runbook names the new path.";
+                let w = ui.painter().layout_no_wrap(sample.into(), body(sp.body), Color32::WHITE).size().x;
+                sp.prose_max_width / (w / sample.chars().count() as f32)
+            });
+            assert!((65.0..=82.0).contains(&chars), "{chars:.0} characters a line");
+        }
+    }
+
+    #[test]
+    fn a_disabled_button_label_still_reads() {
+        // The resting secondary button (button_fill, `text`) faded to DISABLED_ALPHA over every fill a button sits on.
+        let fade = |c: Color32, under: Color32| over(c.gamma_multiply(DISABLED_ALPHA), under);
+        for p in [&LIGHT, &DARK] {
+            for under in [p.bg, p.surface, p.surface_2, p.selection(), if p.dark { DARK_DIALOG } else { LIGHT_INPUT }] {
+                let fill = fade(button_fill(p), under);
+                let label = fade(p.text, fill);
+                assert!(contrast(label, fill) >= 5.0, "dark={} on {under:?}: {:.2}", p.dark, contrast(label, fill));
+                assert!(contrast(label, fill) < contrast(p.text, button_fill(p)), "still quieter than enabled");
+            }
+        }
     }
 }

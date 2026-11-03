@@ -10,6 +10,8 @@ const UNASSIGNED_CAP: usize = 10;
 pub struct Member {
     pub id: String,
     pub display: String,
+    /// Their Jira account id, from a matching ticket's assignee (the configured `id` may be a display name).
+    pub account_id: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -52,9 +54,11 @@ pub fn columns<'a>(members: &[String], in_progress: &[&'a Issue], team_open: &[&
                 .collect();
             let ready: Vec<Card<'a>> = team_open.iter().copied().filter(|i| i.status.name == status_ready && matches(i, id)).map(card).collect();
             let any_match = in_progress.iter().chain(team_open).find(|i| matches(i, id));
-            let display = any_match.and_then(|i| i.assignee.as_ref()).map_or_else(|| id.clone(), |u| u.display_name.clone());
+            let who = any_match.and_then(|i| i.assignee.as_ref());
+            let display = who.map_or_else(|| id.clone(), |u| u.display_name.clone());
+            let account_id = who.map(|u| u.account_id.clone());
             let none_found = wip.is_empty() && ready.is_empty() && any_match.is_none();
-            Column { member: Some(Member { id: id.clone(), display }), in_progress: wip, ready, none_found }
+            Column { member: Some(Member { id: id.clone(), display, account_id }), in_progress: wip, ready, none_found }
         })
         .collect();
     let unassigned: Vec<Card<'a>> =

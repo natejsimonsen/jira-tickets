@@ -1,7 +1,6 @@
 //! The modal pickers' state: opening each one, moving its cursor, and confirming the choice.
 
 use super::App;
-use super::ToastKind;
 use super::msg::Msg;
 use crate::jira::{self, Resolution, Sprint, Transition, User};
 
@@ -44,6 +43,74 @@ pub enum Picker {
         orig_priority: String,
         orig_points: String,
     },
+}
+
+impl Picker {
+    /// The write this picker sends, as its done toast names it ("Close", "Sprint move").
+    pub fn write_name(&self) -> &'static str {
+        match self {
+            Picker::Transition { .. } | Picker::Resolution { close: false, .. } => "Transition",
+            Picker::Resolution { close: true, .. } => "Close",
+            Picker::Assign { .. } => "Assign",
+            Picker::Sprint { .. } => "Sprint move",
+            Picker::Edit { .. } => "Edit",
+        }
+    }
+
+    /// The Edit dialog's priority choices: Jira's five default priorities, highest first.
+    pub const PRIORITIES: [&'static str; 5] = ["Highest", "High", "Medium", "Low", "Lowest"];
+
+    /// The Assign filter matched nobody: no row shows, nothing is selected and Confirm is off, so Enter never
+    /// unassigns by accident. `shown` is the user rows `assign_rows` left.
+    pub fn assign_empty(filter: &str, shown: usize) -> bool {
+        !filter.trim().is_empty() && shown == 0
+    }
+
+    /// The Edit dialog's selected priority among PRIORITIES (case-insensitive), if it is one of them.
+    pub fn priority_index(priority: &str) -> Option<usize> {
+        Self::PRIORITIES.iter().position(|p| p.eq_ignore_ascii_case(priority.trim()))
+    }
+
+    /// Whether Confirm would change anything, so it is on: off while the cursor sits on the issue's current
+    /// value (its `status` or `sprint`), on an Assign filter that matched nobody, or while no Edit field differs
+    /// from what it opened with. A Resolution has no current value, so it is always a change.
+    pub fn changes(&self, status: &str, sprint: Option<&str>) -> bool {
+        match self {
+            Picker::Transition { items, cursor, .. } => items.get(*cursor).is_some_and(|t| !t.to.eq_ignore_ascii_case(status)),
+            Picker::Resolution { items, cursor, .. } => *cursor < items.len(),
+            Picker::Assign { items, current, cursor, filter, .. } => {
+                let rows = assign_rows(items, filter, current.as_ref()).0;
+                assign_choice(&rows, filter, *cursor).is_some() && assign_current_row(&rows, current.as_ref()) != Some(*cursor)
+            }
+            Picker::Sprint { items, cursor, .. } => *cursor <= items.len() && sprint_current_row(items, sprint) != Some(*cursor),
+            Picker::Edit { labels, priority, points, orig_labels, orig_priority, orig_points, .. } => {
+                edit_fields(labels, priority, points, orig_labels, orig_priority, orig_points).is_some()
+            }
+        }
+    }
+
+    /// The issue the picker acts on.
+    pub fn key(&self) -> &str {
+        match self {
+            Picker::Transition { key, .. }
+            | Picker::Resolution { key, .. }
+            | Picker::Assign { key, .. }
+            | Picker::Sprint { key, .. }
+            | Picker::Edit { key, .. } => key,
+        }
+    }
+}
+
+/// What confirming the Assign picker does: None when nothing is selected (the filter matched nobody, or the
+/// cursor is past the rows), Some(None) to unassign (row 0), Some(Some(account)) to assign.
+fn assign_choice(rows: &[User], filter: &str, cursor: usize) -> Option<Option<String>> {
+    if Picker::assign_empty(filter, rows.len()) {
+        return None;
+    }
+    if cursor == 0 {
+        return Some(None);
+    }
+    rows.get(cursor - 1).map(|u| Some(u.account_id.clone()))
 }
 
 impl App {
@@ -107,7 +174,10 @@ impl App {
             let (cur, len) = match p {
                 Picker::Transition { cursor, items, .. } => (cursor, items.len()),
                 Picker::Resolution { cursor, items, .. } => (cursor, items.len()),
-                Picker::Assign { cursor, items, filter, current, .. } => (cursor, assign_rows(items, filter, current.as_ref()).0.len() + 1),
+                Picker::Assign { cursor, items, filter, current, .. } => {
+                    let shown = assign_rows(items, filter, current.as_ref()).0.len();
+                    (cursor, if Picker::assign_empty(filter, shown) { 0 } else { shown + 1 })
+                }
                 Picker::Sprint { cursor, items, .. } => (cursor, items.len() + 1),
                 Picker::Edit { .. } => return,
             };
@@ -118,6 +188,22 @@ impl App {
     pub(super) fn confirm_picker(&mut self) {
         // Without a client spawn does nothing; keep the picker open rather than drop the choice silently.
         if self.client.is_none() {
+            return;
+        }
+        // Read-only: Confirm is off, so Enter keeps the dialog open, sends nothing, and the toast repeats why.
+        if let Err(e) = jira::check_writable() {
+            if let Some(open) = &self.picker {
+                let (text, kind) = super::msg::done_toast(open.write_name(), &Err(e));
+                self.toast_kind(text, kind);
+            }
+            return;
+        }
+        // Confirm is off while the choice is the issue's current value (or nothing is chosen): Enter, or a click
+        // on the current row, keeps the dialog open and sends nothing.
+        let Some(open) = &self.picker else { return };
+        let issue = self.store.get(open.key());
+        let (status, sprint) = (issue.map(|i| i.status.name.clone()).unwrap_or_default(), issue.and_then(|i| i.sprint.clone()));
+        if !open.changes(&status, sprint.as_deref()) {
             return;
         }
         let Some(p) = self.picker.take() else { return };
@@ -139,10 +225,8 @@ impl App {
             }
             Picker::Assign { key, items, current, cursor, filter } => {
                 let shown = assign_rows(&items, &filter, current.as_ref()).0;
-                let account = if cursor == 0 { None } else { shown.get(cursor - 1).map(|u| u.account_id.clone()) };
-                if cursor != 0 && account.is_none() {
-                    return;
-                }
+                // `changes` already kept the dialog open when nothing is selected.
+                let Some(account) = assign_choice(&shown, &filter, cursor) else { return };
                 self.spawn_write(move |c, tx| {
                     let _ = tx.send(Msg::Done { key: key.clone(), what: "Assign", result: c.assign(&key, account.as_deref()) });
                 });
@@ -165,10 +249,7 @@ impl App {
                 });
             }
             Picker::Edit { key, labels, priority, points, orig_labels, orig_priority, orig_points } => {
-                let Some(fields) = edit_fields(&labels, &priority, &points, &orig_labels, &orig_priority, &orig_points) else {
-                    self.toast_kind("No changes", ToastKind::Info);
-                    return;
-                };
+                let Some(fields) = edit_fields(&labels, &priority, &points, &orig_labels, &orig_priority, &orig_points) else { return };
                 self.spawn_write(move |c, tx| {
                     let _ = tx.send(Msg::Done { key: key.clone(), what: "Edit", result: c.update_fields(&key, fields) });
                 });
@@ -266,10 +347,11 @@ pub fn sprint_current_row(items: &[Sprint], current: Option<&str>) -> Option<usi
 pub const PRIORITY_HINT: &str = "Highest, High, Medium, Low or Lowest";
 pub const POINTS_HINT: &str = "Number, e.g. 3";
 
-/// A sprint's row in the Sprint picker: its name, with its state only when that adds something ("(future)");
-/// the active sprint is plain, and the issue's own sprint is marked "current" beside it.
-pub fn sprint_row_label(name: &str, state: &str) -> String {
-    if state.eq_ignore_ascii_case("active") { name.to_string() } else { format!("{name} ({state})") }
+/// A sprint's row in the Sprint picker: its name, and its state as a secondary tag only when that adds something
+/// ("future"), drawn like the "current" tag beside the issue's own sprint; the active sprint has none.
+pub fn sprint_row_label(name: &str, state: &str) -> (String, Option<String>) {
+    let tag = (!state.eq_ignore_ascii_case("active") && !state.trim().is_empty()).then(|| state.trim().to_lowercase());
+    (name.to_string(), tag)
 }
 
 /// Moves a picker cursor by `d`, wrapping at both ends.
@@ -364,6 +446,30 @@ mod tests {
     }
 
     #[test]
+    fn assign_with_no_match_selects_nothing() {
+        let u = |n: &str| User { account_id: n.to_lowercase(), display_name: n.into() };
+        let items: Vec<User> = ["Ann", "Grace"].map(u).to_vec();
+        let (rows, _) = assign_rows(&items, "vin", None);
+        assert!(Picker::assign_empty("vin", rows.len()));
+        assert_eq!(assign_choice(&rows, "vin", 0), None, "Enter on 0 matches never unassigns");
+        assert!(!Picker::assign_empty("  ", 0), "no filter: Unassigned is a real choice");
+        assert_eq!(assign_choice(&[], "", 0), Some(None));
+        let (rows, _) = assign_rows(&items, "gra", None);
+        assert!(!Picker::assign_empty("gra", rows.len()));
+        assert_eq!(assign_choice(&rows, "gra", 1), Some(Some("grace".into())));
+        assert_eq!(assign_choice(&rows, "gra", 0), Some(None), "Unassigned stays pickable beside matches");
+        assert_eq!(assign_choice(&rows, "gra", 5), None, "past the rows");
+    }
+
+    #[test]
+    fn priority_choices_match_case_insensitively() {
+        assert_eq!(Picker::priority_index("high"), Some(1));
+        assert_eq!(Picker::priority_index(" Lowest "), Some(4));
+        assert_eq!(Picker::priority_index("P1"), None, "a custom priority selects no segment");
+        assert_eq!(Picker::priority_index(""), None);
+    }
+
+    #[test]
     fn assign_pins_the_current_assignee() {
         let u = |n: &str| User { account_id: n.to_lowercase(), display_name: n.into() };
         let items: Vec<User> = (0..20).map(|i| u(&format!("User {i:02}"))).chain([u("Shawn")]).collect();
@@ -406,8 +512,79 @@ mod tests {
         assert_eq!(sprint_current_row(&sprints, None), Some(0));
         assert_eq!(PRIORITY_HINT, "Highest, High, Medium, Low or Lowest");
         assert_eq!(POINTS_HINT, "Number, e.g. 3");
-        assert_eq!(sprint_row_label("Sprint 91", "active"), "Sprint 91", "no \"(active) current\"");
-        assert_eq!(sprint_row_label("Sprint 92", "future"), "Sprint 92 (future)");
+        assert_eq!(sprint_row_label("Sprint 91", "active"), ("Sprint 91".to_string(), None), "no \"active current\"");
+        assert_eq!(sprint_row_label("Sprint 92", "future"), ("Sprint 92".to_string(), Some("future".to_string())), "a tag like current");
+        assert_eq!(sprint_row_label("Sprint 93", "FUTURE").1.as_deref(), Some("future"));
+    }
+
+    #[test]
+    fn confirm_is_off_until_the_choice_differs() {
+        let t = |n: &str, to: &str| Transition { id: n.into(), name: n.into(), to: to.into() };
+        let items = vec![t("Start", "In Progress"), t("Review", "In Review")];
+        let tr = |cursor| Picker::Transition { key: "CI-1".into(), items: items.clone(), cursor };
+        assert!(!tr(1).changes("in review", None), "the current status is a no-op");
+        assert!(tr(0).changes("In Review", None));
+        assert!(!tr(5).changes("In Review", None), "past the rows");
+
+        let sp = |n: &str| Sprint { id: 1, name: n.into(), state: "active".into() };
+        let sprints = vec![sp("Sprint 91"), sp("Sprint 92")];
+        let sprint = |cursor| Picker::Sprint { key: "CI-1".into(), items: sprints.clone(), cursor };
+        assert!(!sprint(2).changes("", Some("Sprint 92")));
+        assert!(sprint(0).changes("", Some("Sprint 92")), "to the backlog");
+        assert!(!sprint(0).changes("", None), "already in the backlog");
+        assert!(sprint(1).changes("", Some("Sprint 80")), "a closed sprint is not listed: every row is a change");
+
+        let u = |n: &str| User { account_id: n.to_lowercase(), display_name: n.into() };
+        let assign = |cursor, current: Option<User>, filter: &str| Picker::Assign {
+            key: "CI-1".into(),
+            items: vec![u("Ann"), u("Grace")],
+            current,
+            cursor,
+            filter: filter.into(),
+        };
+        assert!(!assign(1, Some(u("Ann")), "").changes("", None), "the pinned assignee");
+        assert!(assign(0, Some(u("Ann")), "").changes("", None), "unassign");
+        assert!(!assign(0, None, "").changes("", None), "already unassigned");
+        assert!(!assign(0, None, "zed").changes("", None), "nothing matched");
+
+        let edit = |priority: &str| Picker::Edit {
+            key: "CI-1".into(),
+            labels: "a".into(),
+            priority: priority.into(),
+            points: String::new(),
+            orig_labels: "a".into(),
+            orig_priority: String::new(),
+            orig_points: String::new(),
+        };
+        assert!(!edit("").changes("", None), "nothing edited");
+        assert!(edit("High").changes("", None));
+
+        let res = |cursor| Picker::Resolution {
+            key: "CI-1".into(),
+            transition_id: "1".into(),
+            items: vec![Resolution { id: "1".into(), name: "Done".into() }],
+            cursor,
+            close: false,
+        };
+        assert!(res(0).changes("", None));
+        assert!(!res(1).changes("", None));
+    }
+
+    #[test]
+    fn read_only_confirm_keeps_the_picker_open() {
+        let _g = crate::jira::tests::WRITE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _ro = crate::jira::tests::ReadOnlyGuard::new();
+        let (base, rx) = crate::jira::tests::stub_server(vec![]);
+        let cfg: crate::config::Config = toml::from_str("site = \"https://x.atlassian.net\"\nemail = \"a@b.c\"\n").unwrap();
+        let login = crate::auth::Login { email: "a@b.c".into(), token: "t".into(), source: crate::auth::Source::Env };
+        let mut app = App::for_test(cfg, Some(std::sync::Arc::new(crate::jira::Client::new(&base, &login))));
+        let t = Transition { id: "1".into(), name: "Start".into(), to: "In Progress".into() };
+        app.picker = Some(Picker::Transition { key: "CI-1".into(), items: vec![t], cursor: 0 });
+        app.confirm_picker();
+        assert!(app.picker.is_some(), "the dialog stays open");
+        assert!(app.toast.as_ref().is_some_and(|t| t.text.contains("the transition was not sent")), "and the toast says why");
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        assert!(rx.try_iter().next().is_none(), "nothing sent");
     }
 
     #[test]

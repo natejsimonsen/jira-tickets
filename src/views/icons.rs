@@ -57,10 +57,14 @@ pub fn help_glyph() -> (Vec<Pos2>, Pos2) {
     (hook, pos2(8.0, 13.0))
 }
 
-const BUTTON: f32 = 32.0;
+/// The header icon buttons' side: BUTTON_H, so they stand exactly as tall as every text button, chip and combo.
+pub const BUTTON: f32 = crate::views::BUTTON_H;
 const GLYPH: f32 = 16.0;
 
-/// The 32×32 button frame (hover fill when `hovered`); returns the centred 16×16 glyph rect.
+/// What the busy header button says while a refresh runs (its tooltip and accessible label).
+pub const REFRESHING: &str = "Refreshing from Jira…";
+
+/// The BUTTON×BUTTON button frame (hover fill when `hovered`); returns the centred 16×16 glyph rect.
 fn button_frame(ui: &Ui, rect: Rect, hovered: bool, p: &Palette) -> Rect {
     // control_hover is a step off button_fill in both palettes; the header buttons share the filter row's resting fill.
     let fill = if hovered { crate::theme::control_hover(p) } else { crate::theme::button_fill(p) };
@@ -68,7 +72,7 @@ fn button_frame(ui: &Ui, rect: Rect, hovered: bool, p: &Palette) -> Rect {
     Rect::from_center_size(rect.center(), Vec2::splat(GLYPH))
 }
 
-/// A 32×32 bordered button with `icon` painted at 16 px in the middle.
+/// A BUTTON×BUTTON bordered button with `icon` painted at 16 px in the middle.
 pub fn icon_button(ui: &mut Ui, icon: Icon, tip: &str, p: &Palette) -> Response {
     let (rect, resp) = ui.allocate_exact_size(Vec2::splat(BUTTON), Sense::click());
     let glyph = button_frame(ui, rect, resp.hovered(), p);
@@ -76,13 +80,15 @@ pub fn icon_button(ui: &mut Ui, icon: Icon, tip: &str, p: &Palette) -> Response 
     crate::views::tooltip(resp, tip)
 }
 
-/// The same 32×32 frame with a spinner the size of the sync glyph it replaces, so nothing grows on ⌘R.
+/// The same frame with a spinner the size of the sync glyph it replaces, so nothing grows on ⌘R. Shown only
+/// while a list is loading (`views::spinner_slots`); its tooltip and label say so in words (REFRESHING).
 pub fn spinner_button(ui: &mut Ui, p: &Palette) -> Response {
     let (rect, resp) = ui.allocate_exact_size(Vec2::splat(BUTTON), Sense::hover());
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Other, false, REFRESHING));
     let glyph = button_frame(ui, rect, false, p);
     // `text`, like the idle sync glyph it replaces, its ring in the glyph's 12 px ink box (`spinner_arc`).
     paint_spinner(ui, Rect::from_center_size(glyph.center(), Vec2::splat(spinner_box(GLYPH))), p.text);
-    resp
+    crate::views::tooltip(resp, REFRESHING)
 }
 
 /// The square a spinner is drawn in to match the sync glyph drawn at `glyph` px: the glyph's arc radius

@@ -1,19 +1,22 @@
 //! Header with the screen switcher, sign-in, toast, shared widgets.
 
 pub mod adf_view;
+pub mod components;
 pub mod detail;
 pub mod grooming;
 pub mod grooming_guide;
 pub mod help;
 pub mod icons;
 pub mod issues;
+pub mod me;
 pub mod pickers;
 pub mod roadmap;
+pub mod standup;
 pub mod team;
 
 use crate::app::{Action, App, Screen};
 use crate::theme::{self, Palette};
-use egui::{Color32, Frame, Margin, RichText, Sense, Stroke, Ui, vec2};
+use egui::{Color32, Frame, Margin, Rect, RichText, Sense, Stroke, Ui, vec2};
 
 pub fn main(app: &mut App, ui: &mut Ui) {
     let p = theme::palette(ui.ctx());
@@ -28,6 +31,8 @@ pub fn main(app: &mut App, ui: &mut Ui) {
         Screen::Grooming => grooming::show(app, ui),
         Screen::Team => team::show(app, ui),
         Screen::Roadmap => roadmap::show(app, ui),
+        Screen::Me => me::show(app, ui),
+        Screen::Standup => standup::show(app, ui),
     }
     // One 1 px rule, the header panel's own last point under its 48 px bar (egui's separator line is off, so
     // nothing stacks on it), then the active tab's 2 px accent bar over the rule's y-range. Painted after the
@@ -44,26 +49,62 @@ pub const HEADER_H: f32 = 49.0;
 /// The bar above the rule.
 const BAR_H: f32 = HEADER_H - 1.0;
 
-/// The one empty-state line ("Select an issue", "Nothing in Now"): body 14, muted, a label without a period.
+/// The one empty-state line ("Select an issue", "Nothing in Now") with no hint: `components::empty_state`.
 pub fn empty_state(ui: &mut Ui, p: &Palette, text: &str) {
-    ui.label(RichText::new(text).color(p.muted).size(EMPTY_STATE_SIZE));
+    components::empty_state(ui, p, text, None);
 }
 
-/// The empty-state text size.
+/// The empty-state text size in Compact (it is the density's `body`).
 pub const EMPTY_STATE_SIZE: f32 = 14.0;
 
-/// The top space that centres `content_h` in `avail_h` (never negative).
-pub fn centre_top(avail_h: f32, content_h: f32) -> f32 {
-    ((avail_h - content_h) / 2.0).max(0.0).round()
+/// The widths a split's first pane may be dragged to in `available`: no cap of its own, only the room that
+/// leaves the pane beside it `other_min`. Never under `min`, so a window narrower than both mins keeps the range valid.
+pub fn split_range(available: f32, min: f32, other_min: f32) -> std::ops::RangeInclusive<f32> {
+    min..=(available - other_min).max(min)
 }
 
-/// The one centring rule (sign-in, finding the token): `content` centred horizontally and vertically in the
-/// space left, using its height from the previous frame.
+/// The first pane's width this frame: the saved (dragged) width, else `default`, held to `split_range` and to
+/// `available`, so a width saved in a wider window shrinks to fit this one.
+pub fn split_width(saved: Option<f32>, default: f32, available: f32, min: f32, other_min: f32) -> f32 {
+    let r = split_range(available, min, other_min);
+    saved.unwrap_or(default).clamp(*r.start(), *r.end()).min(available.max(0.0))
+}
+
+/// A drag handle over the `gap` between two panes, the first starting at `left`. A drag saves the first pane's
+/// new width under `id` (persisted with the window state); `saved_split` reads it back for `split_width`.
+pub fn splitter(ui: &mut Ui, id: egui::Id, left: f32, gap: egui::Rect) {
+    let resp = ui.interact(gap, id.with("handle"), Sense::drag());
+    if resp.hovered() || resp.dragged() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+    }
+    if resp.dragged()
+        && let Some(pos) = resp.interact_pointer_pos()
+    {
+        let w = pos.x - gap.width() / 2.0 - left;
+        ui.data_mut(|d| d.insert_persisted(id, w));
+    }
+}
+
+/// A splitter's saved width, if the user has dragged it.
+pub fn saved_split(ui: &Ui, id: egui::Id) -> Option<f32> {
+    ui.data_mut(|d| d.get_persisted::<f32>(id))
+}
+
+/// The top space that centres `content_h` on the window's middle (`window_mid`) for an area starting at
+/// `avail_top` and `avail_h` tall: the window, not the area, so the hint bar under it does not lift the card
+/// (round 3: it sat half the bar high). Kept inside the area and on whole points.
+pub fn centre_top_on(window_mid: f32, avail_top: f32, avail_h: f32, content_h: f32) -> f32 {
+    (window_mid - content_h / 2.0 - avail_top).clamp(0.0, (avail_h - content_h).max(0.0)).round()
+}
+
+/// The one centring rule (sign-in, finding the token): `content` centred horizontally in the space left and
+/// vertically on the window (`centre_top_on`), using its height from the previous frame.
 fn centred(ui: &mut Ui, id: &str, content: impl FnOnce(&mut Ui)) {
     let id = egui::Id::new(("centred", id));
     let last_h: f32 = ui.data(|d| d.get_temp(id)).unwrap_or(0.0);
     ui.vertical_centered(|ui| {
-        ui.add_space(centre_top(ui.available_height(), last_h));
+        let mid = ui.ctx().content_rect().center().y;
+        ui.add_space(centre_top_on(mid, ui.cursor().top(), ui.available_height(), last_h));
         let top = ui.cursor().top();
         content(ui);
         let h = ui.min_rect().bottom() - top;
@@ -74,8 +115,27 @@ fn centred(ui: &mut Ui, id: &str, content: impl FnOnce(&mut Ui)) {
     });
 }
 
-/// The tabs, in ⌘1–⌘4 order.
-const TABS: [(Screen, &str); 4] = [(Screen::Issues, "Issues"), (Screen::Grooming, "Grooming"), (Screen::Team, "Team"), (Screen::Roadmap, "Roadmap")];
+/// The tabs, in their ⌘-digit order (`tab_key`).
+const TABS: [(Screen, &str); 6] = [
+    (Screen::Issues, "Issues"),
+    (Screen::Grooming, "Grooming"),
+    (Screen::Team, "Team"),
+    (Screen::Roadmap, "Roadmap"),
+    (Screen::Me, "Me"),
+    (Screen::Standup, "Standup"),
+];
+
+/// The digit that, with ⌘, switches to `s` (`App::shortcuts`).
+pub fn tab_key(s: Screen) -> u8 {
+    match s {
+        Screen::Issues => 1,
+        Screen::Grooming => 2,
+        Screen::Team => 3,
+        Screen::Roadmap => 4,
+        Screen::Me => 5,
+        Screen::Standup => 6,
+    }
+}
 
 /// Each tab's origin x for a title whose galley starts at `left`: TITLE_GAP from the title's ink to the first
 /// tab's ink, TAB_GAP between the tabs' ink (round 13 A1 / A2: gaps between the boxes read 33.5 and 24.5–25.5).
@@ -138,8 +198,8 @@ const LABEL_GAP: f32 = 8.0;
 const LABELS_TO_BUTTONS: f32 = 12.0;
 /// The longest the signed-in name may grow leftward, in "m" glyphs of the 12 px name font; longer names are cut.
 const NAME_MAX_M: f32 = 20.0;
-/// The header's 32×32 buttons and the gap between the right cluster's parts.
-const HEADER_BUTTON: f32 = 32.0;
+/// The header's icon buttons (BUTTON_H square, like every other control) and the gap between the right cluster's parts.
+const HEADER_BUTTON: f32 = icons::BUTTON;
 const HEADER_GAP: f32 = 8.0;
 
 /// The header's "Read-only" label colour: `text` (the name beside it stays `muted`).
@@ -250,7 +310,7 @@ fn header(app: &mut App, ui: &mut Ui, p: &Palette) -> (egui::Rect, Option<egui::
                     active_tab = Some(tab_underline_x(rect.left(), &galley));
                 }
                 ui.painter().galley(pos, galley, p.text);
-                let r = tooltip(r, format!("{name} (⌘{})", i + 1));
+                let r = tooltip(r, format!("{name} (⌘{})", tab_key(s)));
                 if r.clicked() {
                     app.actions.push(Action::SetScreen(s));
                 }
@@ -276,12 +336,14 @@ fn header(app: &mut App, ui: &mut Ui, p: &Palette) -> (egui::Rect, Option<egui::
                     name.as_ref().map_or(LABEL_GAP, |(g, _)| theme::ink_gap(g, &dot, LABEL_GAP)),
                     ro.as_ref().map_or(LABEL_GAP, |g| theme::ink_gap(&dot, g, LABEL_GAP)),
                 ];
-                let at = header_right(right, name.as_ref().map(|(g, _)| g.size().x), ro.as_ref().map(|g| g.size().x), dot.size().x, gaps);
+                // The name carries the user's avatar before it (AVATAR_GAP to the text).
+                let lead = theme::AVATAR + theme::AVATAR_GAP;
+                let at = header_right(right, name.as_ref().map(|(g, _)| lead + g.size().x), ro.as_ref().map(|g| g.size().x), dot.size().x, gaps);
                 let help = icons::icon_button(ui, icons::Icon::Help, "Keyboard help (?)", p);
                 if help.clicked() {
                     app.actions.push(Action::ToggleHelp);
                 }
-                // One fixed 32×32 slot: the spinner replaces the button at the same size.
+                // One fixed slot: the spinner replaces the button at the same size, only while a list loads.
                 let first_load = app.screen == Screen::Issues && issues::first_load(app);
                 if spinner_slots(header_syncing(&app.lists), app.search_pending.is_some(), app.search_from_refresh, first_load).0 {
                     icons::spinner_button(ui, p);
@@ -293,7 +355,10 @@ fn header(app: &mut App, ui: &mut Ui, p: &Palette) -> (egui::Rect, Option<egui::
                     ui.allocate_exact_size(vec2(at.labels_w + LABELS_TO_BUTTONS - HEADER_GAP, 32.0), Sense::hover());
                 }
                 if let (Some((g, full)), Some(x)) = (name, at.name) {
-                    let r = egui::Rect::from_min_size(egui::pos2(x, top_for_baseline(line, baseline(&g))), g.size());
+                    let r = egui::Rect::from_min_size(egui::pos2(x + lead, top_for_baseline(line, baseline(&g))), g.size());
+                    let slot = egui::Rect::from_min_size(egui::pos2(x, r.top()), vec2(theme::AVATAR, r.height()));
+                    let id = app.me.as_ref().map(|m| m.account_id.clone());
+                    ui.scope_builder(egui::UiBuilder::new().max_rect(slot), |ui| crate::avatar::inline(ui, id.as_deref(), &full, theme::AVATAR, r.height()));
                     ui.painter().galley(r.min, g, p.muted);
                     let resp = ui.interact(r, egui::Id::new("header-name"), Sense::click());
                     tooltip(resp, format!("{full} · right-click to sign out")).context_menu(|ui| {
@@ -358,8 +423,7 @@ fn sign_in_aside(p: &Palette) -> egui::text::LayoutJob {
 /// Final wording (round 11 J1): two verbs, so neither identifier reads as the other's alternative name.
 pub const SIGN_IN_ASIDE: [&str; 7] = ["Or export ", "JIRA_API_TOKEN", ", or set ", "api_token", " in ", "config.toml", ", then check again."];
 
-/// The sign-in panel's padding, measured to the ink: its inner edge → the title's ink, and the "g" of "Check
-/// again" → its inner edge (round 13 J1 / J2: 17.5 and 17 with margins to the line boxes).
+/// The sign-in panel's padding: its inner edge → the title's ink, and "Check again"'s box → its inner edge.
 const SIGN_IN_PAD: f32 = 16.0;
 /// The panel's margin: 16 at the sides; top and bottom are set to the ink (`sign_in_title`, `check_again`).
 const SIGN_IN_MARGIN: Margin = Margin { left: 16, right: 16, top: 0, bottom: 0 };
@@ -373,34 +437,13 @@ fn sign_in_title(ui: &mut Ui, p: &Palette) {
     ui.add(egui::Label::new(g));
 }
 
-/// "Check again", BUTTON_H tall with its text centred, then SIGN_IN_PAD from its descenders to the panel's edge.
-/// `text`, so it reads as a control beside the muted aside; on hover the standard fill only, no stroke, the full
-/// button height (round 15 J2: a 16.5 box with an edge touched the descenders), no frame at rest. Returns the
+/// "Check again": the shared secondary `button`, full width and BUTTON_H under "Sign in", so it reads as a
+/// control, quieter than the primary above it. SIGN_IN_PAD from its box to the panel's inner edge. Returns the
 /// response and the space from its box's bottom to the panel's outer edge.
 fn check_again(ui: &mut Ui, p: &Palette, w: f32) -> (egui::Response, f32) {
-    let g = ui.painter().layout_no_wrap(CHECK_AGAIN.to_string(), theme::body(14.0), p.text);
-    let (h, ink_bottom) = (g.size().y, theme::ink_rect(&g).bottom());
-    // The box grows round the text, so the spaces either side give that back and the ink stays put.
-    let extra = again_extra(h);
-    ui.add_space(-extra);
-    let again = egui::Button::new(RichText::new(CHECK_AGAIN).color(p.text).size(14.0)).frame_when_inactive(false);
-    let r = ui
-        .scope(|ui| {
-            ui.spacing_mut().button_padding.y = 0.0;
-            let w2 = &mut ui.visuals_mut().widgets;
-            w2.hovered.bg_stroke = Stroke::NONE;
-            w2.active.bg_stroke = Stroke::NONE;
-            ui.add_sized([w, BUTTON_H], again)
-        })
-        .inner;
-    let after = SIGN_IN_PAD - extra - (h - ink_bottom);
-    ui.add_space(after - ui.spacing().item_spacing.y);
-    (r, after + SIGN_IN_STROKE)
-}
-
-/// How far "Check again"'s BUTTON_H box reaches past its `h`-tall text, above and below.
-fn again_extra(h: f32) -> f32 {
-    (BUTTON_H - h) / 2.0
+    let r = ui.add_sized([w, BUTTON_H], button(CHECK_AGAIN, p));
+    ui.add_space(SIGN_IN_PAD - ui.spacing().item_spacing.y);
+    (r, SIGN_IN_PAD + SIGN_IN_STROKE)
 }
 
 /// The sign-in panel's edge.
@@ -412,11 +455,8 @@ pub const CHECK_AGAIN_TIP: [&str; 6] = ["Look again for ", "JIRA_API_TOKEN", " o
 /// The tooltip's clearance below the sign-in panel (round 15 J3: it overlapped the panel's edge).
 const TIP_PANEL_CLEAR: f32 = 4.0;
 
-/// Sign in → "Check again" in code: its row-height box carries ~5 above the ink of "Check", so this reads as the
-/// 12 the field → button gap shows (round 12 J1 measured 17 ink to ink at 12). 7.75: the box is now its text's
-/// height, not egui's 18 with the text 0.75 down (round 13 J2), so the ink stays where it was.
-/// Round 14 J2: +0.5 (it read 11.5).
-const SIGN_IN_TO_AGAIN: f32 = 8.25;
+/// "Sign in" → "Check again", box to box: the 8 between stacked controls.
+const SIGN_IN_TO_AGAIN: f32 = 8.0;
 
 /// Body → aside in code: the 14 px line's leading under its ink and the aside's over its ink add ~6, so 2 reads
 /// as the 8 that makes the aside a footnote of the line above (round 12 J1 measured 14 at 8).
@@ -661,33 +701,57 @@ pub fn hint_bar_shown(signed_in: bool, finding_token: bool) -> bool {
     signed_in || !finding_token
 }
 
-/// The toast's edge: none in either theme; its shadow separates it from the page.
-pub fn toast_stroke(_p: &Palette) -> Stroke {
-    Stroke::NONE
+/// The toast's edge: `Palette::toast_edge` (dark only) on top of its shadow. Painted over the frame, inside it,
+/// so the toast is the same size in both themes.
+pub fn toast_stroke(p: &Palette) -> Stroke {
+    p.toast_edge().map_or(Stroke::NONE, |c| Stroke::new(1.0, c))
 }
 
-/// How far the toast's bottom sits above the window bottom: 16 px above the hint bar when one shows, else 24 px.
+/// The toast's gap above the hint bar (or the window's bottom edge when there is none): 16 on the spacing scale.
+pub const TOAST_GAP: f32 = 16.0;
+
+/// How far the toast's bottom sits above the window bottom: TOAST_GAP above the hint bar when one shows, else
+/// TOAST_GAP plus 8 off the bare window edge.
 pub fn toast_offset(hint_bar: Option<f32>) -> f32 {
-    hint_bar.map_or(24.0, |h| h + 16.0)
+    hint_bar.map_or(TOAST_GAP + 8.0, |h| h + TOAST_GAP)
 }
 
-/// The toast's dot marks its type only: green for done, red for failures, none for a notice (read-only
-/// refusals, "No changes"). The toast is a dark fill in both themes, so the dot takes the dark palette's tokens.
+/// The toast's dot marks its type, one rule for every kind: green for done, red for failures, neutral grey for a
+/// notice (read-only refusals, "No changes"). The toast is a dark fill in both themes, so the dot takes the dark
+/// palette's tokens.
 /// The failure dot: off_track lifted a step, so it holds 3:1 on the dark toast fill (#575753).
 const TOAST_ERROR_DOT: Color32 = Color32::from_rgb(0xf4, 0x8a, 0x83);
 
-pub fn toast_dot(kind: crate::app::ToastKind) -> Option<Color32> {
+pub fn toast_dot(kind: crate::app::ToastKind) -> Color32 {
     match kind {
-        crate::app::ToastKind::Success => Some(theme::DARK.on_track),
-        crate::app::ToastKind::Info => None,
-        crate::app::ToastKind::Error => Some(TOAST_ERROR_DOT),
+        crate::app::ToastKind::Success => theme::DARK.on_track,
+        crate::app::ToastKind::Info => theme::DARK.muted,
+        crate::app::ToastKind::Error => TOAST_ERROR_DOT,
     }
 }
 
-/// The toast's centre x: the detail pane's centre when one shows (so it never covers the list's last row),
-/// else the window's. The toast is pinned by its own bottom centre, so it is exact.
-pub fn toast_centre_x(window_w: f32, detail: Option<(f32, f32)>) -> f32 {
-    detail.map_or(window_w / 2.0, |(l, r)| (l + r) / 2.0)
+/// The toast's status mark: a dot only where it says something (green done, red failure); a plain notice
+/// (`Info`: read-only refusals, "Theme: Dark", "Copied") has none, so the dot never decorates.
+pub fn toast_mark(kind: crate::app::ToastKind) -> Option<Color32> {
+    match kind {
+        crate::app::ToastKind::Info => None,
+        k => Some(toast_dot(k)),
+    }
+}
+
+/// The toast dot's diameter.
+const TOAST_DOT: f32 = 9.0;
+
+/// The dot's centre below the text's line-box top: midway between the cap line and the baseline, so it sits on
+/// the text's visual middle rather than the line box's (which descender room pushes low).
+pub fn toast_dot_centre_y(ink: &theme::Ink) -> f32 {
+    (ink.top + ink.base) / 2.0
+}
+
+/// The toast's centre x: the window's, on every screen and whatever the panes under it (it is window-wide
+/// feedback, not the detail pane's). The toast is pinned by its own bottom centre, so it is exact.
+pub fn toast_centre_x(window: egui::Rect) -> f32 {
+    window.center().x
 }
 
 /// The toast's frame margin: none; the line's spaces above and below are TOAST_INK_Y to the ink (`toast_body`) and
@@ -699,6 +763,9 @@ pub const TOAST_INK_Y: f32 = 12.0;
 /// The toast's side padding, from the fill to the dot or the text's ink (round 13 D2: 16 to the text's box read
 /// 17–18.3 to its ink).
 pub const TOAST_INK_X: f32 = 16.0;
+
+/// From the dot to the text's ink.
+const TOAST_DOT_GAP: f32 = 8.0;
 
 /// The toast's contents: TOAST_INK_Y to the 14 pt line's ink above and below, the row between.
 fn toast_body(ui: &mut Ui, p: &Palette, dot: Option<Color32>, text: &str) {
@@ -718,11 +785,19 @@ fn toast_row(ui: &mut Ui, p: &Palette, dot: Option<Color32>, text: &str) {
     let ink = theme::visible_ink(ui.ctx(), &g);
     let (lb, rb) = if ink.is_positive() { (ink.left(), g.size().x - ink.right()) } else { (0.0, 0.0) };
     ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 8.0;
-        // The dot's circle fills its slot, so its edge is its ink.
-        ui.add_space(if dot.is_some() { TOAST_INK_X } else { TOAST_INK_X - lb });
-        if let Some(color) = dot {
-            health_dot(ui, color);
+        ui.spacing_mut().item_spacing.x = TOAST_DOT_GAP;
+        // The dot's circle fills its slot's width, so its edge is its ink. The slot is the line box's height, top
+        // to top with the text, and the dot sits on the text's middle (`toast_dot_centre_y`).
+        if let Some(dot) = dot {
+            ui.add_space(TOAST_INK_X);
+            let line = theme::Ink::of(ui.ctx(), &theme::body(14.0), None);
+            let (slot, _) = ui.allocate_exact_size(vec2(TOAST_DOT, g.size().y), Sense::hover());
+            ui.painter().circle_filled(egui::pos2(slot.center().x, slot.top() + toast_dot_centre_y(&line)), TOAST_DOT / 2.0, dot);
+            // The text's left bearing is part of the 8 to its ink.
+            ui.add_space(-lb);
+        } else {
+            // No dot: TOAST_INK_X from the fill to the text's ink.
+            ui.add_space(TOAST_INK_X - lb);
         }
         ui.add(egui::Label::new(g).wrap_mode(egui::TextWrapMode::Extend));
         // The layout's item spacing already follows the text.
@@ -749,14 +824,16 @@ pub fn toast(app: &mut App, ctx: &egui::Context) {
     let p = theme::palette(ctx);
     let shadow = toast_shadow(p);
     let window = ctx.content_rect();
-    let x = toast_centre_x(window.width(), app.detail_x.filter(|_| app.screen == Screen::Issues));
+    let dot = toast_mark(t.kind);
+    let x = toast_centre_x(window);
     // The pivot on the device-pixel grid, so the fill's bottom lands exactly 16 over the bar (round 15 D1).
     let ppp = ctx.pixels_per_point();
     let at = egui::pos2(issues::snap_px(x, ppp), issues::snap_px(window.bottom() - toast_offset(hint_bar_height(app)), ppp));
     egui::Area::new(egui::Id::new("toast")).pivot(egui::Align2::CENTER_BOTTOM).fixed_pos(at).show(ctx, |ui| {
-        Frame::new().fill(p.tooltip).stroke(toast_stroke(p)).shadow(shadow).corner_radius(theme::RADIUS).inner_margin(TOAST_MARGIN).show(ui, |ui| {
-            toast_body(ui, p, toast_dot(t.kind), &t.text);
+        let r = Frame::new().fill(p.tooltip).shadow(shadow).corner_radius(theme::RADIUS).inner_margin(TOAST_MARGIN).show(ui, |ui| {
+            toast_body(ui, p, dot, &t.text);
         });
+        ui.painter().rect_stroke(r.response.rect, f32::from(theme::RADIUS), toast_stroke(p), egui::StrokeKind::Inside);
     });
 }
 
@@ -765,16 +842,16 @@ pub fn toast(app: &mut App, ctx: &egui::Context) {
 /// Height of every text button (and the filter combos), so rows of controls line up.
 pub const BUTTON_H: f32 = 28.0;
 
-/// The page dimming behind a modal: light needs much less to read as "behind" (100 dimmed it 2.78:1).
+/// The page dimming behind a modal (`Palette::scrim_alpha`): light needs much less to read as "behind"; dark
+/// needs enough that the dialog clearly sits on top.
 pub fn backdrop_alpha(p: &Palette) -> u8 {
-    // Dark 110 is a final ruling; light 48 leaves the page about #c9c9c5.
-    if p.dark { 110 } else { 48 }
+    p.scrim_alpha()
 }
 
-/// A dialog's cursor row: `selected_row` in light; #4a4a47 in dark, where selected_row sat 1.16:1 off the
-/// #333331 dialog.
+/// A picker's cursor row: the one selection fill (`selection`), fill-only (`pickers::row_list`): a ring round a
+/// full-width dialog row reads as a focused field.
 pub fn dialog_cursor_fill(p: &Palette) -> Color32 {
-    if p.dark { theme::DARK_DIALOG_CURSOR } else { p.selected_row }
+    p.selection()
 }
 
 /// A modal dialog's one edge colour, used for its 1 px stroke and for the fields and buttons inside it, in both
@@ -786,12 +863,6 @@ pub fn dialog_stroke(p: &Palette) -> Stroke {
 
 pub use crate::theme::DARK_EDGE;
 
-/// Outline pills on a selected row: #5c5b56 in dark (`border` equals the selected fill there, and the dialog
-/// edge only reaches 1.22:1), `muted` at 40% in light, so the outline never vanishes into the fill.
-pub fn selected_edge(p: &Palette) -> Color32 {
-    if p.dark { Color32::from_rgb(0x5c, 0x5b, 0x56) } else { p.muted.gamma_multiply(0.4) }
-}
-
 /// Inside a dialog: fields one step under the dialog's fill (`theme::dialog_input_fill`: light #ebebe7, dark the
 /// input rule under the dialog) with the dialog's edge (focus stays the accent).
 pub fn dialog_fields(ui: &mut Ui, p: &Palette) {
@@ -801,20 +872,6 @@ pub fn dialog_fields(ui: &mut Ui, p: &Palette) {
     v.widgets.inactive.bg_stroke.color = edge;
     v.widgets.hovered.bg_stroke.color = edge;
 }
-
-/// A secondary button inside a dialog, with the dialog's edge: light on the dialog's own fill, dark a step above it.
-pub fn dialog_button(text: &str, p: &Palette) -> egui::Button<'static> {
-    button(text, p).fill(dialog_button_fill(p)).stroke(dialog_stroke(p))
-}
-
-/// The dialog button's fill: the white dialog's own fill in light (`surface_2` #f0f0ed was 1.05 off the #ebebe7
-/// field and read as one; round 11 L3), the edge alone marks it; in dark a raised #424240 (DARK_CANCEL).
-pub fn dialog_button_fill(p: &Palette) -> Color32 {
-    if p.dark { DARK_CANCEL } else { dialog_fill(p) }
-}
-
-/// The dark dialog's raised button fill (Cancel): a step past `selected_row` (#3d3d3a read 1.08:1 off the dialog).
-const DARK_CANCEL: Color32 = Color32::from_rgb(0x42, 0x42, 0x40);
 
 /// Placeholder text for a field, in the `placeholder` token, `lead` right of the text origin.
 pub fn field_hint_at(text: &str, font: egui::FontId, p: &Palette, lead: f32) -> egui::text::LayoutJob {
@@ -901,11 +958,14 @@ pub fn empty_field_hint(text: &str, font: egui::FontId, p: &Palette) -> egui::te
     field_hint_at(text, font, p, f32::from(CARET_LEAD))
 }
 
-/// Every dialog field's text (and placeholder) inset: 8, aligned with the dialog's rows (round 8: sign-in read 10,
-/// pickers 8).
-pub const INPUT_PAD_X: f32 = 8.0;
-/// The list pane's search box inset: 12, like the combos and chips on the rows above it (B2 ruling).
-pub const SEARCH_PAD_X: f32 = 12.0;
+/// The one text-field inset, from the field's edge to its typed text and placeholder, in every single-line field
+/// (search, go-to, sign-in, pickers, the standup title): 8, aligned with the dialogs' rows. Round 3: the search
+/// box's 12 against the dialogs' 8 read as two field styles.
+pub const TEXT_FIELD_PAD_X: f32 = 8.0;
+/// Every dialog field's inset: `TEXT_FIELD_PAD_X`.
+pub const INPUT_PAD_X: f32 = TEXT_FIELD_PAD_X;
+/// The list pane's search box inset: `TEXT_FIELD_PAD_X`, like every other field.
+pub const SEARCH_PAD_X: f32 = TEXT_FIELD_PAD_X;
 
 /// Height of every single-line input (search, go-to, token, picker fields): BUTTON_H, like every control.
 pub const INPUT_H: f32 = BUTTON_H;
@@ -1009,31 +1069,9 @@ pub fn sentence_case(name: &str) -> String {
         .join(" ")
 }
 
-/// An active toggle chip's fill: the one accent, in both themes (on_accent reads on it).
-pub fn active_chip_fill(p: &Palette) -> Color32 {
-    p.accent
-}
-
-/// A filter toggle chip: 28 px tall (BUTTON_H, like the combos), radius 6 like every button, label 12 in.
+/// A filter toggle chip: `components::toggle_chip` (kept here for its callers' argument order).
 pub fn toggle_chip(ui: &mut Ui, text: &str, active: bool, p: &Palette) -> egui::Response {
-    let fg = if active { p.on_accent } else { p.text };
-    let label = ui.painter().layout_no_wrap(text.to_string(), theme::body(14.0), fg);
-    let w = chip_width(label.size().x);
-    let (rect, resp) = ui.allocate_exact_size(vec2(w, BUTTON_H), Sense::click());
-    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, active, text));
-    let rect = whole_points(rect);
-    if ui.is_rect_visible(rect) {
-        let (fill, stroke) = match (active, resp.hovered()) {
-            (true, _) => (active_chip_fill(p), active_chip_fill(p)),
-            (false, true) => (theme::control_hover(p), p.border),
-            (false, false) => (theme::button_fill(p), p.border),
-        };
-        ui.painter().rect(rect, f32::from(theme::RADIUS), fill, Stroke::new(1.0, stroke), egui::StrokeKind::Inside);
-        // One device pixel up, like the combos' text (round 15 B1).
-        let y = (rect.center().y - label.size().y / 2.0).round() - 1.0 / ui.ctx().pixels_per_point();
-        ui.painter().galley(egui::pos2(rect.left() + CHIP_PAD, y), label, fg);
-    }
-    resp
+    components::toggle_chip(ui, p, text, active)
 }
 
 pub fn primary_button(text: &str, p: &Palette) -> egui::Button<'static> {
@@ -1045,16 +1083,9 @@ pub fn primary_colors(p: &Palette) -> (Color32, Color32) {
     (p.accent, p.on_accent)
 }
 
-/// A 12 px accent text link (no frame), underlined while hovered ("Clear filters", "Clear search"), whose slot ends at its last glyph's ink, not its advance, so links right-aligned in one place end
-/// on one ink edge whatever their last letter.
-pub fn small_link_ink_right(ui: &mut Ui, text: &str, p: &Palette) -> egui::Response {
-    let galley = ui.painter().layout_no_wrap(text.to_string(), theme::body(12.0), p.accent);
-    let ink = theme::ink_rect(&galley);
-    let trim = if ink.is_positive() { galley.size().x - ink.right() } else { 0.0 };
-    link_in(ui, galley, p.accent, trim)
-}
-
-/// A text link (no frame) in `color`, underlined while hovered.
+/// A text link (no frame) in `color`. The one link rule, as in descriptions (`adf_view::underline_y`): accent text
+/// with a 1 pt underline LINK_UNDERLINE_DROP under the baseline, at rest and hovered, so a link never looks like
+/// muted metadata; hover adds the pointing hand.
 pub fn text_link(ui: &mut Ui, text: &str, font: egui::FontId, color: Color32) -> egui::Response {
     let galley = ui.painter().layout_no_wrap(text.to_string(), font, color);
     link_in(ui, galley, color, 0.0)
@@ -1062,29 +1093,50 @@ pub fn text_link(ui: &mut Ui, text: &str, font: egui::FontId, color: Color32) ->
 
 /// A link's slot: the galley's size less `trim` on the right.
 fn link_in(ui: &mut Ui, galley: std::sync::Arc<egui::Galley>, color: Color32, trim: f32) -> egui::Response {
-    let (rect, resp) = ui.allocate_exact_size(galley.size() - vec2(trim, 0.0), Sense::click());
+    let (rect, slot) = ui.allocate_exact_size(galley.size() - vec2(trim, 0.0), Sense::hover());
+    // The click area grows round the text to MIN_TARGET_H; the layout keeps the text's own box.
+    let resp = ui.interact(link_hit(rect), slot.id, Sense::click());
     if ui.is_rect_visible(rect) {
-        if resp.hovered() {
-            ui.painter().hline(rect.x_range(), rect.bottom() - 1.0, Stroke::new(1.0, color));
-        }
+        let ink = theme::ink_rect(&galley);
+        let x = if ink.is_positive() { egui::Rangef::new(rect.left() + ink.left(), (rect.left() + ink.right()).min(rect.right())) } else { rect.x_range() };
+        let y = adf_view::underline_y(rect.top() + galley_baseline(&galley));
+        ui.painter().hline(x, y, Stroke::new(1.0, color));
         ui.painter().galley(rect.min, galley, color);
     }
     resp.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
-/// A primary button that, when disabled, is drawn quiet (`button_fill`, muted, border) and ignores clicks,
-/// rather than a faded accent.
+/// The least height of a click area (WCAG's 24 px target).
+pub const MIN_TARGET_H: f32 = 24.0;
+
+/// A link's click area: its text `slot` grown evenly above and below to MIN_TARGET_H (never shrunk).
+pub fn link_hit(slot: Rect) -> Rect {
+    slot.expand2(vec2(0.0, ((MIN_TARGET_H - slot.height()) / 2.0).max(0.0)))
+}
+
+/// A primary button that, when disabled, takes the one disabled look (`primary_disabled_colors`) and ignores
+/// clicks. Add it with `ui.add`, not `ui.add_enabled(false, ..)`: egui would fade it a second time.
 pub fn primary_button_if(text: &str, enabled: bool, p: &Palette) -> egui::Button<'static> {
     let b = if enabled {
         let (fill, fg) = primary_colors(p);
         egui::Button::new(RichText::new(text.to_string()).color(fg).size(14.0)).fill(fill).stroke(Stroke::new(1.0, fill))
     } else {
-        egui::Button::new(RichText::new(text.to_string()).color(p.muted).size(14.0))
-            .fill(theme::button_fill(p))
-            .stroke(Stroke::new(1.0, p.border))
-            .sense(Sense::hover())
+        let (fill, fg) = primary_disabled_colors(p);
+        egui::Button::new(RichText::new(text.to_string()).color(fg).size(14.0)).fill(fill).stroke(disabled_stroke(p)).sense(Sense::hover())
     };
     b.corner_radius(theme::RADIUS).min_size(vec2(0.0, BUTTON_H))
+}
+
+/// The one disabled button look, primary or secondary: the resting secondary (`button`) faded to
+/// `theme::DISABLED_ALPHA`, exactly what egui draws for `ui.add_enabled(false, button(..))`. A quieter frame, its
+/// label ≥ 5.5:1 on every fill (the old accent tint with faded text read 2.2:1). Returns (fill, text), translucent.
+pub fn primary_disabled_colors(p: &Palette) -> (Color32, Color32) {
+    (theme::button_fill(p).gamma_multiply(theme::DISABLED_ALPHA), p.text.gamma_multiply(theme::DISABLED_ALPHA))
+}
+
+/// The disabled button's edge: `button`'s `border` at DISABLED_ALPHA.
+pub fn disabled_stroke(p: &Palette) -> Stroke {
+    Stroke::new(1.0, p.border.gamma_multiply(theme::DISABLED_ALPHA))
 }
 
 /// Pill inner padding (8/2) and radius (10).
@@ -1100,14 +1152,14 @@ pub fn outline_pill(ui: &mut Ui, text: &str, p: &Palette, margin: egui::Vec2) ->
     pill_sized(ui, text, Color32::TRANSPARENT, p.muted, Stroke::new(1.0, p.border), margin)
 }
 
-/// An outline pill on a selected row: the `selected_edge` outline so it never sinks into the fill; its text
+/// An outline pill on a selected row: the `selected_pill_edge` outline so it never sinks into the fill; its text
 /// (assignee, labels) stays secondary (`selected_pill_text`): only the row's key switches to `text`.
 pub fn outline_pill_selected(ui: &mut Ui, text: &str, p: &Palette, margin: egui::Vec2) -> egui::Response {
     pill_sized(ui, text, Color32::TRANSPARENT, selected_pill_text(p), Stroke::new(1.0, selected_pill_edge(p)), margin)
 }
 
 /// A neutral pill's outline on a selected row: light #77766f (≥ 3.3:1 on the #dfdfda selection; the
-/// `selected_edge` rule tone read 2.88), dark #888782: 3.03:1 on the #3d3d3a selection and 1.70 off the pill text
+/// old rule tone read 2.88), dark #888782: 3.03:1 on the #3d3d3a selection and 1.70 off the pill text
 /// (round 15 L1: #868580 read 2.95; the suggested #8f8e89 reached 3.32 but fell to 1.55 off the text, and the
 /// text's 5.13 on the selection leaves no tone with 3.0 and 1.7 both above about #888782).
 pub fn selected_pill_edge(p: &Palette) -> Color32 {
@@ -1134,13 +1186,14 @@ pub const THUMB_RADIUS: u8 = 2;
 /// viewport read 1–1.5 ink to ink).
 pub const THUMB_TRACK_INSET: f32 = 3.0;
 
-/// The thumb style for the floating bars (the list and the detail pane): THUMB_W wide at rest, THUMB_INSET in
-/// from the edge, shown whenever the area overflows, opaque (the rest tone is in `scroll_thumb`). Call before the
-/// ScrollArea, with `set_thumb_fills` and `thumb_track`.
+/// The thumb style for the floating bars (the list and the detail pane): THUMB_W wide, THUMB_INSET in from the
+/// edge, hidden at rest and shown opaque while the pointer is over the area (calm surfaces, like macOS overlay
+/// scrollbars; an idle thumb read as two extra bars of chrome and sat on the rows' borders). The tones are in
+/// `scroll_thumb`. Call before the ScrollArea, with `set_thumb_fills` and `thumb_track`.
 pub fn floating_thumb(scroll: &mut egui::style::ScrollStyle) {
     scroll.floating_width = THUMB_W;
     scroll.bar_outer_margin = THUMB_INSET;
-    scroll.dormant_handle_opacity = 1.0;
+    scroll.dormant_handle_opacity = 0.0;
     scroll.active_handle_opacity = 1.0;
 }
 
@@ -1190,7 +1243,7 @@ pub fn no_scroll_fade(ui: &mut Ui) {
 pub const NO_FADE: egui::style::ScrollFadeStyle = egui::style::ScrollFadeStyle { strength: 0.0, size: 0.0 };
 
 /// Muted text on a dialog's cursor row (the picker's "current" marker and muted names there): `muted` lifted
-/// on `dialog_cursor_fill` where it would fall under 5.0:1 (dark #c0bfba; light `muted`, which needs no lift).
+/// on `dialog_cursor_fill` where it would fall under 5.0:1.
 pub fn muted_on_selected(p: &Palette) -> Color32 {
     theme::muted_on(dialog_cursor_fill(p), p)
 }
@@ -1201,6 +1254,7 @@ pub fn selected_pill_text(p: &Palette) -> Color32 {
 }
 
 /// The edge every list-row pill gets: its own text colour at 35%, so a wash stays visible on any row fill.
+#[allow(dead_code)] // Kept stable for other screens; not called from one right now.
 pub fn row_pill_stroke(fg: Color32) -> Stroke {
     Stroke::new(1.0, fg.gamma_multiply(0.35))
 }
@@ -1208,14 +1262,19 @@ pub fn row_pill_stroke(fg: Color32) -> Stroke {
 /// List-row pills: the one pill padding, 8/2.
 pub const ROW_PILL_MARGIN: egui::Vec2 = PILL_MARGIN;
 
-/// A list-row pill: one treatment on every row (plain, hovered, selected).
+/// A list-row status pill: one treatment on every row (plain, hovered, selected) and in both themes: the opaque
+/// fill (`pill_sized`), no edge (`components::status_pill_edge`). The selection is chosen to stay clear of every
+/// status fill, so the pill keeps its shape there without a stroke.
 pub fn pill_outlined(ui: &mut Ui, text: &str, bg: Color32, fg: Color32) -> egui::Response {
-    pill_sized(ui, text, bg, fg, row_pill_stroke(fg), ROW_PILL_MARGIN)
+    let edge = components::status_pill_edge(bg, fg, theme::palette(ui.ctx()));
+    pill_sized(ui, text, bg, fg, edge, ROW_PILL_MARGIN)
 }
 
 /// Small text in an exact `text + 2×margin` rect (radius 10); the stroke is drawn inside, so outlined
-/// and plain pills are the same size and share a baseline.
+/// and plain pills are the same size and share a baseline. A translucent wash (`Tint::bg`) is resolved over
+/// `surface` first (`pill_fill`), so a status pill is one opaque colour on every row, card, pane and selection.
 pub fn pill_sized(ui: &mut Ui, text: &str, bg: Color32, fg: Color32, stroke: Stroke, margin: egui::Vec2) -> egui::Response {
+    let bg = pill_fill(bg, theme::palette(ui.ctx()));
     let galley = ui.painter().layout_no_wrap(text.to_string(), theme::body(12.0), fg);
     let (rect, resp) = ui.allocate_exact_size(galley.size() + margin * 2.0, Sense::hover());
     if ui.is_rect_visible(rect) {
@@ -1225,6 +1284,15 @@ pub fn pill_sized(ui: &mut Ui, text: &str, bg: Color32, fg: Color32, stroke: Str
     resp
 }
 
+/// A pill's painted fill: a translucent wash resolved over `surface` (opaque everywhere); a transparent fill
+/// (outline pills) or an opaque one unchanged.
+pub fn pill_fill(bg: Color32, p: &Palette) -> Color32 {
+    match bg.a() {
+        0 | 255 => bg,
+        _ => theme::over(bg, p.surface),
+    }
+}
+
 /// `text` cut to fit `max_w` (as `measure` lays it out) with "…"; trailing whitespace is trimmed before the
 /// ellipsis. Unchanged when it already fits.
 /// `truncate_text` for titles: a cut inside a word (a run of letters, digits and `/-_`) backs up to the last
@@ -1232,7 +1300,22 @@ pub fn pill_sized(ui: &mut Ui, text: &str, bg: Color32, fg: Color32, stroke: Str
 /// "aws-node…"); only a single word that fills the column is cut mid-word. Trailing `,;:` go before the "…"
 /// ("sign-ins,…" → "sign-ins…"), and so does a trailing article or preposition (`TITLE_STOP_WORDS`: "…on the…"
 /// → "…on…" → "…").
+/// Unless backing up to the word boundary (and dropping stop words) would leave more than TITLE_SLACK_MAX empty:
+/// then the plain cut that fills the room (a long identifier at the cut would empty ~135 pt).
 pub fn truncate_title(text: &str, max_w: f32, measure: impl Fn(&str) -> f32) -> String {
+    let words = word_cut(text, max_w, &measure);
+    if words == text || max_w - measure(&words) <= TITLE_SLACK_MAX {
+        return words;
+    }
+    truncate_text(text, max_w, measure)
+}
+
+/// The most width a title's word-boundary cut may leave empty before it is cut mid-word instead (about one
+/// short word at 13.5 bold).
+pub const TITLE_SLACK_MAX: f32 = 48.0;
+
+/// `truncate_title`'s word-boundary cut.
+fn word_cut(text: &str, max_w: f32, measure: impl Fn(&str) -> f32) -> String {
     let cut = truncate_text(text, max_w, measure);
     let Some(kept) = cut.strip_suffix('…') else { return cut };
     let word = |c: char| c.is_alphanumeric() || matches!(c, '/' | '-' | '_');
@@ -1315,15 +1398,23 @@ pub fn health_dot(ui: &mut Ui, color: Color32) {
     ui.painter().circle_filled(rect.center(), 4.5, color);
 }
 
+/// A load error: the column's full width, card padding, the title, the raw error and, with `retry`, a Retry
+/// button. Pass `retry: false` when another control on screen already retries (the offline banner's Retry).
 /// Returns true when Retry is clicked.
-pub fn error_banner(ui: &mut Ui, p: &Palette, title: &str, raw: &str) -> bool {
-    let mut retry = false;
-    Frame::new().fill(p.danger_subtle).corner_radius(theme::RADIUS).inner_margin(Margin::same(12)).show(ui, |ui| {
-        ui.label(RichText::new(title).font(theme::bold(14.0)).color(p.off_track));
-        ui.label(RichText::new(raw).color(p.muted).size(12.0));
-        retry = ui.add(button("Retry", p)).clicked();
+pub fn error_banner(ui: &mut Ui, p: &Palette, title: &str, raw: &str, retry: bool) -> bool {
+    let sp = theme::spacing(ui.ctx());
+    let mut clicked = false;
+    Frame::new().fill(p.danger_subtle).corner_radius(theme::RADIUS).inner_margin(Margin::same(sp.card_pad as i8)).show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        ui.label(RichText::new(title).font(theme::bold(sp.body)).color(p.off_track));
+        ui.add_space(sp.line_gap);
+        ui.add(egui::Label::new(RichText::new(raw).color(p.muted).size(sp.small)).wrap());
+        if retry {
+            ui.add_space(sp.line_gap * 2.0);
+            clicked = ui.add(button("Retry", p)).clicked();
+        }
     });
-    retry
+    clicked
 }
 
 #[cfg(test)]
@@ -1437,7 +1528,7 @@ mod widget_tests {
         assert_eq!(chip_width(40.0), 64.0);
         assert_eq!(chip_width(40.2), 65.0);
         assert_eq!(INPUT_PAD_X, 8.0, "dialog fields");
-        assert_eq!(SEARCH_PAD_X, CHIP_PAD, "the search box lines up with the chips and combos");
+        assert_eq!(SEARCH_PAD_X, INPUT_PAD_X, "one text-field inset in every field");
         let r = whole_points(egui::Rect::from_min_size(egui::pos2(10.5, 40.5), vec2(64.0, BUTTON_H)));
         assert_eq!((r.min, r.height()), (egui::pos2(11.0, 41.0), 28.0), "whole points, 28 tall");
         assert_eq!(INPUT_H, BUTTON_H, "one control height");
@@ -1633,9 +1724,12 @@ mod widget_tests {
 
     #[test]
     fn one_centring_rule() {
-        assert_eq!(centre_top(800.0, 300.0), 250.0);
-        assert_eq!(centre_top(100.0, 300.0), 0.0, "never negative");
-        assert_eq!(centre_top(801.0, 300.0), 251.0, "whole pixels");
+        assert_eq!(centre_top_on(400.0, 0.0, 800.0, 300.0), 250.0);
+        assert_eq!(centre_top_on(50.0, 0.0, 100.0, 300.0), 0.0, "never negative");
+        assert_eq!(centre_top_on(400.5, 0.0, 801.0, 300.0), 251.0, "whole pixels");
+        assert_eq!(centre_top_on(450.0, 0.0, 866.0, 300.0), 300.0, "on the window's middle, not the area's");
+        assert_eq!(centre_top_on(450.0, 48.0, 818.0, 300.0), 252.0, "an area under a header");
+        assert_eq!(centre_top_on(450.0, 0.0, 400.0, 300.0), 100.0, "kept inside the area");
     }
 
     #[test]
@@ -1648,8 +1742,8 @@ mod widget_tests {
 
     #[test]
     fn the_sign_in_panel_pads_16_to_the_ink() {
-        // Round 13 J1 / J2: 16 from the panel's inner edge to the title's ink, and from the "g" of "Check again" to
-        // the inner edge below, with the real fonts.
+        // 16 from the panel's inner edge to the title's ink (real fonts), and from "Check again"'s box to the
+        // inner edge below.
         let p = crate::theme::LIGHT;
         let shapes = crate::testutil::paint_at2(egui::vec2(800.0, 400.0), |ui| {
             Frame::new().fill(p.surface).stroke(Stroke::new(1.0, p.border)).inner_margin(SIGN_IN_MARGIN).show(ui, |ui| {
@@ -1663,9 +1757,20 @@ mod widget_tests {
             });
         });
         let panel = crate::testutil::fills(&shapes).iter().find(|(_, c)| *c == p.surface).expect("panel").0;
-        let (title, again) = (crate::testutil::ink_of(&shapes, SIGN_IN_TITLE), crate::testutil::ink_of(&shapes, CHECK_AGAIN));
+        let title = crate::testutil::ink_of(&shapes, SIGN_IN_TITLE);
         assert!((title.top() - (panel.top() + 1.0) - SIGN_IN_PAD).abs() <= 0.5, "top {}", title.top() - panel.top() - 1.0);
+        let again = crate::testutil::fills(&shapes).iter().find(|(_, c)| *c == theme::button_fill(&p)).expect("a filled button").0;
+        assert_eq!(again.height(), BUTTON_H, "the shared button's height");
         assert!(((panel.bottom() - 1.0) - again.bottom() - SIGN_IN_PAD).abs() <= 0.5, "bottom {}", panel.bottom() - 1.0 - again.bottom());
+    }
+
+    #[test]
+    fn a_link_is_at_least_24_tall_to_click() {
+        let slot = Rect::from_min_size(egui::pos2(10.0, 100.0), vec2(40.0, 16.0));
+        let hit = link_hit(slot);
+        assert_eq!((hit.height(), hit.center(), hit.width()), (MIN_TARGET_H, slot.center(), 40.0), "grown evenly, text in place");
+        let tall = Rect::from_min_size(egui::pos2(0.0, 0.0), vec2(40.0, 30.0));
+        assert_eq!(link_hit(tall), tall, "never shrunk");
     }
 
     #[test]
@@ -1741,6 +1846,12 @@ mod widget_tests {
     }
 
     #[test]
+    fn tab_keys_match_the_tab_order() {
+        let keys: Vec<u8> = TABS.iter().map(|(s, _)| tab_key(*s)).collect();
+        assert_eq!(keys, [1, 2, 3, 4, 5, 6]);
+    }
+
+    #[test]
     fn small_label_sits_on_the_names_baseline() {
         // A 14 px name with its baseline 13 down, drawn at top 10: a 12 px label (baseline 11 down) goes at 12.
         assert_eq!(top_for_baseline(10.0 + 13.0, 11.0), 12.0);
@@ -1762,8 +1873,8 @@ mod widget_tests {
     fn primary_text_is_on_accent_in_both_themes() {
         for p in [&theme::LIGHT, &theme::DARK] {
             assert_eq!(primary_colors(p), (p.accent, p.on_accent));
-            assert!(theme::contrast(p.on_accent, active_chip_fill(p)) >= 4.5, "dark={}", p.dark);
-            assert_eq!(active_chip_fill(p), p.accent, "one accent");
+            assert!(theme::contrast(p.on_accent, p.accent) >= 4.5, "dark={}", p.dark);
+            assert_ne!(components::toggle_chip_colors(p, true, false).0, p.accent, "an on chip is not a primary button");
         }
     }
 
@@ -1808,7 +1919,8 @@ mod widget_tests {
             assert!((3.0..=4.0).contains(&THUMB_W) && f32::from(THUMB_RADIUS) * 2.0 <= THUMB_W);
             let mut bar = egui::style::ScrollStyle::floating();
             floating_thumb(&mut bar);
-            assert_eq!((bar.floating_width, bar.bar_outer_margin, bar.dormant_handle_opacity), (THUMB_W, THUMB_INSET, 1.0), "opaque at rest");
+            assert_eq!((bar.floating_width, bar.bar_outer_margin, bar.dormant_handle_opacity), (THUMB_W, THUMB_INSET, 0.0), "hidden at rest");
+            assert_eq!(bar.active_handle_opacity, 1.0, "opaque on hover");
             assert_eq!(scroll_thumb(p).0.a(), 255, "K2: separators never show through");
             let t = thumb_track(egui::Rect::from_min_max(egui::pos2(0.0, 100.0), egui::pos2(10.0, 500.0)));
             assert_eq!((t.top(), t.bottom()), (100.0 + THUMB_TRACK_INSET, 500.0 - THUMB_TRACK_INSET), "K1: inset both ends");
@@ -1858,8 +1970,8 @@ mod widget_tests {
         let names = [None, Some(measure("Shawn")), Some(measure(&truncate_text(long, name_cap(m_w), measure)))];
         for ro in [None, Some(52.0)] {
             let first = header_right(edge, None, ro, 4.0, [LABEL_GAP; 2]);
-            assert_eq!(first.help, edge - 32.0, "? at the 16 px edge");
-            assert_eq!(first.sync, first.help - 40.0, "sync 8 left of ?");
+            assert_eq!(first.help, edge - BUTTON_H, "? at the 16 px edge");
+            assert_eq!(first.sync, first.help - BUTTON_H - 8.0, "sync 8 left of ?");
             for name_w in names {
                 let at = header_right(edge, name_w, ro, 4.0, [LABEL_GAP; 2]);
                 assert_eq!((at.help, at.sync), (first.help, first.sync), "ro={ro:?} name_w={name_w:?}");
@@ -1889,12 +2001,21 @@ mod widget_tests {
     #[test]
     fn toast_dot_marks_the_type_only() {
         use crate::app::ToastKind;
-        assert_eq!(toast_dot(ToastKind::Error), Some(TOAST_ERROR_DOT));
-        assert_eq!(toast_dot(ToastKind::Success), Some(theme::DARK.on_track));
-        assert_eq!(toast_dot(ToastKind::Info), None, "no decorative dot on a notice");
+        assert_eq!(toast_dot(ToastKind::Error), TOAST_ERROR_DOT);
+        assert_eq!(toast_dot(ToastKind::Success), theme::DARK.on_track);
+        assert_eq!(toast_dot(ToastKind::Info), theme::DARK.muted);
+        assert_eq!(toast_mark(ToastKind::Info), None, "a plain notice has no dot");
+        assert_eq!(toast_mark(ToastKind::Error), Some(TOAST_ERROR_DOT));
+        assert_eq!(toast_mark(ToastKind::Success), Some(theme::DARK.on_track));
+        let kinds = [ToastKind::Error, ToastKind::Success, ToastKind::Info];
+        for (i, a) in kinds.iter().enumerate() {
+            for b in &kinds[i + 1..] {
+                assert_ne!(toast_dot(*a), toast_dot(*b), "one colour per kind");
+            }
+        }
         for p in [&theme::LIGHT, &theme::DARK] {
-            for k in [ToastKind::Error, ToastKind::Success] {
-                let c = toast_dot(k).unwrap();
+            for k in kinds {
+                let c = toast_dot(k);
                 assert!(theme::contrast(c, p.tooltip) >= 3.0, "dark={} {k:?}: {:.2}", p.dark, theme::contrast(c, p.tooltip));
             }
         }
@@ -1905,32 +2026,28 @@ mod widget_tests {
         assert!(((f32::from(f.b()) / f32::from(f.r())) - (f32::from(b.b()) / f32::from(b.r()))).abs() < 0.015, "{f:?}");
         assert_eq!((theme::LIGHT.tooltip, fill), (Color32::from_rgb(0x3a, 0x3a, 0x37), Color32::from_rgb(0x4a, 0x4a, 0x47)), "round-8 L4 ruling");
         assert!(theme::contrast(theme::DARK.tooltip_text, fill) >= 6.0, "{:.2}", theme::contrast(theme::DARK.tooltip_text, fill));
-        for p in [&theme::LIGHT, &theme::DARK] {
-            assert_eq!(toast_stroke(p), Stroke::NONE, "shadow only (dark={})", p.dark);
+        assert_eq!(toast_stroke(&theme::LIGHT), Stroke::NONE, "light: the inverted fill alone");
+        let edge = toast_stroke(&theme::DARK).color;
+        assert!(theme::contrast(edge, fill) >= 1.5, "dark edge off the toast {:.2}", theme::contrast(edge, fill));
+        for pane in [theme::DARK.bg, theme::DARK.surface] {
+            assert!(theme::contrast(edge, pane) >= 3.0, "dark edge off the pane {:.2}", theme::contrast(edge, pane));
         }
     }
 
     #[test]
-    fn selected_row_edges_show_on_the_selected_fill() {
-        for p in [&theme::LIGHT, &theme::DARK] {
-            let edge = theme::over(selected_edge(p), p.selected_row);
-            assert!(theme::contrast(edge, p.selected_row) >= if p.dark { 1.5 } else { 1.2 }, "dark={}: {:.2}", p.dark, theme::contrast(edge, p.selected_row));
-        }
-    }
-
-    #[test]
-    fn toast_centres_over_the_detail_pane() {
-        assert_eq!(toast_centre_x(1440.0, None), 720.0);
-        assert_eq!(toast_centre_x(1440.0, Some((604.0, 1440.0))), 1022.0);
+    fn toast_centres_on_the_window() {
+        assert_eq!(toast_centre_x(egui::Rect::from_min_size(egui::Pos2::ZERO, vec2(1440.0, 900.0))), 720.0);
+        assert_eq!(toast_offset(Some(24.0)), 40.0);
+        assert_eq!(toast_offset(None), 24.0);
         assert!(toast_shadow(&theme::DARK).color.a() > toast_shadow(&theme::LIGHT).color.a());
         assert_eq!(TOAST_MARGIN.left, TOAST_MARGIN.right);
     }
 
     #[test]
     fn the_toast_insets_16_to_the_ink() {
-        // Round 13 D2: 16 from the fill to the text's ink either side (or to the dot on the left), real fonts.
+        // Round 13 D2: 16 from the fill to the dot on the left and to the text's ink on the right, real fonts.
         let p = theme::DARK;
-        for (dot, text, x) in [None, Some(theme::DARK.on_track)]
+        for (dot, text, x) in [theme::DARK.muted, theme::DARK.on_track]
             .into_iter()
             .flat_map(|d| ["Read-only mode: transition not sent to Jira", "Read-only mode: rank not sent to Jira"].map(move |t| (d, t)))
             .flat_map(|(d, t)| [0.0, 0.5, 884.5].map(move |x| (d, t, x)))
@@ -1938,7 +2055,7 @@ mod widget_tests {
             let shapes = crate::testutil::paint_at2(vec2(1440.0, 400.0), |ui| {
                 let at = egui::Rect::from_min_size(egui::pos2(x, 10.0), vec2(1000.0, 200.0));
                 ui.scope_builder(egui::UiBuilder::new().max_rect(at), |ui| {
-                    Frame::new().fill(p.tooltip).inner_margin(TOAST_MARGIN).show(ui, |ui| toast_body(ui, &p, dot, text));
+                    Frame::new().fill(p.tooltip).inner_margin(TOAST_MARGIN).show(ui, |ui| toast_body(ui, &p, Some(dot), text));
                 });
             });
             let fill = crate::testutil::fills(&shapes).iter().find(|(_, c)| *c == p.tooltip).expect("toast").0;
@@ -1955,10 +2072,47 @@ mod widget_tests {
             assert!((ink.top() - fill.top() - TOAST_INK_Y).abs() <= 0.5, "top {}", ink.top() - fill.top());
             assert!((fill.bottom() - ink.bottom() - TOAST_INK_Y).abs() <= 0.5, "bottom {}", fill.bottom() - ink.bottom());
             assert!((fill.right() - ink.right() - TOAST_INK_X).abs() <= 0.01, "{text} at {x}: right {}", fill.right() - ink.right());
-            if dot.is_none() {
-                assert!((ink.left() - fill.left() - TOAST_INK_X).abs() <= 0.01, "{text} at {x}: left {}", ink.left() - fill.left());
-            }
+            let circle = shapes
+                .iter()
+                .find_map(|c| match &c.shape {
+                    egui::Shape::Circle(k) if k.fill == dot => Some(*k),
+                    _ => None,
+                })
+                .expect("the dot");
+            assert!((circle.center.x - circle.radius - fill.left() - TOAST_INK_X).abs() <= 0.01, "{text} at {x}: dot left");
+            assert!(
+                (ink.left() - (circle.center.x + circle.radius) - 8.0).abs() <= 0.6,
+                "{text} at {x}: dot to ink {}",
+                ink.left() - circle.center.x - circle.radius
+            );
+            // On the text's middle: the cap ink ("R") above it and the baseline below it are the same distance away.
+            let line = crate::testutil::with_ui(|ui| theme::Ink::of(ui.ctx(), &theme::body(14.0), None));
+            let base = ink.top() - line.top + line.base;
+            assert!(((circle.center.y - ink.top()) - (base - circle.center.y)).abs() <= 0.6, "{text} at {x}: dot off centre");
         }
+    }
+
+    #[test]
+    fn a_plain_toast_insets_16_to_the_ink_either_side() {
+        let p = theme::DARK;
+        let text = "Theme: Dark";
+        let shapes = crate::testutil::paint_at2(vec2(1440.0, 400.0), |ui| {
+            let at = egui::Rect::from_min_size(egui::pos2(0.5, 10.0), vec2(1000.0, 200.0));
+            ui.scope_builder(egui::UiBuilder::new().max_rect(at), |ui| {
+                Frame::new().fill(p.tooltip).inner_margin(TOAST_MARGIN).show(ui, |ui| toast_body(ui, &p, None, text));
+            });
+        });
+        assert!(!shapes.iter().any(|c| matches!(c.shape, egui::Shape::Circle(_))), "no dot");
+        let fill = crate::testutil::fills(&shapes).iter().find(|(_, c)| *c == p.tooltip).expect("toast").0;
+        let (mut l, mut r) = (0.0, 0.0);
+        let _ = crate::testutil::paint_at2(vec2(1440.0, 100.0), |ui| {
+            let g = ui.painter().layout_no_wrap(text.to_string(), theme::body(14.0), p.tooltip_text);
+            let (a, v) = (theme::ink_rect(&g), theme::visible_ink(ui.ctx(), &g));
+            (l, r) = (v.left() - a.left(), a.right() - v.right());
+        });
+        let raster = crate::testutil::ink_of(&shapes, text);
+        let (left, right) = (raster.left() + l - fill.left(), fill.right() - (raster.right() - r));
+        assert!((left - TOAST_INK_X).abs() <= 0.6 && (right - TOAST_INK_X).abs() <= 0.6, "left {left} right {right}");
     }
 
     #[test]
@@ -1966,14 +2120,26 @@ mod widget_tests {
         for p in [&theme::LIGHT, &theme::DARK] {
             let edge = dialog_stroke(p).color;
             assert!(theme::contrast(edge, p.bg) >= 1.3, "field edge on its bg fill, dark={}", p.dark);
-            if p.dark {
-                assert!(theme::contrast(dialog_button_fill(p), dialog_fill(p)) >= 1.15, "Cancel steps off the dark dialog");
-            } else {
-                assert_eq!(dialog_button_fill(p), dialog_fill(p), "light Cancel on the dialog's fill, edge only");
+            // Cancel is the shared `button` everywhere: its edge shows, its text reads.
+            assert!(theme::contrast(p.border, theme::button_fill(p)) >= 1.2, "Cancel's edge shows, dark={}", p.dark);
+            assert!(theme::contrast(p.text, theme::button_fill(p)) >= 7.0);
+        }
+    }
+
+    #[test]
+    fn one_disabled_look_for_every_button() {
+        for p in [&theme::LIGHT, &theme::DARK] {
+            let (fill, fg) = primary_disabled_colors(p);
+            // egui's own disabled fade of the secondary button, so `add_enabled(false, button(..))` matches.
+            assert_eq!(fill, theme::button_fill(p).gamma_multiply(theme::DISABLED_ALPHA));
+            assert_eq!(fg, p.text.gamma_multiply(theme::DISABLED_ALPHA));
+            assert_eq!(disabled_stroke(p).color, p.border.gamma_multiply(theme::DISABLED_ALPHA));
+            for page in [dialog_fill(p), p.bg, p.surface, p.selection()] {
+                let f = theme::over(fill, page);
+                let t = theme::over(fg, f);
+                assert!(theme::contrast(t, f) >= 4.5, "its label still reads, dark={}: {:.2}", p.dark, theme::contrast(t, f));
+                assert!(theme::contrast(f, page) < theme::contrast(primary_colors(p).0, page), "quieter than live, dark={}", p.dark);
             }
-            assert!(theme::contrast(dialog_button_fill(p), theme::dialog_input_fill(p)) >= 1.15, "a field never matches a button, dark={}", p.dark);
-            assert!(theme::contrast(edge, dialog_button_fill(p)) >= 1.2, "Cancel's edge shows, dark={}", p.dark);
-            assert!(theme::contrast(p.text, dialog_button_fill(p)) >= 7.0);
         }
     }
 
@@ -1991,6 +2157,23 @@ mod widget_tests {
     fn toast_sits_above_the_hint_bar_when_there_is_one() {
         assert_eq!(toast_offset(Some(24.0)), 40.0);
         assert_eq!(toast_offset(None), 24.0);
+    }
+
+    #[test]
+    fn splits_have_no_cap_but_the_other_pane() {
+        // Wide window: the first pane may take all but the other pane's minimum.
+        assert_eq!(split_range(2560.0, 320.0, 576.0), 320.0..=1984.0);
+        // Narrow window: the range collapses to the minimum instead of inverting.
+        assert_eq!(split_range(600.0, 320.0, 576.0), 320.0..=320.0);
+        // A saved width wider than this window shrinks to fit it; one that fits is kept as dragged.
+        assert_eq!(split_width(Some(3000.0), 400.0, 1440.0, 320.0, 576.0), 864.0);
+        assert_eq!(split_width(Some(1500.0), 400.0, 2560.0, 320.0, 576.0), 1500.0);
+        // Nothing saved: the default; dragged under the minimum: the minimum.
+        assert_eq!(split_width(None, 400.0, 1440.0, 320.0, 576.0), 400.0);
+        assert_eq!(split_width(Some(10.0), 400.0, 1440.0, 320.0, 576.0), 320.0);
+        // A window narrower than the minimum: never wider than the window, never negative.
+        assert_eq!(split_width(Some(900.0), 400.0, 200.0, 320.0, 576.0), 200.0);
+        assert_eq!(split_width(None, 400.0, -5.0, 320.0, 576.0), 0.0);
     }
 }
 

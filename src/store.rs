@@ -14,6 +14,8 @@ pub enum ListId {
     Search,
     /// Every child of the roadmap's initiative epics, whatever its status, for their progress.
     EpicChildren,
+    /// The signed-in user's own tickets, for the Me screen (`me::JQL`).
+    Me,
 }
 
 #[derive(Default, Clone, Serialize, Deserialize)]

@@ -23,13 +23,30 @@ impl App {
         let fields: Vec<String> = jira::LIST_FIELDS.iter().map(|s| s.to_string()).collect();
         self.load_list(ListId::TeamOpen, store::jql_team_open(&cfg, !self.members_disabled), fields.clone());
         if let Some(jql) = store::jql_team_in_progress(&cfg, !self.members_disabled) {
-            self.load_list(ListId::TeamInProgress, jql, fields);
+            self.load_list(ListId::TeamInProgress, jql, fields.clone());
         }
+        self.load_list(ListId::Me, crate::me::JQL.to_string(), fields);
         let board = cfg.scope.board_id;
         self.spawn(move |c, tx| {
             let _ = tx.send(Msg::BoardSprints(c.board_sprints(board, "active,future")));
         });
         self.refresh_done_recent();
+        self.load_done_counts();
+    }
+
+    /// Every member's done count, so each closed footer shows how many it holds. Only the ids come back: the list
+    /// itself loads when a footer opens.
+    fn load_done_counts(&mut self) {
+        for member in self.cfg.team.members.clone() {
+            if !should_load(self.client.is_some(), self.team.done_count_loading.contains(&member)) {
+                continue;
+            }
+            self.team.done_count_loading.insert(member.clone());
+            let jql = crate::teamview::jql_done_recent(&self.cfg.scope.projects, &member);
+            self.spawn(move |c, tx| {
+                let _ = tx.send(Msg::DoneCount { member, result: c.search(&jql, &["status"]).map(|v| v.len()) });
+            });
+        }
     }
 
     /// The Team footers' done lists go stale like any other list: a closed footer's cached list is dropped (it
@@ -115,6 +132,7 @@ impl App {
             }
             ListId::Epics => self.load_epics(),
             ListId::EpicChildren => self.load_epic_children(),
+            ListId::Me => self.load_list(id, crate::me::JQL.to_string(), fields),
             ListId::Search => {}
         }
     }

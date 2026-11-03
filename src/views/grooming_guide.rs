@@ -2,6 +2,32 @@
 //! ticket, and how each flow ends. Pure text; `grooming.rs` draws it.
 
 use crate::app::GroomMode;
+use crate::grooming::Code;
+
+/// A readiness code in the readiness bar's words, for verdict pills and the Promote dialog.
+pub fn code_words(c: Code) -> &'static str {
+    match c {
+        Code::UnclearWhat => "Unclear what is being done",
+        Code::UnclearWhen => "Unclear when it is done",
+        Code::Empty => "Empty",
+    }
+}
+
+/// The codes a verdict shows, one pill each: "Empty" (nothing to judge) only when no other code applies, since a
+/// ticket that is unclear about something is not empty.
+pub fn shown_codes(codes: &[Code]) -> Vec<Code> {
+    let others = codes.iter().any(|c| *c != Code::Empty);
+    codes.iter().copied().filter(|c| !(others && *c == Code::Empty)).collect()
+}
+
+/// One quiet line for a run of empty lanes: "Nothing planned in Core 92, Core 93 or New".
+pub fn empty_lanes_line(names: &[&str]) -> String {
+    match names {
+        [] => String::new(),
+        [one] => format!("Nothing planned in {one}"),
+        [rest @ .., last] => format!("Nothing planned in {} or {last}", rest.join(", ")),
+    }
+}
 
 /// One line under the mode toggle: what this mode is for and when it happens.
 pub fn purpose(mode: GroomMode, status_new: &str, status_planning: &str, status_ready: &str) -> String {
@@ -9,9 +35,9 @@ pub fn purpose(mode: GroomMode, status_new: &str, status_planning: &str, status_
         GroomMode::PreCheck => format!(
             "Before the meeting. Judge each {status_new} ticket against the readiness bar, then promote the ready set to {status_planning} and write the report."
         ),
-        GroomMode::Session => format!(
-            "In the meeting. Walk the roadmap epics first, then tickets with no epic, ongoing epics and the rest; accept each Proposed or {status_new} ticket into the epic's {status_ready} queue in rank."
-        ),
+        GroomMode::Session => {
+            format!("In the meeting. Walk the epics in order and accept each Proposed or {status_new} ticket into the epic's {status_ready} queue, in rank.")
+        }
     }
 }
 
@@ -29,9 +55,9 @@ pub fn rubric_lines(mode: GroomMode, status_new: &str, status_planning: &str, st
         GroomMode::PreCheck => vec![
             ("", "Can a stranger tell WHAT is being done and WHEN it is done?".into()),
             ("r", "Yes: ready.".into()),
-            ("w", "Unclear what is being done.".into()),
-            ("n", "Unclear when it is done.".into()),
-            ("e", "Empty: nothing to judge.".into()),
+            ("w", format!("{}.", code_words(Code::UnclearWhat))),
+            ("n", format!("{}.", code_words(Code::UnclearWhen))),
+            ("e", format!("{}: nothing to judge.", code_words(Code::Empty))),
             ("", "When in doubt, pass.".into()),
         ],
         GroomMode::Session => vec![
@@ -56,11 +82,17 @@ pub fn all_judged(judged: usize, total: usize) -> String {
     }
 }
 
-/// The explanation at the top of the Promote dialog, before the lists.
-pub fn promote_explainer(promoted: usize, held_back: usize, cap: usize, status_planning: &str, report_path: &str) -> String {
+/// The explanation at the top of the Promote dialog, before the lists. The report's path follows on its own line.
+pub fn promote_explainer(promoted: usize, held_back: usize, cap: usize, status_planning: &str) -> String {
     let held = if held_back == 0 { String::new() } else { format!(" (top {cap} by rank, {held_back} held back)") };
     let tickets = if promoted == 1 { "ticket" } else { "tickets" };
-    format!("Promote moves {promoted} {tickets} to {status_planning}{held} and writes {report_path}. Paste the report into the team channel.")
+    format!("Promote moves {promoted} {tickets} to {status_planning}{held} and writes today's report for the team channel:")
+}
+
+/// The Promote dialog's line on the tickets left alone: "258 without a verdict stay in New, untouched."
+pub fn untouched_line(unjudged: usize, status_new: &str) -> String {
+    let verb = if unjudged == 1 { "stays" } else { "stay" };
+    format!("{unjudged} without a verdict {verb} in {status_new}, untouched.")
 }
 
 /// Today's report path as the user wrote the dir (`~` kept): "~/Documents/grooming-reports/2026-10-16.md".
@@ -85,7 +117,24 @@ mod tests {
         );
         assert_eq!(
             purpose(GroomMode::Session, "New", "Planning", "Ready for Work"),
-            "In the meeting. Walk the roadmap epics first, then tickets with no epic, ongoing epics and the rest; accept each Proposed or New ticket into the epic's Ready for Work queue in rank."
+            "In the meeting. Walk the epics in order and accept each Proposed or New ticket into the epic's Ready for Work queue, in rank."
+        );
+    }
+
+    #[test]
+    fn empty_only_shows_when_nothing_else_applies() {
+        assert_eq!(shown_codes(&[Code::UnclearWhat, Code::Empty]), [Code::UnclearWhat]);
+        assert_eq!(shown_codes(&[Code::Empty]), [Code::Empty]);
+        assert_eq!(shown_codes(&[Code::UnclearWhen, Code::UnclearWhat]), [Code::UnclearWhen, Code::UnclearWhat]);
+    }
+
+    #[test]
+    fn empty_lanes_read_as_one_line() {
+        assert_eq!(empty_lanes_line(&["New"]), "Nothing planned in New");
+        assert_eq!(empty_lanes_line(&["Core 92", "New"]), "Nothing planned in Core 92 or New");
+        assert_eq!(
+            empty_lanes_line(&["Core 92", "Core 93", "Ready for Work", "Proposed", "New"]),
+            "Nothing planned in Core 92, Core 93, Ready for Work, Proposed or New"
         );
     }
 
@@ -127,19 +176,21 @@ mod tests {
 
     #[test]
     fn promote_explainer_both_branches() {
-        let path = "~/Documents/grooming-reports/2026-10-16.md";
+        assert_eq!(promote_explainer(1, 0, 10, "Planning"), "Promote moves 1 ticket to Planning and writes today's report for the team channel:");
+        assert_eq!(promote_explainer(3, 0, 10, "Planning"), "Promote moves 3 tickets to Planning and writes today's report for the team channel:");
         assert_eq!(
-            promote_explainer(1, 0, 10, "Planning", path),
-            "Promote moves 1 ticket to Planning and writes ~/Documents/grooming-reports/2026-10-16.md. Paste the report into the team channel."
+            promote_explainer(10, 2, 10, "Planning"),
+            "Promote moves 10 tickets to Planning (top 10 by rank, 2 held back) and writes today's report for the team channel:"
         );
-        assert_eq!(
-            promote_explainer(3, 0, 10, "Planning", path),
-            "Promote moves 3 tickets to Planning and writes ~/Documents/grooming-reports/2026-10-16.md. Paste the report into the team channel."
-        );
-        assert_eq!(
-            promote_explainer(10, 2, 10, "Planning", path),
-            "Promote moves 10 tickets to Planning (top 10 by rank, 2 held back) and writes ~/Documents/grooming-reports/2026-10-16.md. Paste the report into the team channel."
-        );
+    }
+
+    #[test]
+    fn code_words_match_the_readiness_bar() {
+        assert_eq!(code_words(Code::UnclearWhat), "Unclear what is being done");
+        assert_eq!(code_words(Code::UnclearWhen), "Unclear when it is done");
+        assert_eq!(code_words(Code::Empty), "Empty");
+        assert_eq!(untouched_line(258, "New"), "258 without a verdict stay in New, untouched.");
+        assert_eq!(untouched_line(1, "New"), "1 without a verdict stays in New, untouched.");
     }
 
     #[test]

@@ -5,7 +5,7 @@ use crate::filter;
 use crate::jira::Issue;
 use crate::store::ListId;
 use crate::theme::{self, Palette};
-use crate::views::{outline_pill, outline_pill_selected, pill_outlined, toggle_chip};
+use crate::views::{outline_pill, pill_outlined, toggle_chip};
 use egui::{CornerRadius, Frame, Margin, Rect, RichText, Sense, Stroke, Ui, vec2};
 use std::collections::BTreeSet;
 
@@ -93,13 +93,23 @@ pub fn current_rows(app: &App) -> Vec<&Issue> {
     filter::visible(&all, &f, searched, me)
 }
 
-/// How a row pill is drawn: the filled status tint, an epic's outline in its hue, or a neutral outline.
+/// How a row value is drawn: the filled status pill, the epic as a dot and name (`components::epic_label`), the
+/// one neutral outlined pill, or plain muted text (the assignee: a person, not a tag).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum PillLook {
     Tint(egui::Color32, egui::Color32),
-    /// Outline only: (text, edge), the hue's text and stripe colours; no fill, so only status is filled.
-    Epic(egui::Color32, egui::Color32),
+    Epic(theme::Tint),
     Outline,
+    Text,
+}
+
+/// The extra width a row value takes beside its text: a pill's padding, the epic's dot and gap, or none.
+pub fn look_pad(look: &PillLook) -> f32 {
+    match look {
+        PillLook::Tint(..) | PillLook::Outline => 2.0 * crate::views::ROW_PILL_MARGIN.x,
+        PillLook::Epic(_) => crate::views::components::EPIC_DOT + crate::views::components::EPIC_DOT_GAP,
+        PillLook::Text => 0.0,
+    }
 }
 
 /// The row's team pill, neutral like the labels it sits with: under All teams, its team labels; under one
@@ -284,8 +294,22 @@ pub fn hints_panel(app: &App, ui: &mut Ui, p: &Palette) {
         grooming,
         team: app.screen == Screen::Team,
         roadmap: (app.screen == Screen::Roadmap).then_some(app.roadmap.tab),
+        me: app.screen == Screen::Me,
+        standup: app.screen == Screen::Standup,
+        standup_cards: app.screen == Screen::Standup && !app.standup_keys().is_empty(),
     });
-    hint_strip(ui, crate::keys::hints(c), p);
+    let standup = matches!(c, crate::keys::HintContext::Standup | crate::keys::HintContext::StandupEmpty);
+    let mut hs = if standup { crate::keys::standup_hints(crate::views::standup::hint(app)) } else { crate::keys::hints(c).to_vec() };
+    if edit.is_some() && !app.help_open && crate::jira::check_writable().is_err() {
+        hs = view_only_picker_hints(&hs);
+    }
+    hint_strip(ui, &hs, p);
+}
+
+/// A read-only picker is view-only (no cursor, no fields, Confirm off): of its hints only Esc still does
+/// something, so the bar never offers "Enter confirm" or keys that move nothing.
+pub fn view_only_picker_hints(hints: &[crate::keys::Hint]) -> Vec<crate::keys::Hint> {
+    hints.iter().copied().filter(|h| h.contains(&crate::keys::Tok::K("Esc"))).collect()
 }
 
 /// The hint bar on the sign-in form: "Enter sign in".
@@ -334,7 +358,14 @@ pub fn show(app: &mut App, ui: &mut Ui) {
         // No right margin: the detail pane's scrollbar sits in it, and `detail::show` insets the content by
         // DETAIL_RIGHT (≥ the bar's width + 4), so the bar never covers content.
         .frame(Frame::new().fill(p.surface).inner_margin(Margin { left: 16, right: 0, top: PANE_TOP as i8, bottom: 0 }))
-        .show(ui, |ui| super::detail::show(app, ui));
+        .show(ui, |ui| {
+            // With no selection, "Select an issue", except while the first rows load: there is nothing to select
+            // yet, and the list's own "Loading issues…" says what is happening, so the pane stays blank.
+            if detail_waits(app.selected.is_some(), first_load(app)) {
+                return;
+            }
+            super::detail::show(app, ui);
+        });
     goto_box(app, ui.ctx(), p);
 }
 
@@ -363,22 +394,30 @@ const NARROW: f32 = 1200.0;
 /// column, the 24 px gutter and the 132 px fields column (`detail::detail_columns`).
 pub const NARROW_DETAIL_MIN: f32 = 32.0 + 400.0 + 24.0 + 132.0;
 
-/// The list pane's default width and the range it may be dragged in: 42% of the window (360–720) when
-/// wide; below NARROW 45% of the window, but never so wide that the description column drops under 400.
+/// The list pane's narrowest drag.
+const LIST_PANE_MIN: f32 = 320.0;
+
+/// The list pane's default width and the range it may be dragged in. The default is 42% of the window
+/// (360–720) when wide; below NARROW 45% of the window, but never so wide that the description column drops
+/// under 400. The drag has no cap of its own: only the detail pane's minimum (`detail::min_pane_width`) bounds
+/// it. egui clamps a saved width to this range every frame, so one saved in a wider window fits this one.
 pub fn list_pane_width(window_w: f32) -> (f32, std::ops::RangeInclusive<f32>) {
-    if window_w < NARROW {
-        let w = (window_w * 0.45).min(window_w - NARROW_DETAIL_MIN).max(320.0).floor();
-        (w, 320.0..=w)
-    } else {
-        let w = (window_w * 0.42).clamp(360.0, 720.0);
-        (w, 320.0..=w)
-    }
+    let w =
+        if window_w < NARROW { (window_w * 0.45).min(window_w - NARROW_DETAIL_MIN).max(LIST_PANE_MIN).floor() } else { (window_w * 0.42).clamp(360.0, 720.0) };
+    (w, super::split_range(window_w, LIST_PANE_MIN, super::detail::min_pane_width(window_w)))
 }
 
-/// Gap between filter controls in a row.
+/// Gap between filter controls in a row (Compact; `filter_gaps` scales it).
 const GAP: f32 = 8.0;
-/// Vertical gap between the filter block's rows (combos, chips, search, count).
+/// Vertical gap between the filter block's rows (combos, chips, search, count) in Compact.
 const V_GAP: f32 = 12.0;
+
+/// The filter block's gaps for a density: (between controls in a row, between rows). Compact is GAP / V_GAP;
+/// Comfortable adds its larger item spacing (twice over between rows, like its row_extra above and below).
+pub fn filter_gaps(sp: &theme::Spacing) -> (f32, f32) {
+    let more = sp.item - theme::COMPACT.item;
+    (GAP + more.x, V_GAP + 2.0 * more.y)
+}
 /// One text inset for combos, chips (CHIP_PAD) and the search box's placeholder (`input_field`).
 const INNER_X: f32 = 12.0;
 /// Text → chevron in a combo.
@@ -403,8 +442,9 @@ const COMBO_CHROME: f32 = 2.0 * INNER_X + CHEVRON_GAP + CHEVRON_W + 2.0;
 const EPIC_MIN: f32 = 108.0;
 /// Narrowest the team combo is cut to when even its short labels do not fit: "PLAT" whole with the chrome.
 const TEAM_MIN: f32 = 72.0;
-/// Sizes the sprint combo before the board's sprints load, so its width does not change when they land.
-const SPRINT_SAMPLE: &str = "Sprint 0 (active)";
+/// Sizes the sprint combo before the board's sprints load, so its width does not change when they land: a
+/// two-digit sprint in the wider "(future)" state, so a typical board ("Core 92 (active)") never widens it.
+const SPRINT_SAMPLE: &str = "Sprint 00 (future)";
 /// The sprint combo's label until the board's sprints answer (muted): the scope that will apply.
 pub const SPRINT_PENDING: &str = "Active sprint";
 /// Sizes the epic combo: a typical key and a 28-character epic name. Longer names are cut with "…" (the
@@ -443,8 +483,8 @@ pub fn sprint_combo_text(answered: bool, label: &str) -> (String, bool) {
 /// nothing moves when a selection changes; only the search box stretches. The one exception: in its short form
 /// the team combo is its current short label's width (`team_short_nat`). When the row is short, sprint is
 /// never cut; epic gives way first, down to EPIC_MIN; then team falls back to its short labels, then is cut.
-pub fn combo_widths(team_full_nat: f32, team_short_nat: f32, sprint_nat: f32, epic_nat: f32, available: f32) -> ([f32; 3], bool) {
-    let room = (available - 2.0 * GAP).max(0.0);
+pub fn combo_widths(team_full_nat: f32, team_short_nat: f32, sprint_nat: f32, epic_nat: f32, available: f32, gap: f32) -> ([f32; 3], bool) {
+    let room = (available - 2.0 * gap).max(0.0);
     let sprint = sprint_nat.min(room).ceil();
     let epic_nat = epic_nat.ceil();
     for (team, short) in [(team_full_nat.ceil(), false), (team_short_nat.ceil(), true)] {
@@ -510,12 +550,20 @@ pub fn popup_scroll(n_rows: usize) -> (f32, bool) {
 /// A popup row's text inset: with the frame's 4 it starts at INNER_X, where the combo's own text does.
 const POPUP_ROW_PAD: f32 = INNER_X - POPUP_FRAME / 2.0;
 
+/// A team option as shown: "PLAT · Platform", or just "OPS" when the name only repeats the label in other
+/// glyphs (a configured "PRₑSₛ": its letters, less anything not plain ASCII, are the label's).
+pub fn team_display(option: &str) -> String {
+    let Some((label, name)) = option.split_once(" · ") else { return option.to_string() };
+    let plain: String = name.chars().filter(char::is_ascii_alphanumeric).collect();
+    if plain.eq_ignore_ascii_case(label) { label.to_string() } else { option.to_string() }
+}
+
 /// The team combo's label: the full "PLAT · Platform" when it fits, else just "PLAT".
 pub fn team_combo_label(full: &str, fits: bool) -> &str {
     if fits { full } else { full.split(" · ").next().unwrap_or(full) }
 }
 
-/// A combo exactly `w` wide and BUTTON_H tall: its text at INNER_X, truncated with "…", a muted chevron at
+/// A combo exactly `w` wide and the density's `control_h` tall: its text at INNER_X, truncated with "…", a muted chevron at
 /// the right. Its popup follows `popup_width` from the options' widest text (`widest`, paired with `w`) and `popup_left`
 /// within the pane (`pane`, left and right); `contents` gets the room a row's text has.
 #[allow(clippy::too_many_arguments)]
@@ -530,7 +578,7 @@ fn combo(
     p: &Palette,
     contents: impl FnOnce(&mut Ui, f32),
 ) -> egui::Response {
-    let (rect, resp) = ui.allocate_exact_size(vec2(w, crate::views::BUTTON_H), Sense::click());
+    let (rect, resp) = ui.allocate_exact_size(vec2(w, theme::spacing(ui.ctx()).control_h), Sense::click());
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, true, &text));
     let popup_id = egui::Id::new(("combo-popup", salt));
     if ui.is_rect_visible(rect) {
@@ -623,8 +671,11 @@ pub fn snap_rect(r: Rect, ppp: f32) -> Rect {
     Rect::from_min_max(egui::pos2(snap_px(r.min.x, ppp), snap_px(r.min.y, ppp)), egui::pos2(snap_px(r.max.x, ppp), snap_px(r.max.y, ppp)))
 }
 
+/// The roadmap filter chip: "On roadmap", so it never reads as the Roadmap tab in the header.
+pub const ROADMAP_CHIP: &str = "On roadmap";
+
 /// The search box's placeholder: it filters, searches, and runs JQL on Enter.
-pub const SEARCH_HINT: &str = "Filter or search, Enter run as JQL (⌘F)";
+pub const SEARCH_HINT: &str = "Filter or search, Enter runs as JQL (⌘F)";
 
 /// What Enter in the search box runs as typed JQL: whatever it holds, plain text included (the hint says
 /// "Enter run as JQL"); the text stays in the box.
@@ -666,12 +717,14 @@ fn filters(app: &mut App, ui: &mut Ui, p: &Palette) {
     ui.spacing_mut().button_padding = vec2(INNER_X, 4.0);
     ui.spacing_mut().icon_spacing = CHEVRON_GAP;
     ui.spacing_mut().icon_width = CHEVRON_W;
-    ui.spacing_mut().interact_size.y = crate::views::BUTTON_H;
+    let control_h = theme::spacing(ui.ctx()).control_h;
+    ui.spacing_mut().interact_size.y = control_h;
     let pane_w = ui.available_width();
     let pane = (ui.max_rect().left(), ui.max_rect().right());
+    let (gap, v_gap) = filter_gaps(theme::spacing(ui.ctx()));
     let text_w = |ui: &Ui, t: &str| ui.painter().layout_no_wrap(t.to_string(), theme::body(14.0), p.text).size().x;
     // Team scope: All, each configured sub-team, or tickets with no team label.
-    let team_options = filter::team_options(&app.cfg.scope.teams);
+    let team_options: Vec<(filter::TeamScope, String)> = filter::team_options(&app.cfg.scope.teams).into_iter().map(|(t, l)| (t, team_display(&l))).collect();
     let team_label = team_options.iter().find(|(t, _)| *t == app.filter.team).map_or_else(
         || match &app.filter.team {
             filter::TeamScope::Label(l) => l.clone(),
@@ -704,12 +757,14 @@ fn filters(app: &mut App, ui: &mut Ui, p: &Palette) {
     let epic_widest = widest(ui, &mut epics.iter().map(|(k, s)| format!("{}{}", entry(k, s), suffix(k))).chain(["All epics".to_string()]));
     // The combos' own widths come from constant samples, so nothing moves when sprints or issues land; the
     // popups still size to the loaded options.
-    let sprint_nat = combo_width(ComboKind::Sprint, |t| text_w(ui, t));
+    // The sprint combo fits its longest loaded option too ("Core 92 (active)" was cut), so its value stays readable;
+    // the epic combo takes what is left.
+    let sprint_nat = combo_width(ComboKind::Sprint, |t| text_w(ui, t)).max((sprint_widest + COMBO_CHROME).ceil());
     let epic_nat = combo_width(ComboKind::Epic, |t| text_w(ui, t));
-    let ([team_w, sprint_w, epic_w], team_short) = combo_widths(team_widest + COMBO_CHROME, team_short_nat, sprint_nat, epic_nat, pane_w);
+    let ([team_w, sprint_w, epic_w], team_short) = combo_widths(team_widest + COMBO_CHROME, team_short_nat, sprint_nat, epic_nat, pane_w, gap);
     let team_text = team_combo_label(&team_label, !team_short).to_string();
     ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = GAP;
+        ui.spacing_mut().item_spacing.x = gap;
         let team = combo(ui, "team", (team_text, false), (team_w, team_widest), team_options.len(), pane, PopupEdge::Start, p, |ui, _| {
             for (scope, l) in &team_options {
                 if ui.selectable_label(app.filter.team == *scope, l).clicked() {
@@ -755,9 +810,9 @@ fn filters(app: &mut App, ui: &mut Ui, p: &Palette) {
             }
         });
     });
-    ui.add_space(V_GAP);
+    ui.add_space(v_gap);
     ui.horizontal_wrapped(|ui| {
-        ui.spacing_mut().item_spacing = vec2(GAP, GAP);
+        ui.spacing_mut().item_spacing = vec2(gap, gap);
         let quick = app.cfg.issues.filters.clone();
         for (i, f) in quick.iter().enumerate() {
             let active = app.filter.quick == Some(i);
@@ -768,11 +823,11 @@ fn filters(app: &mut App, ui: &mut Ui, p: &Palette) {
         if toggle_chip(ui, "Mine", app.filter.mine, p).clicked() {
             app.actions.push(Action::ToggleMine);
         }
-        if crate::views::tooltip(toggle_chip(ui, "Roadmap", app.filter.roadmap, p), "m").clicked() {
+        if crate::views::tooltip(toggle_chip(ui, ROADMAP_CHIP, app.filter.roadmap, p), "m").clicked() {
             app.actions.push(Action::ToggleRoadmap);
         }
     });
-    ui.add_space(V_GAP);
+    ui.add_space(v_gap);
     let id = egui::Id::new("issue-search");
     if ui.memory(|m| m.has_focus(id))
         && search_esc(!app.filter.text.is_empty(), app.search_active) == SearchEsc::Clear
@@ -787,7 +842,7 @@ fn filters(app: &mut App, ui: &mut Ui, p: &Palette) {
     let top = ui.cursor().top();
     ui.add_space(top.round() - top);
     let r = crate::views::add_field(ui, None, &mut app.filter.text, |t| {
-        crate::views::input_field_in(t, SEARCH_HINT, theme::body(14.0), p, crate::views::search_margin()).id(id)
+        crate::views::input_field_in(t, SEARCH_HINT, theme::body(14.0), p, crate::views::search_margin()).id(id).min_size(vec2(0.0, control_h))
     });
     if r.changed() {
         app.text_edited = Some(std::time::Instant::now());
@@ -941,6 +996,11 @@ pub fn count_suffix(typed_shown: bool, text_shown: bool, showing_search_result: 
     }
 }
 
+/// The detail pane stays blank: nothing is selected and the list has no rows yet because it is still loading.
+pub fn detail_waits(selected: bool, first_load: bool) -> bool {
+    !selected && first_load
+}
+
 /// Nothing on screen yet while the list (or a search) loads: the count row shows "⟳ Loading issues…".
 pub fn first_load(app: &App) -> bool {
     let pending = app.search_pending.is_some();
@@ -959,10 +1019,109 @@ pub fn clear_visible(quick: bool, mine: bool, roadmap: bool, box_text: bool) -> 
     quick || mine || roadmap || box_text
 }
 
+/// The clear button's height: the 24 px minimum target, centred on the 16 px count row.
+const CLEAR_H: f32 = 24.0;
+/// Room the clear button may take at the count row's right end.
+const CLEAR_SLOT_W: f32 = 160.0;
+
+/// The clear button's slot, left and right x, for a list whose right edge is `edge`: a first ghost in a
+/// right-to-left row ends its text on the slot's edge, so it ends where the search box and the rows do.
+pub fn clear_slot_x(edge: f32) -> (f32, f32) {
+    (edge - CLEAR_SLOT_W, edge)
+}
+
+/// The list's empty state when the rows came back empty: what matched nothing, then what to do next.
+pub fn empty_list_copy(suffix: CountSuffix, filtered: bool) -> (&'static str, &'static str) {
+    match (suffix, filtered) {
+        (CountSuffix::Jql, _) => ("No issues match this JQL", "Edit the query, or press Esc to clear it."),
+        (CountSuffix::Text, _) => ("No issues match this search", "Try other words, or press Esc to clear it."),
+        (CountSuffix::None, true) => ("No issues match these filters", "Clear filters to see every issue."),
+        (CountSuffix::None, false) => ("No issues here", "Pick another sprint or team above."),
+    }
+}
+
 /// "Clear search" while the search box holds text (JQL or a local filter); "Clear filters" otherwise.
 pub fn clear_label(box_text: bool) -> &'static str {
     if box_text { "Clear search" } else { "Clear filters" }
 }
+
+/// The term the search box matches rows on, for marking hits: plain text (not JQL), trimmed.
+pub fn match_needle(text: &str) -> Option<String> {
+    let t = text.trim();
+    (!t.is_empty() && !filter::looks_like_jql(t)).then(|| t.to_string())
+}
+
+/// Byte ranges in `hay` where `needle` occurs, case-insensitively, left to right, never overlapping.
+pub fn match_ranges(hay: &str, needle: &str) -> Vec<std::ops::Range<usize>> {
+    let n: Vec<char> = needle.trim().chars().flat_map(char::to_lowercase).collect();
+    let mut out = Vec::new();
+    if n.is_empty() {
+        return out;
+    }
+    let mut from = 0;
+    for (i, _) in hay.char_indices() {
+        if i < from {
+            continue;
+        }
+        let mut k = 0;
+        for (j, c) in hay[i..].char_indices() {
+            let lower: Vec<char> = c.to_lowercase().collect();
+            if n.get(k..k + lower.len()) != Some(&lower[..]) {
+                break;
+            }
+            k += lower.len();
+            if k == n.len() {
+                let end = i + j + c.len_utf8();
+                out.push(i..end);
+                from = end;
+                break;
+            }
+        }
+    }
+    out
+}
+
+/// Why a row matched `needle` when its title does not show it: the key, a label, the assignee, or (a server
+/// text search) a field the row never shows. None when the title holds the match (it is marked there).
+pub fn match_cue(i: &Issue, needle: &str) -> Option<String> {
+    let hit = |t: &str| !match_ranges(t, needle).is_empty();
+    if needle.trim().is_empty() || hit(&i.summary) {
+        return None;
+    }
+    if hit(&i.key) {
+        return Some("matched: key".to_string());
+    }
+    if let Some(l) = i.labels.iter().find(|l| hit(l)) {
+        return Some(format!("matched: label {l}"));
+    }
+    if let Some(a) = i.assignee.as_ref().filter(|a| hit(&a.display_name)) {
+        return Some(format!("matched: assignee {}", a.display_name));
+    }
+    Some("matched: description or comments".to_string())
+}
+
+/// A row title with each hit of `needle` on the `search_match` tint (underlined in the accent on the selected
+/// row, whose fill is accent-tinted too).
+pub fn title_job(title: &str, needle: &str, p: &Palette, selected: bool) -> egui::text::LayoutJob {
+    let plain = egui::TextFormat { font_id: theme::bold(13.5), color: p.text, ..Default::default() };
+    let hit = egui::TextFormat { background: p.search_match(), underline: if selected { Stroke::new(1.0, p.accent) } else { Stroke::NONE }, ..plain.clone() };
+    let mut job = egui::text::LayoutJob::default();
+    let mut at = 0;
+    for r in match_ranges(title, needle) {
+        if r.start > at {
+            job.append(&title[at..r.start], 0.0, plain.clone());
+        }
+        job.append(&title[r.clone()], 0.0, hit.clone());
+        at = r.end;
+    }
+    if at < title.len() || title.is_empty() {
+        job.append(&title[at..], 0.0, plain);
+    }
+    job
+}
+
+/// The last pill → the match cue on the meta line.
+const MATCH_CUE_GAP: f32 = 8.0;
 
 fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
     let rows: Vec<Issue> = current_rows(app).into_iter().cloned().collect();
@@ -970,7 +1129,7 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
     let loaded = app.lists.get(&src);
     if let Some(e) = loaded.and_then(|l| l.error.clone())
         && rows.is_empty()
-        && super::error_banner(ui, p, "Couldn't load issues.", &e)
+        && super::error_banner(ui, p, "Couldn't load issues.", &e, !app.offline)
     {
         let retry = match (&app.last_search_jql, app.search_active) {
             (Some(jql), true) if app.typed_search => Action::RunTypedSearch(jql.clone()),
@@ -1026,16 +1185,32 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
             }
         }
         if show_clear {
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                // Right-aligned by the ink: "Clear search" and "Clear filters" end their last glyph on one edge
-                // (round 13 B2: their boxes did, 0.5–1 apart in ink).
-                if crate::views::small_link_ink_right(ui, clear_label(box_text), p).clicked() {
-                    app.actions.push(Action::ClearFilters);
-                }
-            });
+            // A text link in the accent (the muted ghost read as the "· text match" metadata beside it), at the
+            // count's size, centred on the count row without growing it (its own child ui), its text ending on
+            // the list's right edge like the search box above. Its click target is CLEAR_H tall.
+            let row = ui.max_rect();
+            let (left, right) = clear_slot_x(row.right());
+            let slot = Rect::from_min_max(egui::pos2(left, row.center().y - CLEAR_H / 2.0), egui::pos2(right, row.center().y + CLEAR_H / 2.0));
+            let mut child = ui.new_child(egui::UiBuilder::new().max_rect(slot).layout(egui::Layout::right_to_left(egui::Align::Center)));
+            let font = theme::body(theme::spacing(ui.ctx()).caption);
+            let w = ui.painter().layout_no_wrap(clear_label(box_text).to_string(), font.clone(), p.accent).size().x;
+            // The tall target first, so the link drawn over it still takes the hover (its underline).
+            let target = Rect::from_x_y_ranges(right - w..=right, slot.y_range());
+            let hit = child.interact(target, egui::Id::new("clear-filters"), Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
+            let link = crate::views::text_link(&mut child, clear_label(box_text), font, p.accent);
+            if link.clicked() || hit.clicked() {
+                app.actions.push(Action::ClearFilters);
+            }
         }
     });
     ui.add_space(count_gaps_in(ui, p).1);
+    if rows.is_empty() && !updating && loaded.is_none_or(|l| l.error.is_none()) {
+        let sp = theme::spacing(ui.ctx());
+        let (message, hint) = empty_list_copy(count_suffix(app.typed_shown, app.text_shown.is_some(), showing_search), show_clear);
+        ui.add_space(sp.section_gap);
+        crate::views::components::empty_state(ui, p, message, Some(hint));
+        return;
+    }
     let columns = app.cfg.issues.columns.clone();
     let cfg = app.cfg.clone();
     let (status_colors, epic_colors) = (&cfg.issues.status_colors, &cfg.issues.epic_colors);
@@ -1048,6 +1223,8 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
     // Keyboard moves change the cursor; bring its row into view once per change.
     let scroll_cursor = app.cursor != app.last_cursor;
     app.last_cursor = app.cursor;
+    // The text the rows were matched on (a local filter or a text search): its hits are marked in each title.
+    let needle = match_needle(&app.filter.text);
     let key_w = {
         let painter = ui.painter();
         key_column_width(rows.iter().map(|i| painter.layout_no_wrap(i.key.clone(), theme::mono(12.5), p.muted).size().x))
@@ -1060,12 +1237,12 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
     let mut row_spans: Vec<(f32, f32)> = Vec::with_capacity(rows.len());
     let mut selected_rect: Option<(Rect, usize)> = None;
     let mut row_x: Option<egui::Rangef> = None;
-    let mut stripes: Vec<(usize, Rect, CornerRadius, egui::Color32)> = Vec::new();
-    let mut painted_stripes: Vec<(Rect, egui::Color32)> = Vec::new();
     let track = crate::views::thumb_track(ui.available_rect_before_wrap());
     let out = egui::ScrollArea::vertical().auto_shrink([false, false]).scroll_bar_rect(track).show(ui, |ui| {
         crate::views::restore_fills(ui, saved);
         ui.spacing_mut().item_spacing.y = ROW_GAP;
+        // Comfortable's room above and below each row's content; 0 in Compact, so the tuned grid is untouched.
+        let extra = theme::spacing(ui.ctx()).row_extra;
         for (idx, i) in rows.iter().enumerate() {
             let is_sel = selected.as_deref() == Some(&i.key);
             let epic = i.parent_key.as_deref().map(|k| theme::epic_tint_in(k, &slots, p, epic_colors));
@@ -1082,21 +1259,23 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
                     ui.set_width(ui.available_width());
                     // The row's outer top edge (the content starts inside the 1 px border and the top margin).
                     let row_top = ui.cursor().top() - ROW_STROKE - f32::from(ROW_PAD_TOP);
-                    ui.add_space(ROW_PAD_TOP_EXTRA);
+                    ui.add_space(ROW_PAD_TOP_EXTRA + extra);
                     ui.spacing_mut().item_spacing.y = ROW_LINE_GAP;
                     ui.horizontal(|ui| {
                         let key_color = row_key_color(is_sel, p);
                         let g = ui.painter().layout_no_wrap(i.key.clone(), theme::mono(12.5), key_color);
                         let (kr, _) = ui.allocate_exact_size(vec2(key_w, g.size().y), Sense::hover());
                         // The key and the summary share one baseline, TITLE_RAISE above the row's slot.
-                        ui.painter().galley(kr.min - vec2(0.0, TITLE_RAISE), g, key_color);
+                        ui.painter().galley(kr.min - vec2(0.0, TITLE_RAISE - ROW_CONTENT_DROP), g, key_color);
                         let painter = ui.painter().clone();
-                        let title = crate::views::truncate_title(&i.summary, ui.available_width(), |t| {
+                        // The title gets the whole line; why the row matched sits on the meta line below.
+                        let title = crate::views::truncate_title(&i.summary, ui.available_width().max(0.0), |t| {
                             painter.layout_no_wrap(t.to_string(), theme::bold(13.5), p.text).size().x
                         });
-                        let tg = painter.layout_no_wrap(title.clone(), theme::bold(13.5), p.text);
+                        let job = title_job(&title, needle.as_deref().unwrap_or_default(), p, is_sel);
+                        let tg = painter.layout_job(job);
                         let (tr, _) = ui.allocate_exact_size(tg.size(), Sense::hover());
-                        ui.painter().galley(tr.min - vec2(0.0, TITLE_RAISE), tg, p.text);
+                        ui.painter().galley(tr.min - vec2(0.0, TITLE_RAISE - ROW_CONTENT_DROP), tg, p.text);
                         if title != i.summary {
                             tips.push((tr, i.summary.clone()));
                         }
@@ -1117,19 +1296,22 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
                         let (kind, look) = match (c.as_str(), epic) {
                             ("status", _) => {
                                 let t = theme::status_tint(&i.status.name, &i.status.category, p, status_colors);
-                                (PillKind::Status, PillLook::Tint(status_fill(&t, p, is_sel), t.fg))
+                                (PillKind::Status, PillLook::Tint(status_fill(&t, p), t.fg))
                             }
-                            ("parent.summary" | "parent.key", Some(t)) => (PillKind::Epic, PillLook::Epic(t.fg, row_stripe(&t, p, is_sel))),
+                            ("parent.summary" | "parent.key", Some(t)) => (PillKind::Epic, PillLook::Epic(t)),
                             ("parent.summary" | "parent.key", None) => (PillKind::Epic, PillLook::Outline),
-                            ("assignee", _) => (PillKind::Assignee, PillLook::Outline),
+                            ("assignee", _) => (PillKind::Assignee, PillLook::Text),
                             _ => (PillKind::Other, PillLook::Outline),
                         };
                         pills.push((kind, v, look));
                     }
                     pills.sort_by_key(|(k, _, _)| pill_rank(*k));
+                    // Under a text search, why the row matched when its title does not show it ("matched: label
+                    // canary"): last on the meta line, muted like the assignee, after every pill.
+                    let cue = needle.as_deref().and_then(|n| match_cue(i, n));
                     // The pill line at one fixed, pixel-rounded y from the row's top (C1), whatever the title row
                     // laid out to (its slot follows the inherited interact height and the galley).
-                    let line = pill_line_y(row_top, ui.ctx().pixels_per_point());
+                    let line = pill_line_y(row_top + extra + ROW_CONTENT_DROP, ui.ctx().pixels_per_point());
                     ui.add_space(line - ui.cursor().top());
                     ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing = vec2(PILL_GAP, 4.0);
@@ -1139,12 +1321,22 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
                         ui.add_space(KEY_INK_INSET);
                         let painter = ui.painter().clone();
                         let measure = |t: &str| painter.layout_no_wrap(t.to_string(), theme::body(12.0), p.text).size().x;
-                        let pad = 2.0 * crate::views::ROW_PILL_MARGIN.x;
                         let short = |k: PillKind, t: &str| if k == PillKind::Assignee { first_name(t).to_string() } else { t.to_string() };
-                        let widths: Vec<(PillKind, f32, f32)> = pills.iter().map(|(k, t, _)| (*k, measure(t) + pad, measure(&short(*k, t)) + pad)).collect();
-                        let fit = fit_pills(&widths, ui.available_width(), PILL_GAP);
+                        // The assignee shows its avatar AVATAR_GAP before the name, so its width counts both.
+                        let assignee = i.assignee.as_ref();
+                        let pad_of =
+                            |k: PillKind, l: &PillLook| look_pad(l) + if k == PillKind::Assignee { theme::AVATAR_PILL + theme::AVATAR_GAP } else { 0.0 };
+                        let pill_h = painter.layout_no_wrap("Ag".into(), theme::body(12.0), p.text).size().y + 2.0 * crate::views::ROW_PILL_MARGIN.y;
+                        let widths: Vec<(PillKind, f32, f32)> =
+                            pills.iter().map(|(k, t, l)| (*k, measure(t) + pad_of(*k, l), measure(&short(*k, t)) + pad_of(*k, l))).collect();
+                        let on_fill = issue_row_fill(is_sel, false, p);
+                        let cue_color = theme::muted_on(on_fill, p);
+                        // The cue's room comes off the pills' (epic first, then the assignee, as `fit_pills` gives way).
+                        let cue_room = cue.as_ref().map_or(0.0, |c| measure(c) + MATCH_CUE_GAP);
+                        let fit = fit_pills(&widths, (ui.available_width() - cue_room).max(0.0), PILL_GAP);
                         for (((kind, full, look), w), (_, full_w, _)) in pills.iter().zip(fit).zip(&widths) {
                             let Some(w) = w else { continue };
+                            let pad = pad_of(*kind, look);
                             let source = if *kind == PillKind::Assignee && w < *full_w { short(*kind, full) } else { full.clone() };
                             let text = if *kind == PillKind::Epic {
                                 fit_epic(&source, w - pad, measure)
@@ -1153,10 +1345,32 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
                             };
                             let r = match look {
                                 PillLook::Tint(bg, fg) => pill_outlined(ui, &text, *bg, *fg),
-                                PillLook::Epic(fg, edge) => {
-                                    crate::views::pill_sized(ui, &text, egui::Color32::TRANSPARENT, *fg, Stroke::new(1.0, *edge), crate::views::ROW_PILL_MARGIN)
+                                // Text without a pill sits level with the pills' text (their top margin above it).
+                                PillLook::Epic(t) => {
+                                    ui.vertical(|ui| {
+                                        ui.add_space(crate::views::ROW_PILL_MARGIN.y);
+                                        crate::views::components::epic_label(ui, p, &text, *t, on_fill)
+                                    })
+                                    .inner
                                 }
-                                PillLook::Outline if is_sel => outline_pill_selected(ui, &text, p, crate::views::ROW_PILL_MARGIN),
+                                PillLook::Text => {
+                                    let label = |ui: &mut Ui| {
+                                        ui.vertical(|ui| {
+                                            ui.add_space(crate::views::ROW_PILL_MARGIN.y);
+                                            ui.add(egui::Label::new(RichText::new(&text).size(12.0).color(theme::muted_on(on_fill, p))).selectable(false))
+                                        })
+                                        .inner
+                                    };
+                                    match assignee.filter(|_| *kind == PillKind::Assignee) {
+                                        Some(u) => {
+                                            ui.spacing_mut().item_spacing.x = theme::AVATAR_GAP;
+                                            crate::avatar::inline(ui, Some(&u.account_id), &u.display_name, theme::AVATAR_PILL, pill_h);
+                                            ui.spacing_mut().item_spacing.x = PILL_GAP;
+                                            label(ui)
+                                        }
+                                        None => label(ui),
+                                    }
+                                }
                                 PillLook::Outline => outline_pill(ui, &text, p, crate::views::ROW_PILL_MARGIN),
                             };
                             if let (PillKind::Epic, Some(k)) = (kind, &i.parent_key) {
@@ -1165,8 +1379,16 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
                                 tips.push((r.rect, full.clone()));
                             }
                         }
+                        if let Some(c) = &cue {
+                            ui.spacing_mut().item_spacing.x = MATCH_CUE_GAP;
+                            // Level with the pills' text (their top margin above it), cut only if the row is tiny.
+                            ui.vertical(|ui| {
+                                ui.add_space(crate::views::ROW_PILL_MARGIN.y);
+                                ui.add(egui::Label::new(RichText::new(c).size(12.0).color(cue_color)).truncate().selectable(false));
+                            });
+                        }
                     });
-                    ui.add_space(ROW_PAD_BOTTOM_EXTRA);
+                    ui.add_space(ROW_PAD_BOTTOM_EXTRA + extra);
                 });
             let rect = r.response.rect;
             row_spans.push((rect.top(), rect.bottom()));
@@ -1175,17 +1397,26 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
             if let Some(tip) = r.hover_pos().and_then(|at| tips.iter().find(|(t, _)| t.contains(at))).map(|(_, t)| t.clone()) {
                 r = crate::views::hover_tip(r, tip, app);
             }
-            let fill = row_fill(is_sel, r.hovered(), p);
-            ui.painter().set(bg, egui::epaint::RectShape::filled(rect, corners, fill));
+            let fill = issue_row_fill(is_sel, r.hovered(), p);
+            if is_sel {
+                // The kit's selected row (`selection` fill, `selection_edge` ring): its fill under the content here, its
+                // ring again after every row, over the seams the neighbours' borders share.
+                ui.painter().set(
+                    bg,
+                    egui::epaint::RectShape::new(
+                        rect,
+                        crate::views::components::ROW_RADIUS,
+                        fill,
+                        Stroke::new(1.0, p.selection_edge()),
+                        egui::StrokeKind::Inside,
+                    ),
+                );
+            } else {
+                ui.painter().set(bg, egui::epaint::RectShape::filled(rect, corners, fill));
+            }
             if RIGHT_EDGE_OPEN {
                 let (x, top, bottom) = right_border_cover(rect);
                 ui.painter().vline(x, top..=bottom, Stroke::new(1.0, fill));
-            }
-            if let Some(t) = epic {
-                // Over the card's left border, on whole physical pixels, so no sliver of the page shows between
-                // the stripe and the fill. Painted after the selection rules (below), so they never notch it.
-                let stripe = CornerRadius { nw: corners.nw, sw: corners.sw, ne: 0, se: 0 };
-                stripes.push((idx, stripe_rect(rect, ui.ctx().pixels_per_point()), stripe, row_stripe(&t, p, is_sel)));
             }
             if is_sel {
                 selected_rect = Some((rect, idx));
@@ -1202,34 +1433,10 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
                 r.scroll_to_me(None);
             }
         }
-        // The dividers next to the selected row, over both fills (the next row's fill covers the lower one) in
-        // the selected-row edge, so they never sink into the selection.
-        if let Some((rect, idx)) = selected_rect {
-            let edge = crate::views::selected_edge(p);
-            for (y, inset) in selected_dividers(rect, idx, rows.len()) {
-                ui.painter().hline(egui::Rangef::new(rect.left() + inset, rect.right()), y, Stroke::new(1.0, edge));
-            }
-            // At the list's outer edge the rule carries on round the card's corner in the same tone, so no plain
-            // border shows in the arc (round 15 C2).
-            let radius = f32::from(theme::RADIUS);
-            for (outer, y) in [(idx == 0, rect.top()), (idx + 1 == rows.len(), rect.bottom() - radius)] {
-                if outer {
-                    let corner = Rect::from_min_size(egui::pos2(rect.left(), y), vec2(radius, radius));
-                    let arc = egui::epaint::RectShape::stroke(rect, row_corners(idx, rows.len()), Stroke::new(1.0, edge), egui::StrokeKind::Inside);
-                    ui.painter().with_clip_rect(corner.intersect(ui.clip_rect())).add(arc);
-                }
-            }
-        }
-        // Stripes last, in both themes; a row hidden as a bottom sliver shows none (it peeked 1 pt over the seam).
-        let hidden = sliver_row(&row_spans, ui.clip_rect().bottom());
-        // The selected row's stripe goes last, over the seam it shares with the next row, so its bottom rule
-        // never shows the next row's stripe tone (C3).
-        stripes.sort_by_key(|(idx, ..)| stripe_paints_last(*idx, selected_rect.map(|(_, i)| i)));
-        for (idx, r, corners, color) in stripes {
-            if Some(idx) != hidden {
-                ui.painter().rect_filled(r, corners, color);
-                painted_stripes.push((r, color));
-            }
+        // The selected row's ring again, over the next row's border on their shared seam.
+        if let Some((rect, _)) = selected_rect {
+            let ring = Stroke::new(1.0, p.selection_edge());
+            ui.painter().rect_stroke(rect, crate::views::components::ROW_RADIUS, ring, egui::StrokeKind::Inside);
         }
         // Room under the last row, so a toast (anchored above the hint bar) never covers it.
         ui.add_space(LIST_BOTTOM_PAD);
@@ -1239,7 +1446,7 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
     // and left border fill the leftover gap, so it reads as card, not panel (C4).
     let sliver = bottom_sliver(&row_spans, view.bottom());
     if let (Some((top, bottom)), Some(x)) = (sliver, row_x) {
-        ui.painter().rect_filled(Rect::from_x_y_ranges(x, top..=bottom), 0.0, row_fill(false, false, p));
+        ui.painter().rect_filled(Rect::from_x_y_ranges(x, top..=bottom), 0.0, issue_row_fill(false, false, p));
         ui.painter().vline(x.min + 0.5, top..=bottom, Stroke::new(1.0, p.border));
     }
     // No rule at the viewport's bottom edge: it landed on the hint bar's border as a second 1 px band (C2); the
@@ -1266,12 +1473,6 @@ fn list(app: &mut App, ui: &mut Ui, p: &Palette) {
                 && let Some(x) = row_x
             {
                 ui.painter().vline(x.min + 0.5, top..=bottom, Stroke::new(1.0, p.border));
-                for (s, color) in &painted_stripes {
-                    let part = s.intersect(r);
-                    if part.is_positive() {
-                        ui.painter().rect_filled(part, 0.0, *color);
-                    }
-                }
             }
         }
     }
@@ -1285,7 +1486,7 @@ pub fn cut_row(rows: &[(f32, f32)], edge: f32) -> Option<usize> {
 /// A list fade's strongest colour: the cut row's fill (selected or plain) at FADE_STRENGTH, so it dims the row's
 /// content toward its own card and leaves the fill as it is.
 pub fn fade_color(selected: bool, p: &Palette) -> egui::Color32 {
-    row_fill(selected, false, p).gamma_multiply(FADE_STRENGTH)
+    issue_row_fill(selected, false, p).gamma_multiply(FADE_STRENGTH)
 }
 
 /// A row cut by more than this at a viewport edge fades; less, and it reads as whole.
@@ -1409,8 +1610,8 @@ const ROW_GAP: f32 = -1.0;
 const ROW_PAD_LEFT: i8 = 11;
 const ROW_PAD_TOP: i8 = 0;
 const ROW_PAD_TOP_EXTRA: f32 = 0.5;
-const ROW_PAD_BOTTOM: i8 = 4;
-const ROW_PAD_BOTTOM_EXTRA: f32 = 1.5;
+const ROW_PAD_BOTTOM: i8 = 3;
+const ROW_PAD_BOTTOM_EXTRA: f32 = 1.0;
 /// Round 15 C1: the pill line 1 lower (−0.5, was −1.5) and 1 less under it, so the row reads 2 / 4 / 5.
 const ROW_LINE_GAP: f32 = -0.5;
 /// The row frame's border width (egui 0.36 frames draw the stroke inside, ahead of the margin).
@@ -1428,6 +1629,11 @@ const TITLE_TO_PILLS: f32 = 5.0;
 const TITLE_RAISE: f32 = 3.0;
 /// The pill line's top below the row's top edge: 6 + title line + 5 (round 15 C1: row top + 19, 38 px at 2×).
 pub const PILL_LINE_TOP: f32 = ROW_INK_TOP + TITLE_LINE + TITLE_TO_PILLS;
+/// Round 3 (polish): the 2× shots measured 1.5 from the top border to the title's ink but 5 from the pills to the
+/// bottom border. The title and the pill line both move down this much, out of the space under the pills, so the
+/// row reads 3 / 4 / 3.5 and keeps its height: the bottom margin and space give up 1.5 (ROW_PAD_BOTTOM 4 → 3,
+/// ROW_PAD_BOTTOM_EXTRA 1.5 → 1.0; a space cannot pull the frame's bottom above the pills, so the margin gives).
+const ROW_CONTENT_DROP: f32 = 1.5;
 
 /// The pill line's y for a row whose outer top edge is `row_top`: PILL_LINE_TOP below it, on a whole physical
 /// pixel, so it never depends on the title row's laid-out height, the row's index, or the scroll offset's fraction.
@@ -1438,49 +1644,11 @@ pub fn pill_line_y(row_top: f32, ppp: f32) -> f32 {
 #[cfg(test)]
 pub const ROW_PITCH: f32 = 42.0;
 
-/// The 3 px epic stripe over a row card's left edge, snapped to whole physical pixels.
-pub fn stripe_rect(row: Rect, ppp: f32) -> Rect {
-    let snap = |v: f32| (v * ppp).round() / ppp;
-    Rect::from_min_max(egui::pos2(snap(row.left()), row.top()), egui::pos2(snap(row.left() + 3.0), row.bottom()))
+/// A status pill's fill: the one pill rule (`views::pill_fill`), its wash resolved over `surface`, so the pill is
+/// one opaque colour on every row, plain or selected. The selection is chosen to stay clear of every status fill.
+pub fn status_fill(t: &theme::Tint, p: &Palette) -> egui::Color32 {
+    crate::views::pill_fill(t.bg, p)
 }
-
-/// Stripe paint order key: false (first) for every row but the selected one (C3).
-pub fn stripe_paints_last(idx: usize, selected: Option<usize>) -> bool {
-    selected == Some(idx)
-}
-
-/// A row's epic stripe colour: the slot's stripe, except on a selected light row, where it takes the slot's text
-/// tone (≥ 4.6:1 on #dfdfda; the stripe tone fell to 3.6, under dark's 3.9–5.1 there).
-pub fn row_stripe(t: &theme::Tint, p: &Palette, selected: bool) -> egui::Color32 {
-    if selected && !p.dark { t.fg } else { t.stripe }
-}
-
-/// The selected row's two rules, as (centre y, inset from each end): its top and bottom dividers in the
-/// selected-row edge, on the list frame too at the outer edges (inset by the corner radius on the left; the right
-/// side is square).
-pub fn selected_dividers(rect: Rect, idx: usize, n: usize) -> Vec<(f32, f32)> {
-    // An outer edge (the first row's top, the last row's bottom) is the list frame's rounded border: the rule
-    // goes over it too, stopping where the corners start.
-    let inset = |outer: bool| if outer { f32::from(theme::RADIUS) } else { 0.0 };
-    vec![(rect.top() + 0.5, inset(idx == 0)), (rect.bottom() - 0.5, inset(idx + 1 == n))]
-}
-
-/// A status pill's fill: its wash resolved over the plain row, so the pill is one opaque colour on every row
-/// (a wash composited over the selection shifted its colour, round 8). On a selected row a neutral wash that
-/// would melt into the selection (the grey "New", 1.03:1 light, 1.10 dark) steps one notch (light #cdccc6 at
-/// 1.20:1, dark #4a4a47 at 1.23), so the pill keeps a fill.
-pub fn status_fill(t: &theme::Tint, p: &Palette, selected: bool) -> egui::Color32 {
-    let fill = theme::over(t.bg, p.surface);
-    let spread = fill.r().max(fill.g()).max(fill.b()) - fill.r().min(fill.g()).min(fill.b());
-    if selected && spread <= 6 && theme::contrast(fill, p.selected_row) < SELECTED_PILL_STEP {
-        if p.dark { egui::Color32::from_rgb(0x4a, 0x4a, 0x47) } else { egui::Color32::from_rgb(0xcd, 0xcc, 0xc6) }
-    } else {
-        fill
-    }
-}
-
-/// A neutral status fill must stand this far off the selected row, or it steps (`status_fill`).
-const SELECTED_PILL_STEP: f32 = 1.12;
 
 /// The list's outer left corners are rounded (6); the seams between rows are square, and so is the right side,
 /// which has no border (`RIGHT_EDGE_OPEN`): the pane divider 16 px away is the one rule there (K3).
@@ -1510,6 +1678,16 @@ pub fn row_key_color(selected: bool, p: &Palette) -> egui::Color32 {
     if selected { p.text } else { p.muted }
 }
 
+/// An Issues row's fill: the kit's accent-tinted `selection` when selected (with its ring, see `list`), the hover
+/// fill under the pointer, else the card's `surface`.
+pub fn issue_row_fill(selected: bool, hovered: bool, p: &Palette) -> egui::Color32 {
+    match (selected, hovered) {
+        (true, _) => p.selection(),
+        (false, true) => crate::views::components::row_hover_fill(true, p),
+        (false, false) => p.surface,
+    }
+}
+
 pub fn row_fill(selected: bool, hovered: bool, p: &Palette) -> egui::Color32 {
     match (selected, hovered) {
         (true, _) => p.selected_row,
@@ -1518,8 +1696,9 @@ pub fn row_fill(selected: bool, hovered: bool, p: &Palette) -> egui::Color32 {
     }
 }
 
-/// Keys in mono 12.5 `text`, words in 12 `muted`: 4 px from key to word, 12 px either side of the "·"
-/// between hints; elided from the right with "…".
+/// Keys in mono 12.5 `text` on a key chip (`components::paint_key_chip`), words in 12 `muted`: 4 px from a key's
+/// chip to its word, 12 px either side of the "·" between hints (to a chip's edge, not its ink); elided from the
+/// right with "…".
 fn hint_bar(ui: &mut Ui, hs: &[crate::keys::Hint], p: &Palette) {
     use crate::keys::Tok;
     // Each token is its own galley, placed by its ink so the gaps are what they say: KEY_TO_WORD between a
@@ -1541,51 +1720,81 @@ fn hint_bar(ui: &mut Ui, hs: &[crate::keys::Hint], p: &Palette) {
         let (l, r) = ink(g);
         r - l
     };
-    let hints: Vec<Vec<std::sync::Arc<egui::Galley>>> = hs.iter().map(|h| h.iter().map(galley).collect()).collect();
+    let hints: Vec<Vec<(std::sync::Arc<egui::Galley>, bool)>> = hs.iter().map(|h| h.iter().map(|t| (galley(t), matches!(t, Tok::K(_)))).collect()).collect();
+    // A hint's width runs chip edge to chip edge: a key at either end adds its chip's padding.
     let widths: Vec<f32> = hints
         .iter()
-        .map(|gs| ink_origins(&gs.iter().enumerate().map(|(j, g)| (ink(g).0, ink(g).1, if j > 0 { KEY_TO_WORD } else { 0.0 })).collect::<Vec<_>>()).1)
+        .map(|gs| {
+            let spec: Vec<(f32, f32, f32)> =
+                gs.iter().enumerate().map(|(j, (g, _))| (ink(g).0, ink(g).1, if j > 0 { chip_gap(KEY_TO_WORD, gs[j - 1].1, gs[j].1) } else { 0.0 })).collect();
+            let ends = gs.first().map_or(0.0, |g| chip_pad(g.1)) + gs.last().map_or(0.0, |g| chip_pad(g.1));
+            ink_origins(&spec).1 + ends
+        })
         .collect();
     let dot = word("·");
     let ell = word("…");
     let sep = ink_w(&dot) + 2.0 * SEP_SPACE;
     let (n, elided) = crate::keys::fit_hints(&widths, sep, ink_w(&ell), ui.available_width());
-    let mut items: Vec<std::sync::Arc<egui::Galley>> = Vec::new();
+    let mut items: Vec<(std::sync::Arc<egui::Galley>, bool)> = Vec::new();
     let mut gaps: Vec<f32> = Vec::new();
     for (i, gs) in hints.into_iter().take(n).enumerate() {
         if i > 0 {
-            items.push(dot.clone());
+            items.push((dot.clone(), false));
             gaps.push(SEP_SPACE);
         }
         for (j, g) in gs.into_iter().enumerate() {
+            let before = items.last().is_some_and(|(_, k)| *k);
             gaps.push(match (i, j) {
-                (_, j) if j > 0 => KEY_TO_WORD,
-                (0, 0) => 0.0,
-                _ => SEP_SPACE,
+                (_, j) if j > 0 => chip_gap(KEY_TO_WORD, before, g.1),
+                // The first chip's edge sits on the bar's inset.
+                (0, 0) => chip_pad(g.1),
+                _ => chip_gap(SEP_SPACE, false, g.1),
             });
             items.push(g);
         }
     }
     if elided {
         if n > 0 {
-            items.push(dot.clone());
-            gaps.push(SEP_SPACE);
+            items.push((dot.clone(), false));
+            gaps.push(chip_gap(SEP_SPACE, items.iter().rev().nth(1).is_some_and(|(_, k)| *k), false));
         }
-        items.push(ell.clone());
+        items.push((ell.clone(), false));
         gaps.push(if n > 0 { SEP_SPACE } else { 0.0 });
     }
-    let spec: Vec<(f32, f32, f32)> = items.iter().zip(&gaps).map(|(g, gap)| (ink(g).0, ink(g).1, *gap)).collect();
+    // A dot after a key-final hint clears the chip, not the ink.
+    for i in 1..items.len() {
+        if !items[i].1 && items[i - 1].1 && gaps[i] == SEP_SPACE {
+            gaps[i] = chip_gap(SEP_SPACE, true, false);
+        }
+    }
+    let lead = gaps.first().copied().unwrap_or(0.0);
+    let spec: Vec<(f32, f32, f32)> = items.iter().zip(&gaps).map(|((g, _), gap)| (ink(g).0, ink(g).1, *gap)).collect();
     let (xs, total) = ink_origins(&spec);
+    let xs: Vec<f32> = xs.into_iter().map(|x| x + lead).collect();
+    let total = total + lead + items.last().map_or(0.0, |(_, k)| chip_pad(*k));
     let h = ui.available_height();
     let (rect, _) = ui.allocate_exact_size(vec2(total.ceil(), h), Sense::hover());
     // One baseline for keys and words: a 12 px word's line box centred in the bar.
     let line = (rect.center().y - dot.size().y / 2.0).round() + crate::views::galley_baseline(&dot);
     let ppp = ui.ctx().pixels_per_point();
-    for (g, x) in items.into_iter().zip(xs) {
-        let top = line - crate::views::galley_baseline(&g);
+    for ((g, key), x) in items.into_iter().zip(xs) {
+        let pos = egui::pos2(snap_px(rect.left() + x, ppp), line - crate::views::galley_baseline(&g));
+        if key {
+            crate::views::components::paint_key_chip(ui.painter(), pos, &g, hint_bar_fill(p), p);
+        }
         // Each galley carries its own colour (keys `text`, words `muted`).
-        ui.painter().galley(egui::pos2(snap_px(rect.left() + x, ppp), top), g, p.muted);
+        ui.painter().galley(pos, g, p.muted);
     }
+}
+
+/// A key chip's side padding past the key's ink, or 0 for a word.
+fn chip_pad(key: bool) -> f32 {
+    if key { crate::views::components::KEY_CHIP_PAD.x } else { 0.0 }
+}
+
+/// The ink gap between two hint tokens for `gap` between what shows: a key's chip edge, else a word's ink.
+pub fn chip_gap(gap: f32, before_key: bool, after_key: bool) -> f32 {
+    gap + chip_pad(before_key) + chip_pad(after_key)
 }
 
 /// A hint key's runs: modifier glyphs (⌘ ⇧ ⌥ ⌃, which SF Mono lacks or draws thin) apart from the rest, as
@@ -1663,73 +1872,117 @@ fn goto_box(app: &mut App, ctx: &egui::Context, p: &Palette) {
         app.goto = None;
         return;
     }
+    let top = crate::views::pickers::picker_top(ctx.content_rect().height(), app.detail_pills_top);
+    let project = app.cfg.scope.project.clone();
     let Some(text) = app.goto.as_mut() else { return };
     let mut go = false;
-    let x = ((ctx.content_rect().width() - GOTO_W) / 2.0).round();
-    egui::Area::new(egui::Id::new("goto")).order(egui::Order::Foreground).fixed_pos(egui::pos2(x, goto_top())).show(ctx, |ui| {
-        Frame::new().fill(crate::views::dialog_fill(p)).stroke(crate::views::dialog_stroke(p)).corner_radius(theme::RADIUS).inner_margin(GOTO_MARGIN).show(
-            ui,
-            |ui| {
-                crate::views::dialog_fields(ui, p);
-                ui.set_width(goto_inner_w(crate::views::dialog_stroke(p).width));
-                goto_title(ui, p);
-                // Proportional 14 like the search box: mono is for rendered ids, not input.
-                let r = crate::views::add_field(ui, None, text, |t| crate::views::input_field(t, "9001, CI-9001, or a browse link", theme::body(14.0), p));
-                // The box keeps focus while open, so Enter counts whether or not the field just gave it up.
-                if (r.has_focus() || r.lost_focus()) && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                    go = true;
-                } else {
-                    r.request_focus();
-                }
-            },
-        );
+    // The pickers' modal: same frame, width, anchor and title.
+    egui::Area::new(egui::Id::new("goto")).order(egui::Order::Foreground).anchor(egui::Align2::CENTER_TOP, vec2(0.0, top)).show(ctx, |ui| {
+        crate::views::components::dialog_frame(p).inner_margin(crate::views::pickers::DIALOG_MARGIN).show(ui, |ui| {
+            crate::views::dialog_fields(ui, p);
+            ui.set_width(crate::views::pickers::DIALOG_W);
+            crate::views::pickers::title(ui, p, GOTO_TITLE);
+            // Proportional 14 like the search box: mono is for rendered ids, not input.
+            let r = crate::views::add_field(ui, None, text, |t| crate::views::pickers::field(t, GOTO_HINT, p));
+            // The box keeps focus while open, so Enter counts whether or not the field just gave it up.
+            if (r.has_focus() || r.lost_focus()) && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                go = true;
+            } else {
+                r.request_focus();
+            }
+            // What the box takes, then which issue Enter opens, so the input is clear before acting.
+            let sp = theme::spacing(ui.ctx());
+            ui.add_space(sp.line_gap);
+            ui.label(RichText::new(goto_note(text, &project)).size(sp.small).color(crate::views::dialog_muted(p)));
+        });
     });
     if go {
         app.actions.push(Action::GoTo);
     }
 }
 
-/// The go-to box's outer width and padding.
-const GOTO_W: f32 = 444.0;
-const GOTO_PAD: f32 = 12.0;
-/// The box's margin: GOTO_PAD at the sides and bottom; the top is the title's, set to its ink (`goto_title`).
-const GOTO_MARGIN: Margin = Margin { left: GOTO_PAD as i8, right: GOTO_PAD as i8, top: 0, bottom: GOTO_PAD as i8 };
 pub const GOTO_TITLE: &str = "Go to issue";
 
-/// The go-to title: GOTO_PAD from the box's inner edge to its ink, and GOTO_PAD from its ink to the field
-/// (round 13 I1: 15 above and 13.5 below to the line box's 12 and 4).
-fn goto_title(ui: &mut egui::Ui, p: &Palette) {
-    let g = ui.painter().layout_no_wrap(GOTO_TITLE.to_string(), theme::bold(13.5), p.text);
-    let ink = theme::ink_rect(&g);
-    // The frame's content starts inside its edge.
-    ui.add_space(GOTO_PAD - ink.top());
-    let h = g.size().y;
-    ui.add(egui::Label::new(g));
-    ui.add_space(crate::views::pickers::gap_space(GOTO_PAD - (h - ink.bottom()), ui.spacing().item_spacing.y));
+/// The line under the go-to box: what it accepts while empty, the issue Enter opens once the text is a key,
+/// number or browse link, else what to type instead.
+pub fn goto_note(text: &str, project: &str) -> String {
+    if text.trim().is_empty() {
+        return "Accepts a key, a number or a browse link.".to_string();
+    }
+    match crate::filter::parse_goto(text, project) {
+        Some(key) => format!("Enter opens {key}"),
+        None => format!("Not an issue key. Try {project}-9001, 9001 or a browse link."),
+    }
 }
-
-/// The go-to box's content width: GOTO_W less the padding and the frame's stroke, which egui adds outside the
-/// margin (it made the box 446 wide and 1 px right of centre; round 12 I2).
-pub fn goto_inner_w(stroke: f32) -> f32 {
-    GOTO_W - 2.0 * (GOTO_PAD + stroke)
-}
-
-/// The go-to box's top edge: 12 px below the header rule.
-pub fn goto_top() -> f32 {
-    crate::views::HEADER_H + 12.0
-}
+/// What the go-to field takes.
+const GOTO_HINT: &str = "Key, number or browse link (CI-9001, 9001)";
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn the_goto_box_is_centred_at_its_width() {
-        // I2: outer width (content + padding + stroke) is GOTO_W, so round((window - GOTO_W) / 2) centres it.
-        let stroke = crate::views::dialog_stroke(&theme::LIGHT).width;
-        assert_eq!(goto_inner_w(stroke) + 2.0 * GOTO_PAD + 2.0 * stroke, GOTO_W);
-        let x = ((1440.0 - GOTO_W) / 2.0_f32).round();
-        assert_eq!(x, 1440.0 - (x + GOTO_W), "equal margins at 1440");
+    fn row_titles_fill_the_row_when_a_word_cut_would_waste_it() {
+        // 8 pt a character, so TITLE_SLACK_MAX is 6 characters.
+        let w = |t: &str| t.chars().count() as f32 * 8.0;
+        let ci_9100 = "Follow-up ADR: auth for the mesh posture — move defaultInboundPolicy from deny to all-unauthenticated";
+        // The word cut ends on "move", 17 characters (136 pt) short of the column: cut mid-word instead.
+        let cut = crate::views::truncate_title(ci_9100, 66.0 * 8.0, w);
+        assert_eq!(cut, "Follow-up ADR: auth for the mesh posture — move defaultInboundPol…");
+        assert!(66.0 * 8.0 - w(&cut) <= crate::views::TITLE_SLACK_MAX, "{cut}");
+        // A short fragment still backs up to the word boundary.
+        assert_eq!(crate::views::truncate_title("Move the chart to PR checks", 23.0 * 8.0, w), "Move the chart to PR…");
+        assert_eq!(crate::views::truncate_title("Short title", 40.0 * 8.0, w), "Short title");
+    }
+
+    #[test]
+    fn match_ranges_mark_every_hit_case_insensitively() {
+        assert_eq!(match_ranges("Unstick canary deploys", "CANARY"), vec![8..14]);
+        assert_eq!(match_ranges("aaaa", "aa"), vec![0..2, 2..4], "no overlaps");
+        assert_eq!(match_ranges("Café café", "CAFÉ"), vec![0..5, 6..11], "byte ranges on char boundaries");
+        assert!(match_ranges("linkerd", "  ").is_empty());
+        assert!(match_ranges("linkerd", "canary").is_empty());
+    }
+
+    #[test]
+    fn a_row_says_why_it_matched_when_its_title_does_not() {
+        let mut i = Issue { key: "CI-9100".into(), summary: "Follow-up ADR: auth for the mesh".into(), ..Default::default() };
+        assert_eq!(match_cue(&i, "canary").as_deref(), Some("matched: description or comments"), "a server text match");
+        i.labels = vec!["linkerd".into(), "canary-rollout".into()];
+        assert_eq!(match_cue(&i, "Canary").as_deref(), Some("matched: label canary-rollout"));
+        i.assignee = Some(crate::jira::User { account_id: "1".into(), display_name: "Ada Byron".into() });
+        assert_eq!(match_cue(&i, "byron").as_deref(), Some("matched: assignee Ada Byron"));
+        assert_eq!(match_cue(&i, "9100").as_deref(), Some("matched: key"));
+        assert_eq!(match_cue(&i, "mesh"), None, "the title shows it");
+        assert_eq!(match_cue(&i, ""), None);
+        assert_eq!(match_needle(" canary "), Some("canary".into()));
+        assert_eq!(match_needle("status = Done"), None, "JQL is not matched locally");
+    }
+
+    #[test]
+    fn title_hits_sit_on_the_search_match_tint() {
+        let p = crate::theme::LIGHT;
+        let job = title_job("Unstick canary deploys", "canary", &p, false);
+        let parts: Vec<(&str, bool)> =
+            job.sections.iter().map(|s| (&job.text[s.byte_range.start.0..s.byte_range.end.0], s.format.background == p.search_match())).collect();
+        assert_eq!(parts, [("Unstick ", false), ("canary", true), (" deploys", false)]);
+        assert_eq!(title_job("Plain", "zzz", &p, false).sections.len(), 1);
+        assert_eq!(clear_slot_x(816.0).1, 816.0, "the clear button's text ends on the column edge");
+    }
+
+    #[test]
+    fn the_goto_note_says_what_it_accepts_and_opens() {
+        assert_eq!(goto_note("  ", "CI"), "Accepts a key, a number or a browse link.");
+        assert_eq!(goto_note("ci-9121", "CI"), "Enter opens CI-9121");
+        assert_eq!(goto_note("9121", "CI"), "Enter opens CI-9121");
+        assert_eq!(goto_note("https://x.atlassian.net/browse/CI-7", "CI"), "Enter opens CI-7");
+        assert_eq!(goto_note("canary", "CI"), "Not an issue key. Try CI-9001, 9001 or a browse link.");
+    }
+
+    #[test]
+    fn goto_and_pickers_share_one_modal() {
+        assert_eq!(crate::views::pickers::DIALOG_W, 440.0);
+        assert_eq!(crate::views::pickers::picker_top(900.0, None), crate::views::pickers::dialog_top(900.0));
     }
 
     #[test]
@@ -1817,27 +2070,6 @@ mod tests {
     }
 
     #[test]
-    fn the_goto_title_sits_12_from_edge_and_field() {
-        // Round 13 I1: 12 from the box's inner edge to the title's ink, and 12 from that ink to the field.
-        let p = crate::theme::LIGHT;
-        let mut text = String::new();
-        let shapes = crate::testutil::paint_at2(egui::vec2(800.0, 400.0), |ui| {
-            Frame::new().fill(crate::views::dialog_fill(&p)).stroke(crate::views::dialog_stroke(&p)).inner_margin(GOTO_MARGIN).show(ui, |ui| {
-                crate::views::dialog_fields(ui, &p);
-                ui.set_width(goto_inner_w(1.0));
-                goto_title(ui, &p);
-                ui.add(crate::views::input_field(&mut text, "Hint", theme::body(14.0), &p));
-            });
-        });
-        let fills = crate::testutil::fills(&shapes);
-        let dialog = fills.iter().find(|(_, c)| *c == crate::views::dialog_fill(&p)).expect("box").0;
-        let field = fills.iter().find(|(_, c)| *c == theme::dialog_input_fill(&p)).expect("field").0;
-        let ink = crate::testutil::ink_of(&shapes, GOTO_TITLE);
-        assert!((ink.top() - dialog.top() - 1.0 - GOTO_PAD).abs() <= 0.5, "above {}", ink.top() - dialog.top() - 1.0);
-        assert!((field.top() - ink.bottom() - GOTO_PAD).abs() <= 0.5, "below {}", field.top() - ink.bottom());
-    }
-
-    #[test]
     fn spinner_to_verb_is_one_ink_gap() {
         // Round 13 D4: "Updating…" and "Loading issues…" sit SPINNER_TO_LABEL from the ring's ink, real fonts.
         let p = crate::theme::LIGHT;
@@ -1854,11 +2086,6 @@ mod tests {
             let gap = crate::testutil::ink_of(&shapes, text).left() - ring_right;
             assert!((gap - SPINNER_TO_LABEL).abs() <= 0.5, "{text}: {gap}");
         }
-    }
-
-    #[test]
-    fn goto_box_sits_just_under_the_header() {
-        assert_eq!(goto_top() - crate::views::HEADER_H, 12.0, "12 below the rule's bottom (round 7 measured 11)");
     }
 
     #[test]
@@ -1882,11 +2109,30 @@ mod tests {
     }
 
     #[test]
+    fn read_only_pickers_hint_only_esc() {
+        use crate::keys::{HintContext, Tok, hints};
+        for c in [HintContext::Picker, HintContext::AssignPicker, HintContext::EditPicker] {
+            let hs = view_only_picker_hints(hints(c));
+            assert_eq!(hs.len(), 1, "{c:?}");
+            assert!(hs[0].contains(&Tok::K("Esc")));
+            assert!(!hs.iter().any(|h| h.contains(&Tok::K("Enter"))), "no Enter confirm");
+        }
+    }
+
+    #[test]
+    fn detail_is_blank_only_while_the_first_rows_load() {
+        assert!(detail_waits(false, true));
+        assert!(!detail_waits(false, false), "loaded: Select an issue");
+        assert!(!detail_waits(true, true), "a selection shows its issue");
+        assert_eq!(ROADMAP_CHIP, "On roadmap", "never the Roadmap tab's word alone");
+    }
+
+    #[test]
     fn enter_runs_the_box_as_jql() {
         assert_eq!(enter_jql(" status = Blocked "), Some("status = Blocked".into()));
         assert_eq!(enter_jql("alpha"), Some("alpha".into()), "plain text too, as the hint says");
         assert_eq!(enter_jql("  "), None);
-        assert_eq!(SEARCH_HINT, "Filter or search, Enter run as JQL (⌘F)", "the hint bar's words (B4)");
+        assert_eq!(SEARCH_HINT, "Filter or search, Enter runs as JQL (⌘F)", "a sentence, unlike the hint bar's key chips");
     }
 
     #[test]
@@ -1900,27 +2146,27 @@ mod tests {
     fn combos_size_from_their_options_and_epic_gives_way_first() {
         let fill = |w: [f32; 3], avail: f32| (w.iter().sum::<f32>() + 2.0 * GAP - avail).abs() < 1.01;
         // Wide: every combo at its widest option; the epic does not stretch to fill the row.
-        let (w, short) = combo_widths(187.0, 124.0, 140.0, 150.0, 572.0);
+        let (w, short) = combo_widths(187.0, 124.0, 140.0, 150.0, 572.0, GAP);
         assert_eq!((w, short), ([187.0, 140.0, 150.0], false));
         // The width depends only on the options, not on which is selected: same inputs, same widths.
-        assert_eq!(combo_widths(187.0, 124.0, 140.0, 150.0, 572.0).0, w);
+        assert_eq!(combo_widths(187.0, 124.0, 140.0, 150.0, 572.0, GAP).0, w);
         // A long epic list: the epic takes what is left, no more.
-        let (w, _) = combo_widths(187.0, 124.0, 140.0, 900.0, 572.0);
+        let (w, _) = combo_widths(187.0, 124.0, 140.0, 900.0, 572.0, GAP);
         assert!(fill(w, 572.0), "{w:?}");
         // Narrower: epic shrinks to its minimum before team goes short.
-        let (w, short) = combo_widths(187.0, 124.0, 140.0, 300.0, 451.0);
+        let (w, short) = combo_widths(187.0, 124.0, 140.0, 300.0, 451.0, GAP);
         assert_eq!((w[0], w[1], short), (187.0, 140.0, false));
         assert!(w[2] >= EPIC_MIN && fill(w, 451.0), "{w:?}");
         // Then team takes its short labels.
-        let (w, short) = combo_widths(187.0, 124.0, 140.0, 300.0, 400.0);
+        let (w, short) = combo_widths(187.0, 124.0, 140.0, 300.0, 400.0, GAP);
         assert_eq!((w[0], w[1], short), (124.0, 140.0, true));
         // A narrow row (338 px): sprint whole, epic at its minimum, team cut to what is left.
-        let (w, short) = combo_widths(187.0, 124.0, 140.0, 300.0, 338.0);
+        let (w, short) = combo_widths(187.0, 124.0, 140.0, 300.0, 338.0, GAP);
         assert_eq!((w[1], w[2], short), (140.0, EPIC_MIN, true));
         assert!(fill(w, 338.0), "{w:?}");
         assert_eq!(w[0], 74.0);
         // A short epic list never takes more than its widest option.
-        assert_eq!(combo_widths(187.0, 124.0, 140.0, 80.0, 572.0).0[2], 80.0);
+        assert_eq!(combo_widths(187.0, 124.0, 140.0, 80.0, 572.0, GAP).0[2], 80.0);
     }
 
     #[test]
@@ -1976,7 +2222,8 @@ mod tests {
     #[test]
     fn hint_gaps_hold_to_the_visible_ink() {
         // Round 15 H1 / H2: key → word 4 and 12 around the dots, to the rasters' visible coverage (the raster box
-        // read 4.5 after "J/K", "c" and "Esc"). Real fonts, 2x.
+        // read 4.5 after "J/K", "c" and "Esc"), each measured from a key's chip edge (KEY_CHIP_PAD.x past its ink).
+        // Real fonts, 2x.
         use crate::keys::Tok::{K, W};
         let hints: &[crate::keys::Hint] = &[&[K("J/K"), W("rank")], &[K("c"), W("copy")], &[K("Esc"), W("cancel")], &[K("j/k"), W("move")]];
         for p in [theme::LIGHT, theme::DARK] {
@@ -2008,7 +2255,9 @@ mod tests {
             assert_eq!(vis.len(), 11, "{vis:?}");
             for w in vis.windows(2) {
                 let gap = w[1].1 - w[0].2;
-                let want = if w[0].0 == "·" || w[1].0 == "·" { SEP_SPACE } else { KEY_TO_WORD };
+                let key = |t: &str| t != "·" && !["rank", "copy", "cancel", "move"].contains(&t);
+                let base = if w[0].0 == "·" || w[1].0 == "·" { SEP_SPACE } else { KEY_TO_WORD };
+                let want = chip_gap(base, key(&w[0].0), key(&w[1].0));
                 assert!((gap - want).abs() < 0.01, "{} → {}: {gap}", w[0].0, w[1].0);
             }
         }
@@ -2263,7 +2512,7 @@ mod tests {
         let same = |a: egui::Color32, b: egui::Color32| a.to_array().iter().zip(b.to_array()).all(|(x, y)| x.abs_diff(y) <= 1);
         for p in [theme::LIGHT, theme::DARK] {
             assert!(same(theme::over(fade_color(false, &p), p.surface), p.surface), "a plain card's fill stays");
-            assert!(same(theme::over(fade_color(true, &p), p.selected_row), p.selected_row), "a selected one's too");
+            assert!(same(theme::over(fade_color(true, &p), p.selection()), p.selection()), "a selected one's too");
         }
     }
 
@@ -2300,12 +2549,29 @@ mod tests {
 
     #[test]
     fn narrow_windows_share_the_list_pane() {
-        assert_eq!(list_pane_width(1000.0), (412.0, 320.0..=412.0), "45% held back so the description keeps 400");
+        assert_eq!(list_pane_width(1000.0).0, 412.0, "45% held back so the description keeps 400");
         assert_eq!(list_pane_width(1199.0).0, (1199.0f32 * 0.45).floor());
         assert!(list_pane_width(700.0).0 >= 320.0);
-        let (w, r) = list_pane_width(1440.0);
+        let (w, _) = list_pane_width(1440.0);
         assert_eq!(w, (1440.0f32 * 0.42).clamp(360.0, 720.0));
-        assert_eq!(r, 320.0..=w);
+    }
+
+    #[test]
+    fn list_pane_drags_as_wide_as_the_detail_allows() {
+        use super::super::detail::min_pane_width;
+        // Wide windows: no 720 cap, the detail pane keeps its minimum.
+        assert_eq!(list_pane_width(1440.0).1, 320.0..=1440.0 - min_pane_width(1440.0));
+        assert_eq!(*list_pane_width(3840.0).1.end(), 3840.0 - min_pane_width(3840.0));
+        assert!(*list_pane_width(3840.0).1.end() > 720.0);
+        // Narrow: past the default, down to the detail's floor.
+        assert_eq!(list_pane_width(1000.0).1, 320.0..=1000.0 - min_pane_width(1000.0));
+        // Too narrow for both: the range stays valid at the list's minimum.
+        assert_eq!(list_pane_width(500.0).1, 320.0..=320.0);
+        // The default always sits inside the range.
+        for win in [500.0, 800.0, 1000.0, 1199.0, 1200.0, 1440.0, 2560.0] {
+            let (w, r) = list_pane_width(win);
+            assert!(r.contains(&w), "window {win}: {w} in {r:?}");
+        }
     }
 
     #[test]
@@ -2321,14 +2587,6 @@ mod tests {
         assert_eq!(slot_phase(false, false), SlotPhase::Provisional);
         assert_eq!(slot_phase(true, false), SlotPhase::Reset, "once, when the scope resolves");
         assert_eq!(slot_phase(true, true), SlotPhase::Keep);
-    }
-
-    #[test]
-    fn stripe_covers_the_left_border_on_whole_pixels() {
-        let row = Rect::from_min_max(egui::pos2(16.3, 100.0), egui::pos2(400.0, 144.0));
-        let s = stripe_rect(row, 2.0);
-        assert_eq!((s.left(), s.right(), s.top(), s.bottom()), (16.5, 19.5, 100.0, 144.0));
-        assert_eq!(stripe_rect(row, 1.0).left(), 16.0);
     }
 
     #[test]
@@ -2390,40 +2648,20 @@ mod tests {
         for p in [&theme::LIGHT, &theme::DARK] {
             for s in statuses {
                 let t = theme::status_tint(s, "indeterminate", p, &Default::default());
-                for sel in [false, true] {
-                    let fill = status_fill(&t, p, sel);
-                    assert_eq!(fill.a(), 255);
-                    assert!(theme::contrast(t.fg, fill) >= 4.5, "dark={} {s} sel={sel}: {:.2}", p.dark, theme::contrast(t.fg, fill));
-                }
+                let fill = status_fill(&t, p);
+                assert_eq!(fill.a(), 255);
+                assert!(theme::contrast(t.fg, fill) >= 4.5, "dark={} {s}: {:.2}", p.dark, theme::contrast(t.fg, fill));
             }
         }
     }
 
     #[test]
     fn new_pill_keeps_a_fill_on_a_selected_row() {
-        for (p, step) in [(&theme::LIGHT, egui::Color32::from_rgb(0xcd, 0xcc, 0xc6)), (&theme::DARK, egui::Color32::from_rgb(0x4a, 0x4a, 0x47))] {
+        for p in [&theme::LIGHT, &theme::DARK] {
             let new = theme::status_tint("New", "new", p, &Default::default());
-            assert_eq!(status_fill(&new, p, true), step, "dark={}", p.dark);
-            assert_eq!(status_fill(&new, p, false), theme::over(new.bg, p.surface), "plain rows keep the wash");
-            assert!(theme::contrast(step, p.selected_row) >= SELECTED_PILL_STEP);
-            // Round 10 (L2): light and dark step about as far (1.20 / 1.23).
-            assert!(theme::contrast(step, p.selected_row) >= 1.19, "dark={}: {:.3}", p.dark, theme::contrast(step, p.selected_row));
-            // A hued wash keeps its colour on the selection.
-            let ip = theme::status_tint("In Progress", "indeterminate", p, &Default::default());
-            assert_eq!(status_fill(&ip, p, true), status_fill(&ip, p, false), "dark={}", p.dark);
-        }
-    }
-
-    #[test]
-    fn light_selected_stripes_take_the_text_tone() {
-        for s in 0..theme::EPIC_SLOTS {
-            let t = theme::slot_tint(s, &theme::LIGHT);
-            assert_eq!(row_stripe(&t, &theme::LIGHT, true), t.fg);
-            assert_eq!(row_stripe(&t, &theme::LIGHT, false), t.stripe);
-            let c = theme::contrast(row_stripe(&t, &theme::LIGHT, true), theme::LIGHT.selected_row);
-            assert!(c >= 4.6, "slot {s}: {c:.2}");
-            let d = theme::slot_tint(s, &theme::DARK);
-            assert_eq!(row_stripe(&d, &theme::DARK, true), d.stripe, "dark unchanged");
+            assert_eq!(status_fill(&new, p), crate::views::pill_fill(new.bg, p), "the one pill rule");
+            let step = theme::contrast(status_fill(&new, p), p.selection());
+            assert!(step >= crate::views::components::PILL_FILL_STEP, "dark={}: {step:.3}", p.dark);
         }
     }
 
@@ -2454,14 +2692,6 @@ mod tests {
     }
 
     #[test]
-    fn the_selected_stripe_paints_last() {
-        let mut order = [(0, ()), (1, ()), (2, ()), (3, ())];
-        order.sort_by_key(|(i, _)| stripe_paints_last(*i, Some(1)));
-        assert_eq!(order.iter().map(|(i, _)| *i).collect::<Vec<_>>(), [0, 2, 3, 1]);
-        assert!(!stripe_paints_last(1, None));
-    }
-
-    #[test]
     fn light_selected_rows_outline_pills_in_the_text_tone() {
         let l = &theme::LIGHT;
         assert!(theme::contrast(crate::views::selected_pill_edge(l), l.selected_row) >= 3.3);
@@ -2470,8 +2700,23 @@ mod tests {
         assert!(c >= 3.0, "round 15 L1: the dark outline ≥ 3:1 on the selection: {c:.2}");
         let off_text = theme::contrast(crate::views::selected_pill_edge(d), crate::views::selected_pill_text(d));
         assert!(off_text >= 1.69, "still apart from the pill text: {off_text:.3}");
-        let t = theme::slot_tint(0, l);
-        assert_eq!(row_stripe(&t, l, true), t.fg, "the epic outline takes the stripe's tone");
+    }
+
+    #[test]
+    fn the_filter_block_follows_the_density() {
+        assert_eq!(filter_gaps(&theme::COMPACT), (GAP, V_GAP), "Compact keeps its tuned gaps");
+        let (h, v) = filter_gaps(&theme::COMFORTABLE);
+        assert!(h > GAP && v > V_GAP, "Comfortable is roomier: {h} / {v}");
+    }
+
+    #[test]
+    fn row_content_sits_centred_between_the_dividers() {
+        // Measured on round 3's 2× shots before the drop: 1.5 border to title ink, 5 pills to border.
+        let (top, bottom) = (1.5 + ROW_CONTENT_DROP, 5.0 - ROW_CONTENT_DROP);
+        assert!((top - bottom).abs() <= 0.5, "top {top} vs bottom {bottom}");
+        let under_pills = f32::from(ROW_PAD_BOTTOM) + ROW_PAD_BOTTOM_EXTRA + ROW_LINE_GAP;
+        assert_eq!(under_pills, 5.0 - ROW_CONTENT_DROP, "the drop comes out of the space under the pills");
+        const { assert!(TITLE_RAISE - ROW_CONTENT_DROP >= 0.0, "the title still sits in its slot") };
     }
 
     #[test]
@@ -2481,24 +2726,45 @@ mod tests {
         assert_eq!(1.0 + 4.5 + f32::from(ROW_PAD_TOP) + ROW_PAD_TOP_EXTRA, 6.0);
         // Round 10: the bottom measured 4.5 at a 4 + 0.5 pad (the pills' edge is their ink). The pill row moves up
         // 1.5; the item spacing also follows the pill row, so the space under it nets ROW_LINE_GAP + EXTRA.
-        let under_pills = f32::from(ROW_PAD_BOTTOM) + ROW_PAD_BOTTOM_EXTRA + ROW_LINE_GAP;
-        assert_eq!(under_pills, 5.0, "5 below the pills (round 15 C1)");
+        let under_pills = f32::from(ROW_PAD_BOTTOM) + ROW_PAD_BOTTOM_EXTRA + ROW_LINE_GAP + ROW_CONTENT_DROP;
+        assert_eq!(under_pills, 5.0, "5 below the pills before the drop (round 15 C1)");
         assert_eq!(ROW_LINE_GAP, -0.5, "the pill row 1 lower than round 10's −1.5");
         // Inside the frame: 0.5 + title + gap + pills + gap + extra; it was 0.5 + title + pills + 0.5.
-        assert_eq!(ROW_PAD_TOP_EXTRA + 2.0 * ROW_LINE_GAP + ROW_PAD_BOTTOM_EXTRA, 1.0, "the row keeps its height (pitch unchanged)");
+        let inside = ROW_PAD_TOP_EXTRA + 2.0 * ROW_LINE_GAP + ROW_PAD_BOTTOM_EXTRA + ROW_CONTENT_DROP + f32::from(ROW_PAD_BOTTOM);
+        assert_eq!(inside, 1.0 + 4.0, "the row keeps its height (pitch unchanged)");
     }
 
     #[test]
-    fn selected_row_keeps_its_dividers() {
-        let r = Rect::from_min_max(egui::pos2(0.0, 100.0), egui::pos2(10.0, 144.0));
-        assert_eq!(selected_dividers(r, 3, 10), [(100.5, 0.0), (143.5, 0.0)]);
-        assert_eq!(selected_dividers(r, 0, 10), [(100.5, 6.0), (143.5, 0.0)], "the first row's top goes over the frame, inside its corners");
-        assert_eq!(selected_dividers(r, 9, 10), [(100.5, 0.0), (143.5, 6.0)]);
-        assert_eq!(selected_dividers(r, 0, 1), [(100.5, 6.0), (143.5, 6.0)]);
+    fn issue_rows_use_the_kit_selection() {
         for p in [&theme::LIGHT, &theme::DARK] {
-            let edge = theme::over(crate::views::selected_edge(p), p.selected_row);
-            assert!(theme::contrast(edge, p.selected_row) > theme::contrast(p.border, p.selected_row), "dark={}", p.dark);
+            assert_eq!(issue_row_fill(true, true, p), p.selection(), "selection wins over hover");
+            assert_eq!(issue_row_fill(false, true, p), p.hover_row);
+            assert_eq!(issue_row_fill(false, false, p), p.surface);
+            assert!(theme::contrast(p.selection_edge(), p.selection()) >= 3.0, "dark={}", p.dark);
         }
+    }
+
+    #[test]
+    fn team_names_that_repeat_the_label_show_once() {
+        assert_eq!(team_display("OPS · OPₑSₛ"), "OPS");
+        assert_eq!(team_display("PLAT · Platform"), "PLAT · Platform");
+        assert_eq!(team_display("All teams"), "All teams");
+    }
+
+    #[test]
+    fn empty_lists_say_what_to_do_next() {
+        assert_eq!(empty_list_copy(CountSuffix::Jql, true).0, "No issues match this JQL");
+        assert!(empty_list_copy(CountSuffix::Jql, false).1.contains("Esc"));
+        assert_eq!(empty_list_copy(CountSuffix::None, true).1, "Clear filters to see every issue.");
+        assert_eq!(empty_list_copy(CountSuffix::None, false).0, "No issues here");
+    }
+
+    #[test]
+    fn hint_gaps_clear_the_key_chips() {
+        let pad = crate::views::components::KEY_CHIP_PAD.x;
+        assert_eq!(chip_gap(KEY_TO_WORD, true, false), KEY_TO_WORD + pad);
+        assert_eq!(chip_gap(SEP_SPACE, false, true), SEP_SPACE + pad);
+        assert_eq!(chip_gap(SEP_SPACE, false, false), SEP_SPACE);
     }
 
     #[test]
