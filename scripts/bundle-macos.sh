@@ -27,6 +27,7 @@ fi
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/jira-tickets"
+cp macos/AppIcon.icns "$APP/Contents/Resources/"
 sed "s/@version@/$VERSION/g" macos/Info.plist > "$APP/Contents/Info.plist"
 codesign --force --sign - "$APP"
 if [ "$INSTALL" = 0 ]; then

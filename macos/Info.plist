@@ -6,6 +6,7 @@
   <key>CFBundleDisplayName</key><string>Jira Tickets</string>
   <key>CFBundleIdentifier</key><string>dev.jira-tickets</string>
   <key>CFBundleExecutable</key><string>jira-tickets</string>
+  <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleVersion</key><string>@version@</string>
   <key>CFBundleShortVersionString</key><string>@version@</string>
