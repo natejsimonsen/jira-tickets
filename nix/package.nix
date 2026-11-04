@@ -16,6 +16,7 @@ rustPlatform.buildRustPackage {
     app="$out/Applications/Jira Tickets.app"
     mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
     substitute macos/Info.plist "$app/Contents/Info.plist" --replace-fail @version@ ${manifest.version}
+    cp macos/AppIcon.icns "$app/Contents/Resources/"
     mv $out/bin/jira-tickets "$app/Contents/MacOS/jira-tickets"
     ln -s "$app/Contents/MacOS/jira-tickets" $out/bin/jira-tickets
   '';

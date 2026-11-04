@@ -53,11 +53,18 @@ fn main() -> eframe::Result {
             .with_title("Jira Tickets")
             .with_app_id("jira-tickets")
             .with_inner_size([1440.0, 900.0])
-            .with_min_inner_size([900.0, 560.0]),
+            .with_min_inner_size([900.0, 560.0])
+            .with_icon(icon()),
         run_and_return: false,
         ..Default::default()
     };
     eframe::run_native("jira-tickets", options, Box::new(|cc| Ok(Box::new(app::App::new(cc, cfg)))))
+}
+
+/// The window and Dock icon; `scripts/make-icon.py` draws it.
+fn icon() -> egui::IconData {
+    let img = image::load_from_memory(include_bytes!("../macos/AppIcon-256.png")).expect("bundled icon decodes").into_rgba8();
+    egui::IconData { width: img.width(), height: img.height(), rgba: img.into_raw() }
 }
 
 #[cfg(test)]
@@ -139,5 +146,15 @@ pub mod testutil {
         let mut out = Vec::new();
         shapes.iter().for_each(|c| walk(&c.shape, &mut out));
         out
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn bundled_icon_decodes_at_256_px() {
+        let icon = super::icon();
+        assert_eq!((icon.width, icon.height), (256, 256));
+        assert_eq!(icon.rgba.len(), 256 * 256 * 4);
     }
 }
