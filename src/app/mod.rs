@@ -16,7 +16,7 @@ pub use pickers::{
     is_done_category, sprint_current_row, sprint_row_label, transition_row,
 };
 
-pub use standup::{StandupPhase, StandupState};
+pub use standup::{StandupPhase, StandupState, target_sprint};
 
 use shortcuts::close_shortcut;
 
