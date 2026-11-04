@@ -319,6 +319,10 @@ impl App {
                     if s == Screen::Grooming {
                         self.grooming.focused_since = Some(std::time::Instant::now());
                     }
+                    // The cards name the type each add creates: read the project's types once a launch.
+                    if s == Screen::Standup && !self.standup.types_fresh {
+                        self.load_issue_types();
+                    }
                     // Go-to is drawn on Issues and the summary on Grooming only: neither outlives its screen, so
                     // the hint bar and Esc agree with what is drawn.
                     self.goto = None;

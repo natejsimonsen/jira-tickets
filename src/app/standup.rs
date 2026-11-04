@@ -3,7 +3,7 @@
 use super::msg::{Msg, done_toast};
 use super::{App, Screen, ToastKind};
 use crate::jira;
-use crate::standup::{self, Review, Saved, Target};
+use crate::standup::{self, AddError, Added, Placed, Review, Saved, Target};
 use std::collections::{HashMap, HashSet};
 use std::time::Instant;
 
@@ -47,6 +47,10 @@ pub struct StandupState {
     pub adding: HashSet<String>,
     /// The focused card's title field takes focus on its next frame (`e`).
     pub focus_title: bool,
+    /// The project's issue types are being read (`App::load_issue_types`).
+    pub types_loading: bool,
+    /// The project's issue types were read this launch, so opening the screen does not read them again.
+    pub(super) types_fresh: bool,
     /// A stopped run's thread has not ended yet; a new run waits for it, so its late answer is never taken.
     pub stopping: bool,
     /// The running review's stop flag (`standup::set_run_stop`).
@@ -255,8 +259,37 @@ impl App {
         self.standup_move(0);
     }
 
-    /// Creates the focused card's ticket (its edited title) in the scope project with the team label, then moves it
-    /// into `target`'s sprint, on the write worker.
+    /// The scope project's creatable issue types, as last read; None before the first read.
+    pub fn standup_types(&self) -> Option<&[jira::IssueType]> {
+        self.standup.saved.issue_types.as_ref().filter(|t| t.project == self.cfg.scope.project).map(|t| t.types.as_slice())
+    }
+
+    /// The type an add creates for `s` (`standup::resolve_issue_type`): None while the types are unknown or when the
+    /// project has none to create.
+    pub fn standup_type_name(&self, s: &standup::Suggestion) -> Option<String> {
+        standup::resolve_issue_type(&s.issue_type, self.standup_types()?).map(|t| t.name.clone())
+    }
+
+    pub(super) fn issue_types_loaded(&mut self, project: String, result: jira::Result<Vec<jira::IssueType>>) {
+        self.standup.types_loading = false;
+        match result {
+            Ok(types) => {
+                self.standup.types_fresh |= project == self.cfg.scope.project;
+                self.standup.saved.issue_types = Some(standup::ProjectTypes { project, types });
+                self.save_standup();
+            }
+            Err(jira::Error::Unauthorized(m)) => {
+                self.client = None;
+                self.token_error = Some(m);
+            }
+            // The cached types stay; an add reads them itself when there are none.
+            Err(_) => {}
+        }
+    }
+
+    /// Creates the focused card's ticket (its edited title) in the scope project with the team label, as the
+    /// project's type for it, then moves it into `target`'s sprint, on the write worker. What is known to fail is not
+    /// sent: no type to create, or no such sprint on the board.
     pub(super) fn standup_add(&mut self, target: Target) {
         let Some((i, key)) = self.standup_focused() else { return };
         if let Some(issue) = self.standup.saved.added.get(&key) {
@@ -277,24 +310,37 @@ impl App {
             self.toast_kind("Give the ticket a title first", ToastKind::Info);
             return;
         }
-        let fields = standup::create_fields(&self.cfg.scope.project, &self.cfg.scope.team_label, &title, &s);
+        let project = self.cfg.scope.project.clone();
+        let types = self.standup_types().map(<[_]>::to_vec);
+        if types.as_ref().is_some_and(|t| standup::resolve_issue_type(&s.issue_type, t).is_none()) {
+            let (text, kind) = add_failed_toast(&project, &AddError::NoType);
+            self.toast_kind(text, kind);
+            return;
+        }
+        if let Err(why) = target_sprint(target, &self.sprints) {
+            let (text, kind) = add_failed_toast(&project, &AddError::Sprint(why));
+            self.toast_kind(text, kind);
+            return;
+        }
+        let ticket = standup::NewTicket { project, label: self.cfg.scope.team_label.clone(), title, suggestion: s };
         let board = self.cfg.scope.board_id;
         self.standup.adding.insert(key.clone());
         self.spawn_write(move |c, tx| {
-            let _ = tx.send(Msg::StandupAdded { dkey: key, result: standup::add_ticket(c, fields, board, target) });
+            let (result, fresh) = standup::add_ticket(c, &ticket, types, board, target);
+            if let Some(types) = fresh {
+                let _ = tx.send(Msg::IssueTypes { project: ticket.project.clone(), result: Ok(types) });
+            }
+            let _ = tx.send(Msg::StandupAdded { dkey: key, result });
         });
     }
 
-    pub(super) fn standup_added(&mut self, dkey: String, result: jira::Result<(String, Result<Option<String>, String>)>) {
+    pub(super) fn standup_added(&mut self, dkey: String, result: Result<Added, AddError>) {
         self.standup.adding.remove(&dkey);
+        let project = self.cfg.scope.project.clone();
         match result {
-            Ok((issue, placed)) => {
-                let (text, kind) = match &placed {
-                    Ok(Some(sprint)) => (format!("Created {issue} in {sprint}"), ToastKind::Success),
-                    Ok(None) => (format!("Created {issue} in the backlog"), ToastKind::Success),
-                    Err(e) => (format!("Created {issue}, but couldn't move it to the sprint: {e}"), ToastKind::Error),
-                };
-                self.standup.saved.added.insert(dkey.clone(), issue);
+            Ok(added) => {
+                let (text, kind) = added_toast(&project, &added);
+                self.standup.saved.added.insert(dkey.clone(), added.key);
                 self.standup.titles.remove(&dkey);
                 self.save_standup();
                 self.toast_kind(text, kind);
@@ -303,8 +349,12 @@ impl App {
                 }
             }
             Err(e) => {
-                let (text, kind) = done_toast("Create", &Err(e));
+                let (text, kind) = add_failed_toast(&project, &e);
                 self.toast_kind(text, kind);
+                if let AddError::Create(jira::Error::Unauthorized(m)) | AddError::Types(jira::Error::Unauthorized(m)) = e {
+                    self.client = None;
+                    self.token_error = Some(m);
+                }
             }
         }
     }
@@ -331,6 +381,47 @@ impl App {
         if self.persist_cache {
             crate::cache::store(standup::CACHE_KEY, &self.standup.saved);
         }
+    }
+}
+
+/// The sprint an add to `target` lands in, as far as the board's known sprints (`App::sprints`) tell: Ok(None) for
+/// the backlog or while no sprint is known, Err(why) when the board has none for it.
+pub fn target_sprint(target: Target, sprints: &[jira::Sprint]) -> Result<Option<String>, String> {
+    if target == Target::Backlog || sprints.is_empty() {
+        return Ok(None);
+    }
+    Ok(standup::pick_sprint(target, sprints)?.map(|s| s.name.clone()))
+}
+
+/// " (Task)", or " as a Task (no Story in CI)" when the project had no type of the asked-for name.
+fn type_phrase(project: &str, added: &Added) -> String {
+    let (got, wanted) = (added.issue_type.as_str(), added.wanted.trim());
+    if wanted.is_empty() || got.eq_ignore_ascii_case(wanted) {
+        return format!(" ({got})");
+    }
+    let article = if got.starts_with(['A', 'E', 'I', 'O', 'U', 'a', 'e', 'i', 'o', 'u']) { "an" } else { "a" };
+    format!(" as {article} {got} (no {wanted} in {project})")
+}
+
+/// The toast for a created ticket: its key, its type, and where it is.
+pub fn added_toast(project: &str, added: &Added) -> (String, ToastKind) {
+    let ty = type_phrase(project, added);
+    let key = &added.key;
+    match &added.placed {
+        Placed::Sprint(sprint) => (format!("Created {key}{ty} in {sprint}"), ToastKind::Success),
+        Placed::Backlog => (format!("Created {key}{ty} in the backlog"), ToastKind::Success),
+        Placed::NotMoved { sprint, why } => (format!("Created {key}{ty} in the backlog, but couldn't move it to {sprint}: {why}"), ToastKind::Error),
+    }
+}
+
+/// The toast for an add that created nothing.
+pub fn add_failed_toast(project: &str, e: &AddError) -> (String, ToastKind) {
+    match e {
+        AddError::NoType => (format!("Can't create in {project}: the project has no issue type you can create"), ToastKind::Error),
+        AddError::Types(e) => (format!("Create failed: couldn't read the issue types of {project}: {}", jira::reason(e)), ToastKind::Error),
+        AddError::Sprint(why) => (format!("Not created: {why}"), ToastKind::Error),
+        AddError::Create(e) if jira::is_read_only(e) => done_toast("Create", &Err(e.clone())),
+        AddError::Create(e) => (format!("Create failed: {}", jira::reason(e)), ToastKind::Error),
     }
 }
 
@@ -488,35 +579,154 @@ mod tests {
         assert_eq!(app.standup.cursor, 0);
     }
 
+    fn types_json() -> serde_json::Value {
+        // Like a project without Story: Task, Bug, Epic and a sub-task.
+        serde_json::json!({ "issueTypes": [
+            { "id": "10001", "name": "Task", "subtask": false },
+            { "id": "10002", "name": "Bug", "subtask": false },
+            { "id": "10000", "name": "Epic", "subtask": false },
+            { "id": "10003", "name": "Sub-task", "subtask": true },
+        ], "startAt": 0, "maxResults": 50, "total": 4 })
+    }
+
+    fn types(names: &[(&str, &str)]) -> Vec<jira::IssueType> {
+        names.iter().map(|(id, name)| jira::IssueType { id: (*id).into(), name: (*name).into(), subtask: false }).collect()
+    }
+
+    fn cache_types(app: &mut App, names: &[(&str, &str)]) {
+        app.standup.saved.issue_types = Some(standup::ProjectTypes { project: "CI".into(), types: types(names) });
+    }
+
+    /// The reads `refresh_all` starts after a create, answered, so none of them toasts over the create's toast.
+    const RELOADS: [(&str, &str); 2] = [("POST", "/rest/api/3/search/jql"), ("GET", "/rest/agile/1.0/board/")];
+
+    fn reload_routes() -> Vec<(&'static str, &'static str, serde_json::Value)> {
+        vec![(RELOADS[0].0, RELOADS[0].1, serde_json::json!({ "issues": [] })), (RELOADS[1].0, RELOADS[1].1, serde_json::json!({ "values": [] }))]
+    }
+
+    fn toast(app: &App) -> Option<(&str, ToastKind)> {
+        app.toast.as_ref().map(|t| (t.text.as_str(), t.kind))
+    }
+
+    /// The create request among the recorded ones.
+    fn create_body(rx: &std::sync::mpsc::Receiver<jira::tests::Recorded>) -> serde_json::Value {
+        let r = rx.try_iter().find(|r| r.method == "POST" && r.path == "/rest/api/3/issue").expect("a create");
+        serde_json::from_str(&r.body).unwrap()
+    }
+
     #[test]
     fn add_creates_with_the_edited_title_and_remembers_it() {
         let _g = jira::tests::WRITE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let sprints = serde_json::json!({ "values": [{ "id": 7, "name": "Sprint 92", "state": "active" }] });
-        let (base, rx) = jira::tests::stub_server(vec![
+        let mut routes = vec![
+            ("GET", "/rest/api/3/issue/createmeta/CI/issuetypes", types_json()),
             ("POST", "/rest/api/3/issue", serde_json::json!({ "key": "CI-42" })),
             ("GET", "/rest/agile/1.0/board/101/sprint", sprints),
             ("POST", "/rest/agile/1.0/sprint/7/issue", serde_json::json!({})),
-            ("POST", "/rest/api/3/search/jql", serde_json::json!({ "issues": [] })),
-        ]);
+        ];
+        routes.extend(reload_routes());
+        let (base, rx) = jira::tests::stub_server(routes);
         let mut app = App::for_test(cfg(), Some(client(&base)));
         with_review(&mut app);
+        assert_eq!(app.standup_type_name(&app.standup.saved.visible()[0].clone()), None, "the types are not read yet: no type shown");
         app.standup.titles.insert("url:https://a".into(), "Edited title".into());
         let ctx = egui::Context::default();
         app.apply(Action::StandupAdd(Target::CurrentSprint), &ctx);
         assert!(app.standup.adding.contains("url:https://a"));
         app.apply(Action::StandupAdd(Target::CurrentSprint), &ctx);
-        pump(&mut app, 1);
-        let create: serde_json::Value = serde_json::from_str(&rx.recv().unwrap().body).unwrap();
+        // The write worker read the types itself (they come back for the cache), then created.
+        pump(&mut app, 2);
+        let create = create_body(&rx);
         assert_eq!(create["fields"]["summary"], "Edited title");
         assert_eq!(create["fields"]["project"]["key"], "CI");
+        assert_eq!(create["fields"]["issuetype"], serde_json::json!({ "id": "10001" }));
         assert_eq!(create["fields"]["labels"], serde_json::json!(["PLAT"]));
         assert_eq!(app.standup.saved.added.get("url:https://a").map(String::as_str), Some("CI-42"));
-        assert_eq!(app.toast.as_ref().map(|t| t.text.as_str()), Some("Created CI-42 in Sprint 92"));
+        assert_eq!(toast(&app), Some(("Created CI-42 (Task) in Sprint 92", ToastKind::Success)));
+        assert_eq!(app.standup_types().map(<[_]>::len), Some(4), "the read types are cached");
         assert!(app.standup.adding.is_empty());
         assert_eq!(app.standup_keys().len(), 3, "an added card stays, marked added");
         app.apply(Action::StandupAdd(Target::Backlog), &ctx);
-        assert_eq!(app.toast.as_ref().map(|t| t.text.as_str()), Some("Already added as CI-42"));
+        assert_eq!(toast(&app), Some(("Already added as CI-42", ToastKind::Info)));
         assert!(app.standup.adding.is_empty(), "not created twice");
+    }
+
+    #[test]
+    fn a_story_in_a_project_without_one_is_created_as_a_task_and_the_toast_says_so() {
+        let _g = jira::tests::WRITE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut routes = vec![("POST", "/rest/api/3/issue", serde_json::json!({ "key": "CI-42" }))];
+        routes.extend(reload_routes());
+        let (base, rx) = jira::tests::stub_server(routes);
+        let mut app = App::for_test(cfg(), Some(client(&base)));
+        with_review(&mut app);
+        app.standup.saved.review.as_mut().unwrap().suggestions[0].issue_type = "Story".into();
+        cache_types(&mut app, &[("10001", "Task"), ("10002", "Bug"), ("10000", "Epic")]);
+        let story = app.standup.saved.visible()[0].clone();
+        assert_eq!(app.standup_type_name(&story).as_deref(), Some("Task"), "the card names what will be created");
+        app.apply(Action::StandupAdd(Target::Backlog), &egui::Context::default());
+        pump(&mut app, 1);
+        assert_eq!(create_body(&rx)["fields"]["issuetype"], serde_json::json!({ "id": "10001" }), "Story wanted, Task sent by id");
+        assert_eq!(toast(&app), Some(("Created CI-42 as a Task (no Story in CI) in the backlog", ToastKind::Success)));
+    }
+
+    #[test]
+    fn known_failures_send_nothing_and_say_why() {
+        let _g = jira::tests::WRITE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (base, rx) = jira::tests::stub_server(vec![]);
+        let mut app = App::for_test(cfg(), Some(client(&base)));
+        with_review(&mut app);
+        let ctx = egui::Context::default();
+        cache_types(&mut app, &[("10000", "Epic")]);
+        app.apply(Action::StandupAdd(Target::Backlog), &ctx);
+        assert_eq!(toast(&app), Some(("Can't create in CI: the project has no issue type you can create", ToastKind::Error)));
+        cache_types(&mut app, &[("10001", "Task")]);
+        app.sprints = vec![jira::Sprint { id: 7, name: "Sprint 92".into(), state: "active".into() }];
+        app.apply(Action::StandupAdd(Target::NextSprint), &ctx);
+        assert_eq!(toast(&app), Some(("Not created: the board has no future sprint", ToastKind::Error)));
+        assert!(app.standup.adding.is_empty());
+        assert!(rx.try_recv().is_err(), "no request sent");
+    }
+
+    #[test]
+    fn a_rejected_create_reads_as_jiras_reason() {
+        let _g = jira::tests::WRITE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let rejected = serde_json::json!({ "errorMessages": [], "errors": { "issuetype": "Specify a valid issue type" } });
+        let (base, _rx) = jira::tests::stub_server_codes(vec![
+            ("GET", "/rest/api/3/issue/createmeta/CI/issuetypes", 200, types_json()),
+            ("POST", "/rest/api/3/issue", 400, rejected),
+        ]);
+        let mut app = App::for_test(cfg(), Some(client(&base)));
+        with_review(&mut app);
+        cache_types(&mut app, &[("10001", "Task")]);
+        app.apply(Action::StandupAdd(Target::Backlog), &egui::Context::default());
+        // Jira rejected the cached type: the types are read again (and cached), the create tried once more.
+        pump(&mut app, 2);
+        assert_eq!(toast(&app), Some(("Create failed: issuetype: Specify a valid issue type", ToastKind::Error)));
+        assert!(!app.standup.saved.added.contains_key("url:https://a"));
+        assert!(app.standup.adding.is_empty());
+    }
+
+    #[test]
+    fn types_load_on_opening_standup_once_and_on_its_refresh() {
+        let (base, rx) = jira::tests::stub_server(vec![("GET", "/rest/api/3/issue/createmeta/CI/issuetypes", types_json())]);
+        let mut app = App::for_test(cfg(), None);
+        let ctx = egui::Context::default();
+        app.apply(Action::SetScreen(Screen::Standup), &ctx);
+        assert!(!app.standup.types_loading, "no client: nothing would clear the flag");
+        app.apply(Action::SetScreen(Screen::Issues), &ctx);
+        app.client = Some(client(&base));
+        app.apply(Action::SetScreen(Screen::Standup), &ctx);
+        assert!(app.standup.types_loading);
+        pump(&mut app, 1);
+        assert_eq!(app.standup_types().map(|t| t.iter().map(|t| t.name.as_str()).collect::<Vec<_>>()), Some(vec!["Task", "Bug", "Epic", "Sub-task"]));
+        app.apply(Action::SetScreen(Screen::Issues), &ctx);
+        app.apply(Action::SetScreen(Screen::Standup), &ctx);
+        assert!(!app.standup.types_loading, "read once a launch");
+        assert_eq!(rx.try_iter().filter(|r| r.path.contains("createmeta")).count(), 1);
+        app.handle(Msg::IssueTypes { project: "CI".into(), result: Err(jira::Error::Other("Jira returned 500".into())) });
+        assert_eq!(app.standup_types().map(<[_]>::len), Some(4), "a failed read keeps the last types");
+        app.standup.saved.issue_types.as_mut().unwrap().project = "OTHER".into();
+        assert!(app.standup_types().is_none(), "another project's types are not this one's");
     }
 
     #[test]
@@ -551,11 +761,48 @@ mod tests {
         let mut app = App::for_test(cfg(), None);
         with_review(&mut app);
         app.standup.adding.insert("url:https://b".into());
-        app.handle(Msg::StandupAdded { dkey: "url:https://b".into(), result: Ok(("CI-9".into(), Err("the board has no future sprint".into()))) });
+        let placed = Placed::NotMoved { sprint: "Sprint 92".into(), why: "Jira returned 403: no".into() };
+        let added = Added { key: "CI-9".into(), issue_type: "Task".into(), wanted: "Task".into(), placed };
+        app.handle(Msg::StandupAdded { dkey: "url:https://b".into(), result: Ok(added) });
         assert_eq!(app.standup.saved.added.get("url:https://b").map(String::as_str), Some("CI-9"));
-        assert_eq!(app.toast.as_ref().map(|t| t.kind), Some(ToastKind::Error));
-        app.handle(Msg::StandupAdded { dkey: "url:https://a".into(), result: Err(jira::Error::Other("Jira returned 400: issuetype".into())) });
+        assert_eq!(toast(&app), Some(("Created CI-9 (Task) in the backlog, but couldn't move it to Sprint 92: Jira returned 403: no", ToastKind::Error)));
+        app.handle(Msg::StandupAdded {
+            dkey: "url:https://a".into(),
+            result: Err(AddError::Create(jira::Error::Other("Jira returned 400: issuetype: x".into()))),
+        });
         assert!(!app.standup.saved.added.contains_key("url:https://a"));
+        assert_eq!(toast(&app), Some(("Create failed: issuetype: x", ToastKind::Error)), "no doubled prefix");
+    }
+
+    #[test]
+    fn toasts_say_what_was_created_and_where() {
+        let added = |ty: &str, wanted: &str, placed: Placed| Added { key: "CI-42".into(), issue_type: ty.into(), wanted: wanted.into(), placed };
+        let text = |a: Added| added_toast("CI", &a).0;
+        assert_eq!(text(added("Task", "Task", Placed::Sprint("Sprint 92".into()))), "Created CI-42 (Task) in Sprint 92");
+        assert_eq!(text(added("Task", "task", Placed::Backlog)), "Created CI-42 (Task) in the backlog");
+        assert_eq!(text(added("Task", "Story", Placed::Sprint("Sprint 92".into()))), "Created CI-42 as a Task (no Story in CI) in Sprint 92");
+        assert_eq!(text(added("Improvement", "Bug", Placed::Backlog)), "Created CI-42 as an Improvement (no Bug in CI) in the backlog");
+        assert_eq!(text(added("Task", "", Placed::Backlog)), "Created CI-42 (Task) in the backlog");
+        let fail = |e: AddError| add_failed_toast("CI", &e);
+        assert_eq!(fail(AddError::NoType), ("Can't create in CI: the project has no issue type you can create".into(), ToastKind::Error));
+        assert_eq!(fail(AddError::Sprint("the board has no active sprint".into())).0, "Not created: the board has no active sprint");
+        assert_eq!(
+            fail(AddError::Types(jira::Error::Other("Jira returned 404: no project".into()))).0,
+            "Create failed: couldn't read the issue types of CI: Jira returned 404: no project"
+        );
+        let ro = jira::Error::Other("read-only mode, so nothing was sent to Jira".into());
+        assert_eq!(fail(AddError::Create(ro)).1, ToastKind::Info);
+    }
+
+    #[test]
+    fn target_sprints_name_what_the_board_has() {
+        let s = |id, name: &str, state: &str| jira::Sprint { id, name: name.into(), state: state.into() };
+        let both = [s(7, "Sprint 92", "active"), s(8, "Sprint 93", "future")];
+        assert_eq!(target_sprint(Target::CurrentSprint, &both), Ok(Some("Sprint 92".into())));
+        assert_eq!(target_sprint(Target::NextSprint, &both), Ok(Some("Sprint 93".into())));
+        assert_eq!(target_sprint(Target::Backlog, &both), Ok(None));
+        assert_eq!(target_sprint(Target::NextSprint, &both[..1]), Err("the board has no future sprint".into()));
+        assert_eq!(target_sprint(Target::NextSprint, &[]), Ok(None), "no sprints known yet: the add finds out");
     }
 
     #[test]

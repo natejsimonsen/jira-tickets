@@ -62,7 +62,8 @@ pub fn map_status(code: u16, body: &str) -> Error {
 /// Jira error bodies: {"errorMessages": [...], "errors": {field: msg}}.
 fn extract_error(body: &str) -> Option<String> {
     let v: Value = serde_json::from_str(body).ok()?;
-    let mut parts: Vec<String> = v["errorMessages"].as_array()?.iter().filter_map(|m| m.as_str().map(String::from)).collect();
+    let messages = v["errorMessages"].as_array().map(Vec::as_slice).unwrap_or_default();
+    let mut parts: Vec<String> = messages.iter().filter_map(|m| m.as_str().map(String::from)).collect();
     if let Some(errs) = v["errors"].as_object() {
         parts.extend(errs.iter().map(|(k, m)| format!("{k}: {}", m.as_str().unwrap_or(""))));
     }
@@ -147,6 +148,14 @@ pub struct Transition {
 pub struct Resolution {
     pub id: String,
     pub name: String,
+}
+
+/// An issue type a project lets the user create (`Client::creatable_issue_types`).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct IssueType {
+    pub id: String,
+    pub name: String,
+    pub subtask: bool,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -478,6 +487,30 @@ impl Client {
             .unwrap_or_default())
     }
 
+    /// Every issue type the user can create in `project`, all pages of Jira's create metadata.
+    pub fn creatable_issue_types(&self, project: &str) -> Result<Vec<IssueType>> {
+        let mut out = Vec::new();
+        // A cap, so a server that ignores startAt cannot loop forever; 100 pages is 5000 types.
+        for _ in 0..100 {
+            let v = self.get(&format!("/rest/api/3/issue/createmeta/{}/issuetypes?startAt={}&maxResults=50", urlencode(project), out.len()))?;
+            let page = v["issueTypes"].as_array().or_else(|| v["values"].as_array()).map(Vec::as_slice).unwrap_or_default();
+            out.extend(page.iter().map(|t| IssueType {
+                id: str_at(t, &["id"]).unwrap_or_default(),
+                name: str_at(t, &["name"]).unwrap_or_default(),
+                subtask: t["subtask"].as_bool().unwrap_or(false),
+            }));
+            let total = v["total"].as_u64().map(|n| n as usize);
+            // Guard against a misbehaving server: an empty page always ends it.
+            if page.is_empty() || v["isLast"].as_bool() == Some(true) || total.is_some_and(|n| out.len() >= n) {
+                break;
+            }
+            if total.is_none() && v["isLast"].is_null() && page.len() < v["maxResults"].as_u64().unwrap_or(50) as usize {
+                break;
+            }
+        }
+        Ok(out)
+    }
+
     pub fn transition(&self, key: &str, transition_id: &str, resolution_id: Option<&str>) -> Result<()> {
         check_writable()?;
         let mut body = json!({ "transition": { "id": transition_id } });
@@ -556,6 +589,13 @@ fn retry_after(header: Option<&str>) -> Duration {
     Duration::from_secs(header.and_then(|v| v.trim().parse::<u64>().ok()).unwrap_or(2).min(10))
 }
 
+/// The error in plain words: Jira's own message without the "Jira returned 400: " in front, so a rejected field
+/// reads "issuetype: Specify a valid issue type". Other codes keep theirs.
+pub fn reason(e: &Error) -> String {
+    let m = e.to_string();
+    m.strip_prefix("Jira returned 400: ").map(String::from).unwrap_or(m)
+}
+
 pub fn needs_resolution(e: &Error) -> bool {
     e.to_string().to_ascii_lowercase().contains("resolution")
 }
@@ -629,6 +669,15 @@ pub mod tests {
     /// Like `stub_server`, but each route first answers its last element's
     /// count of requests with 429 (Retry-After: 0).
     pub fn stub_server_throttled(routes: Vec<(&'static str, &'static str, serde_json::Value, usize)>) -> (String, Receiver<Recorded>) {
+        serve(routes.into_iter().map(|(m, p, v, n)| (m, p, v, n, 200)).collect())
+    }
+
+    /// Like `stub_server`, but each route answers with its own HTTP status (400 for a rejected create).
+    pub fn stub_server_codes(routes: Vec<(&'static str, &'static str, u16, serde_json::Value)>) -> (String, Receiver<Recorded>) {
+        serve(routes.into_iter().map(|(m, p, code, v)| (m, p, v, 0, code)).collect())
+    }
+
+    fn serve(routes: Vec<(&'static str, &'static str, serde_json::Value, usize, u16)>) -> (String, Receiver<Recorded>) {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let base = format!("http://{}", listener.local_addr().unwrap());
         let (tx, rx) = channel();
@@ -667,15 +716,16 @@ pub mod tests {
                 let method = first.next().unwrap_or("").to_string();
                 let path = first.next().unwrap_or("").to_string();
                 let body = String::from_utf8_lossy(&buf[h..h + content_len]).to_string();
-                let route = routes.iter().position(|(m, p, _, _)| *m == method && path.starts_with(p));
+                let route = routes.iter().position(|(m, p, _, _, _)| *m == method && path.starts_with(p));
                 let _ = tx.send(Recorded { method, path, body });
                 let (code, text) = match route {
                     Some(i) if throttle[i] > 0 => {
                         throttle[i] -= 1;
-                        ("429 Too Many Requests\r\nRetry-After: 0", "{}".to_string())
+                        ("429 Too Many Requests\r\nRetry-After: 0".to_string(), "{}".to_string())
                     }
-                    Some(i) => ("200 OK", routes[i].2.to_string()),
-                    None => ("404 Not Found", "{}".to_string()),
+                    Some(i) if routes[i].4 == 200 => ("200 OK".to_string(), routes[i].2.to_string()),
+                    Some(i) => (format!("{} Error", routes[i].4), routes[i].2.to_string()),
+                    None => ("404 Not Found".to_string(), "{}".to_string()),
                 };
                 let _ = write!(s, "HTTP/1.1 {code}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{text}", text.len());
             }
@@ -1000,6 +1050,61 @@ pub mod tests {
         assert!(!is_unresolved_assignee(&Error::Other("Jira returned 400: The value 'x' does not exist for the field 'labels'.".into())));
         assert!(!is_unresolved_assignee(&Error::Network("does not exist for the field 'assignee'".into())), "only Jira's own reply");
         assert!(!is_unresolved_assignee(&Error::Other("boom".into())));
+    }
+
+    #[test]
+    fn creatable_issue_types_follow_every_page() {
+        let t = |id: &str, name: &str, sub: bool| serde_json::json!({ "id": id, "name": name, "subtask": sub, "description": "x" });
+        let p1 = serde_json::json!({ "issueTypes": [t("1", "Task", false), t("2", "Bug", false)], "startAt": 0, "maxResults": 2, "total": 3 });
+        let p2 = serde_json::json!({ "issueTypes": [t("5", "Sub-task", true)], "startAt": 2, "maxResults": 2, "total": 3 });
+        let (base, rx) = stub_server(vec![
+            ("GET", "/rest/api/3/issue/createmeta/CI/issuetypes?startAt=0&", p1),
+            ("GET", "/rest/api/3/issue/createmeta/CI/issuetypes?startAt=2&", p2),
+        ]);
+        let got = client(&base).creatable_issue_types("CI").unwrap();
+        let names: Vec<(&str, &str, bool)> = got.iter().map(|t| (t.id.as_str(), t.name.as_str(), t.subtask)).collect();
+        assert_eq!(names, [("1", "Task", false), ("2", "Bug", false), ("5", "Sub-task", true)]);
+        let paths: Vec<String> = rx.try_iter().map(|r| r.path).collect();
+        assert_eq!(
+            paths,
+            ["/rest/api/3/issue/createmeta/CI/issuetypes?startAt=0&maxResults=50", "/rest/api/3/issue/createmeta/CI/issuetypes?startAt=2&maxResults=50"]
+        );
+    }
+
+    #[test]
+    fn creatable_issue_types_stop_on_is_last_a_short_page_or_an_empty_one() {
+        let one = serde_json::json!([{ "id": "1", "name": "Task" }]);
+        for page in [
+            serde_json::json!({ "values": one, "isLast": true, "total": 99 }),
+            serde_json::json!({ "issueTypes": one, "maxResults": 50 }),
+            serde_json::json!({ "issueTypes": [], "total": 99 }),
+        ] {
+            let (base, rx) = stub_server(vec![("GET", "/rest/api/3/issue/createmeta/", page.clone())]);
+            let got = client(&base).creatable_issue_types("CI").unwrap();
+            assert!(got.len() <= 1, "{page}");
+            assert_eq!(rx.try_iter().count(), 1, "one request: {page}");
+        }
+        let (base, _rx) = stub_server(vec![]);
+        assert!(client(&base).creatable_issue_types("CI").is_err(), "a 404 is an error, not no types");
+    }
+
+    #[test]
+    fn creatable_issue_types_is_a_read_in_read_only_mode() {
+        let _g = WRITE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _ro = ReadOnlyGuard::new();
+        let (base, _rx) =
+            stub_server(vec![("GET", "/rest/api/3/issue/createmeta/", serde_json::json!({ "issueTypes": [{ "id": "1", "name": "Task" }], "isLast": true }))]);
+        assert_eq!(client(&base).creatable_issue_types("CI").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn reasons_drop_the_400_prefix_only() {
+        let e = map_status(400, r#"{"errorMessages":[],"errors":{"issuetype":"Specify a valid issue type"}}"#);
+        assert_eq!(reason(&e), "issuetype: Specify a valid issue type");
+        let e = map_status(400, r#"{"errors":{"issuetype":"Specify a valid issue type"}}"#);
+        assert_eq!(reason(&e), "issuetype: Specify a valid issue type", "no errorMessages array at all");
+        assert_eq!(reason(&Error::Other("Jira returned 403: no".into())), "Jira returned 403: no");
+        assert_eq!(reason(&Error::Network("Network error: refused".into())), "Network error: refused");
     }
 
     #[test]

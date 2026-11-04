@@ -67,10 +67,15 @@ pub enum Msg {
     StandupActivity(jira::Result<usize>),
     /// The Standup review's answer from `claude`.
     StandupReview(Result<crate::standup::Review, String>),
-    /// A suggested ticket was created: its key, and the sprint it moved to (None: the backlog) or why it did not.
+    /// A suggested ticket was added: what was created and where it is, or why nothing was.
     StandupAdded {
         dkey: String,
-        result: jira::Result<(String, Result<Option<String>, String>)>,
+        result: Result<crate::standup::Added, crate::standup::AddError>,
+    },
+    /// The project's creatable issue types (`Client::creatable_issue_types`).
+    IssueTypes {
+        project: String,
+        result: jira::Result<Vec<jira::IssueType>>,
     },
     /// The Standup screen's ticket cards: done in the window, and in progress.
     StandupTickets(jira::Result<crate::standup::Tickets>),
@@ -95,6 +100,7 @@ impl App {
             Msg::StandupReview(result) => self.standup_reviewed(result),
             Msg::StandupAdded { dkey, result } => self.standup_added(dkey, result),
             Msg::StandupTickets(result) => self.standup_tickets_loaded(result),
+            Msg::IssueTypes { project, result } => self.issue_types_loaded(project, result),
             Msg::DoneRecent { member, result } => {
                 self.team.done_loading.remove(&member);
                 match result {
