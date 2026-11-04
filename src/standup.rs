@@ -692,9 +692,9 @@ pub struct ProjectTypes {
     pub types: Vec<IssueType>,
 }
 
-/// Jira's create `fields` for a suggestion: in `project`, of type `ty` (by id), labelled `label`, with the source
-/// under the description.
-pub fn create_fields(project: &str, label: &str, title: &str, s: &Suggestion, ty: &IssueType) -> Value {
+/// Jira's create `fields` for a suggestion: in `project`, of type `ty` (by id), labelled `label`, assigned to
+/// `assignee` (an account id), with the source under the description.
+pub fn create_fields(project: &str, label: &str, title: &str, s: &Suggestion, ty: &IssueType, assignee: &str) -> Value {
     let mut text = s.description.trim().to_string();
     if !s.source_url.trim().is_empty() {
         text.push_str(&format!("\n\nSource ({}): {}", s.source_kind.name(), s.source_url.trim()));
@@ -704,6 +704,7 @@ pub fn create_fields(project: &str, label: &str, title: &str, s: &Suggestion, ty
         "summary": title.trim(),
         "issuetype": { "id": ty.id },
         "labels": [label],
+        "assignee": { "accountId": assignee },
     });
     if !text.trim().is_empty() {
         fields["description"] = crate::adf::text_doc(&text);
@@ -719,6 +720,8 @@ pub struct NewTicket {
     /// The edited title.
     pub title: String,
     pub suggestion: Suggestion,
+    /// The signed-in user's account id, the ticket's assignee; None while the app does not know it yet.
+    pub assignee: Option<String>,
 }
 
 /// Where a created ticket ended up.
@@ -753,9 +756,12 @@ pub enum AddError {
     Sprint(String),
     /// Jira refused the create (or read-only mode did).
     Create(jira::Error),
+    /// The signed-in user (the assignee) could not be read.
+    Me(jira::Error),
 }
 
-/// Creates the ticket as the project's type for it, then moves it into `target`'s sprint. `cached` are the project's
+/// Creates the ticket as the project's type for it, assigned to the signed-in user, then moves it into `target`'s
+/// sprint. Without `t.assignee` the user is read first; when that fails nothing is created. `cached` are the project's
 /// types as last read; None reads them first. The sprint is found before anything is created, so a missing sprint
 /// creates nothing. A cached list Jira no longer agrees with (no type left, or the create rejects the type) is read
 /// again and the create tried once more. Returns the outcome and the types read on the way, if any, for the cache.
@@ -763,6 +769,14 @@ pub fn add_ticket(c: &Client, t: &NewTicket, cached: Option<Vec<IssueType>>, boa
     if let Err(e) = jira::check_writable() {
         return (Err(AddError::Create(e)), None);
     }
+    let assignee = match t.assignee.as_deref().filter(|a| !a.is_empty()) {
+        Some(a) => a.to_string(),
+        None => match c.myself() {
+            Ok(me) if !me.account_id.is_empty() => me.account_id,
+            Ok(_) => return (Err(AddError::Me(jira::Error::Other("Jira returned no account id".into()))), None),
+            Err(e) => return (Err(AddError::Me(e)), None),
+        },
+    };
     let read = || c.creatable_issue_types(&t.project).map_err(AddError::Types);
     let mut fresh = None;
     let types = match cached {
@@ -784,7 +798,7 @@ pub fn add_ticket(c: &Client, t: &NewTicket, cached: Option<Vec<IssueType>>, boa
     };
     let create = |types: &[IssueType]| -> Result<(String, String), AddError> {
         let ty = resolve_issue_type(&t.suggestion.issue_type, types).ok_or(AddError::NoType)?;
-        let key = c.create_issue(create_fields(&t.project, &t.label, &t.title, &t.suggestion, ty)).map_err(AddError::Create)?;
+        let key = c.create_issue(create_fields(&t.project, &t.label, &t.title, &t.suggestion, ty, &assignee)).map_err(AddError::Create)?;
         Ok((key, ty.name.clone()))
     };
     let mut created = create(&types);
@@ -1558,14 +1572,15 @@ mod tests {
             source_url: "https://x.slack.com/p1".into(),
             ..Default::default()
         };
-        let f = create_fields("CI", "PLAT", " New title ", &s, &ty("10004", "Task"));
+        let f = create_fields("CI", "PLAT", " New title ", &s, &ty("10004", "Task"), "acc-1");
         assert_eq!(f["project"]["key"], "CI");
         assert_eq!(f["summary"], "New title", "the edited title, trimmed");
         assert_eq!(f["issuetype"], json!({ "id": "10004" }), "the resolved type, by id");
         assert_eq!(f["labels"], json!(["PLAT"]));
+        assert_eq!(f["assignee"], json!({ "accountId": "acc-1" }), "assigned to the signed-in user");
         let text = crate::adf::to_plain_text(&f["description"]);
         assert!(text.contains("Do the thing.") && text.contains("Source (Slack): https://x.slack.com/p1"), "{text}");
-        let bare = create_fields("CI", "PLAT", "T", &Suggestion { issue_type: "Task".into(), ..Default::default() }, &ty("1", "Task"));
+        let bare = create_fields("CI", "PLAT", "T", &Suggestion { issue_type: "Task".into(), ..Default::default() }, &ty("1", "Task"), "acc-1");
         assert!(bare.get("description").is_none(), "no empty description");
     }
 
@@ -1574,7 +1589,13 @@ mod tests {
     }
 
     fn new_ticket(wanted: &str) -> NewTicket {
-        NewTicket { project: "CI".into(), label: "PLAT".into(), title: "T".into(), suggestion: Suggestion { issue_type: wanted.into(), ..Default::default() } }
+        NewTicket {
+            project: "CI".into(),
+            label: "PLAT".into(),
+            title: "T".into(),
+            suggestion: Suggestion { issue_type: wanted.into(), ..Default::default() },
+            assignee: Some("acc-1".into()),
+        }
     }
 
     fn body(r: &crate::jira::tests::Recorded) -> Value {
@@ -1602,6 +1623,7 @@ mod tests {
         assert!(reqs[0].path.starts_with("/rest/agile/1.0/board/101/sprint?state=active,future"), "the sprint is found first");
         assert_eq!(reqs[1].path, "/rest/api/3/issue");
         assert_eq!(body(&reqs[1])["fields"]["issuetype"], json!({ "id": "3" }));
+        assert_eq!(body(&reqs[1])["fields"]["assignee"], json!({ "accountId": "acc-1" }), "the known user, no myself read");
         assert_eq!(reqs[2].path, "/rest/agile/1.0/sprint/8/issue");
         let (added, _) = add_ticket(&c, &new_ticket("Task"), Some(types), 101, Target::Backlog);
         assert_eq!(added.unwrap().placed, Placed::Backlog, "a new ticket is already in the backlog");
@@ -1662,6 +1684,36 @@ mod tests {
         let seen: Vec<(&str, Value)> =
             reqs.iter().map(|r| (r.method.as_str(), if r.method == "POST" { body(r)["fields"]["issuetype"].clone() } else { Value::Null })).collect();
         assert_eq!(seen, [("POST", json!({ "id": "3" })), ("GET", Value::Null), ("POST", json!({ "id": "4" }))]);
+    }
+
+    #[test]
+    fn add_ticket_reads_the_user_when_the_app_does_not_know_it() {
+        let _g = crate::jira::tests::WRITE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (base, rx) = crate::jira::tests::stub_server(vec![
+            ("GET", "/rest/api/3/myself", json!({ "accountId": "me-7", "displayName": "Me" })),
+            ("POST", "/rest/api/3/issue", json!({ "key": "CI-44" })),
+        ]);
+        let t = NewTicket { assignee: None, ..new_ticket("Task") };
+        let (r, _) = add_ticket(&client(&base), &t, Some(vec![ty("4", "Task")]), 101, Target::Backlog);
+        assert_eq!(r.unwrap().key, "CI-44");
+        let reqs: Vec<_> = rx.try_iter().collect();
+        assert_eq!(reqs[0].path, "/rest/api/3/myself", "the user is read first");
+        assert_eq!(body(&reqs[1])["fields"]["assignee"], json!({ "accountId": "me-7" }));
+    }
+
+    #[test]
+    fn add_ticket_creates_nothing_when_the_user_cannot_be_read() {
+        let _g = crate::jira::tests::WRITE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (base, rx) = crate::jira::tests::stub_server_codes(vec![
+            ("GET", "/rest/api/3/myself", 500, json!({ "errorMessages": ["down"] })),
+            ("POST", "/rest/api/3/issue", 200, json!({ "key": "CI-45" })),
+        ]);
+        let t = NewTicket { assignee: Some(String::new()), ..new_ticket("Task") };
+        let (r, fresh) = add_ticket(&client(&base), &t, Some(vec![ty("4", "Task")]), 101, Target::Backlog);
+        assert!(matches!(r, Err(AddError::Me(_))), "{r:?}");
+        assert!(fresh.is_none());
+        let reqs: Vec<_> = rx.try_iter().collect();
+        assert!(reqs.iter().all(|r| r.method == "GET"), "nothing created: {:?}", reqs.iter().map(|r| &r.path).collect::<Vec<_>>());
     }
 
     #[test]

@@ -102,6 +102,13 @@ pub fn add_label(t: Target) -> &'static str {
     }
 }
 
+/// The card's primary add: the current sprint unless the board is known to have none, then the next sprint, then
+/// the backlog. Claude's suggested target does not change it. `targets` are each add's sprint (`app::target_sprint`).
+pub fn primary_target(targets: &[(Target, Result<Option<String>, String>)]) -> Target {
+    let open = |t: Target| targets.iter().find(|(x, _)| *x == t).is_none_or(|(_, r)| r.is_ok());
+    [Target::CurrentSprint, Target::NextSprint].into_iter().find(|t| open(*t)).unwrap_or(Target::Backlog)
+}
+
 /// What `r` does now, named like its button. None while a review runs (the progress line takes its place).
 pub fn run_key(running: bool, has_review: bool, failed: bool) -> Option<StandupRun> {
     match (running, failed, has_review) {
@@ -667,7 +674,7 @@ fn card(ui: &mut Ui, p: &Palette, s: &Suggestion, title: &mut String, st: &CardS
         }
 
         ui.add_space(sp.paragraph_gap);
-        actions_row(ui, p, s, st, muted, i, acts);
+        actions_row(ui, p, st, muted, i, acts);
     });
     r.response
 }
@@ -690,10 +697,10 @@ fn meta_line(ui: &mut Ui, p: &Palette, s: &Suggestion, issue_type: Option<&str>,
     });
 }
 
-/// The card's action row: the adds at the left (none in read-only mode): the suggested target as a bordered button,
+/// The card's action row: the adds at the left (none in read-only mode): the primary target (`primary_target`) as a bordered button,
 /// the other targets quiet beside it, "Adding…" while one is in flight; Dismiss at the right, a quiet bordered
 /// button like the toolbar's, so it reads as an action, not as one more meta field.
-fn actions_row(ui: &mut Ui, p: &Palette, s: &Suggestion, st: &CardState, muted: egui::Color32, i: usize, acts: &mut Vec<Action>) {
+fn actions_row(ui: &mut Ui, p: &Palette, st: &CardState, muted: egui::Color32, i: usize, acts: &mut Vec<Action>) {
     let sp = theme::spacing(ui.ctx());
     ui.horizontal(|ui| {
         ui.set_min_height(crate::views::BUTTON_H);
@@ -703,7 +710,7 @@ fn actions_row(ui: &mut Ui, p: &Palette, s: &Suggestion, st: &CardState, muted: 
             return;
         }
         if !st.read_only {
-            let primary = s.suggested_target;
+            let primary = primary_target(st.targets);
             // A target the board has no sprint for says so in its place, quiet and not clickable.
             let sprint = |t: Target| st.targets.iter().find(|(x, _)| *x == t).map_or(Ok(None), |(_, r)| r.clone());
             for t in std::iter::once(primary).chain([Target::CurrentSprint, Target::NextSprint, Target::Backlog].into_iter().filter(|t| *t != primary)) {
@@ -878,6 +885,12 @@ mod tests {
         assert_eq!(add_tip(Target::Backlog, None), "Add to backlog (b)");
         assert_eq!(no_sprint_label(Target::NextSprint), "No next sprint");
         assert_eq!(add_label(Target::CurrentSprint), "Add to current sprint");
+        let ok = |t: Target| (t, Ok(None));
+        let none = |t: Target| (t, Err("none".to_string()));
+        let all = [ok(Target::CurrentSprint), ok(Target::NextSprint), ok(Target::Backlog)];
+        assert_eq!(primary_target(&all), Target::CurrentSprint, "the current sprint by default");
+        assert_eq!(primary_target(&[none(Target::CurrentSprint), ok(Target::NextSprint), ok(Target::Backlog)]), Target::NextSprint, "no active sprint");
+        assert_eq!(primary_target(&[none(Target::CurrentSprint), none(Target::NextSprint), ok(Target::Backlog)]), Target::Backlog);
         assert_eq!(header_note(true, 0).as_deref(), Some(READ_ONLY_NOTE));
         assert_eq!(header_note(true, 2).as_deref(), Some("Read-only: adding tickets is off · 2 dismissed"));
         assert_eq!(header_note(false, 2).as_deref(), Some("2 dismissed"));
@@ -1039,8 +1052,8 @@ mod tests {
             "Post each rollout. More",
             "GitHub · 80% sure",
             "PR #7",
-            "Add to next sprint",
-            "Current sprint",
+            "Add to current sprint",
+            "Next sprint",
             "Backlog",
             "Dismiss",
             "Added as ",
@@ -1063,7 +1076,8 @@ mod tests {
         assert!(!drawn.iter().any(|t| t == "Run again"), "no run button while running");
         assert!(drawn.iter().any(|t| t == "Stop"), "a running review can be stopped: {drawn:?}");
         assert!(!drawn.iter().any(|t| t == "Standup"), "the tab names the screen; no page title");
-        assert_eq!(drawn.iter().filter(|t| *t == "Add to next sprint").count(), 1, "the added card has no add buttons");
+        assert_eq!(drawn.iter().filter(|t| *t == "Add to current sprint").count(), 1, "the added card has no add buttons");
+        assert!(!drawn.iter().any(|t| t == "Add to next sprint"), "claude's next-sprint guess is not the primary: {drawn:?}");
         assert_eq!(drawn.iter().filter(|t| *t == "Dismiss").count(), 1, "nor a Dismiss");
         assert_eq!(drawn.iter().filter(|t| t.contains("CI-42")).count(), 1, "the key shows once");
         assert!(app.standup.titles.is_empty(), "untouched titles are not kept as edits");
@@ -1081,7 +1095,12 @@ mod tests {
         assert!(known.iter().any(|t| t == "GitHub · Task · 80% sure"), "{known:?}");
         assert!(!known.iter().any(|t| t.contains("Story")), "never claude's guess: {known:?}");
         assert!(known.iter().any(|t| t == "No next sprint") && !known.iter().any(|t| t == "Add to next sprint"), "{known:?}");
-        assert!(known.iter().any(|t| t == "Current sprint") && known.iter().any(|t| t == "Backlog"), "{known:?}");
+        assert!(known.iter().any(|t| t == "Add to current sprint") && known.iter().any(|t| t == "Backlog"), "{known:?}");
+        // No active sprint: it says so, and the next sprint is the primary.
+        app.sprints = vec![crate::jira::Sprint { id: 8, name: "Sprint 93".into(), state: "future".into() }];
+        let future = texts(&mut app);
+        assert!(future.iter().any(|t| t == "No current sprint") && future.iter().any(|t| t == "Add to next sprint"), "{future:?}");
+        assert!(!future.iter().any(|t| t == "Add to current sprint"), "{future:?}");
         app.standup.saved.issue_types = None;
         app.sprints.clear();
 
