@@ -1,7 +1,7 @@
 //! The Standup screen's logic: the review window, the Jira activity in it, the `claude` run that reads GitHub and
 //! Slack, and its answer: a standup summary and suggested tickets for untracked work.
 
-use crate::jira::{self, Client, Sprint};
+use crate::jira::{self, Client, IssueType, Sprint};
 use chrono::{Datelike, NaiveDate, Weekday};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -501,7 +501,7 @@ impl Target {
 pub struct Suggestion {
     pub title: String,
     pub description: String,
-    /// Task, Story or Bug.
+    /// The type the review asked for: Task, Story or Bug. What is created is `resolve_issue_type` of it.
     pub issue_type: String,
     pub source_kind: SourceKind,
     pub source_url: String,
@@ -574,8 +574,8 @@ fn source_of(v: &Value, url: &str) -> SourceKind {
 
 fn issue_type_of(v: &Value) -> String {
     match norm(v).as_str() {
-        "story" => "Story",
-        "bug" => "Bug",
+        "story" | "user_story" | "feature" => "Story",
+        "bug" | "defect" => "Bug",
         _ => "Task",
     }
     .to_string()
@@ -669,8 +669,32 @@ pub fn pick_sprint(target: Target, sprints: &[Sprint]) -> Result<Option<&Sprint>
     }
 }
 
-/// Jira's create `fields` for a suggestion: in `project`, labelled `label`, with the source under the description.
-pub fn create_fields(project: &str, label: &str, title: &str, s: &Suggestion) -> Value {
+/// The names each type the review asks for may go by in a project, in order of preference.
+const TYPE_ALIASES: &[&[&str]] = &[&["Story", "User Story", "Feature"], &["Bug", "Defect"], &["Task"]];
+
+/// The type a suggestion is created as in a project that allows `types`: never a sub-task or an Epic; the type named
+/// `wanted` (any case), else one of its aliases (`TYPE_ALIASES`), else Task, else the first type left. None when the
+/// project has no type left.
+pub fn resolve_issue_type<'a>(wanted: &str, types: &'a [IssueType]) -> Option<&'a IssueType> {
+    let usable: Vec<&IssueType> = types.iter().filter(|t| !t.subtask && !t.name.trim().eq_ignore_ascii_case("epic")).collect();
+    let named = |name: &str| usable.iter().copied().find(|t| t.name.trim().eq_ignore_ascii_case(name));
+    let wanted = wanted.trim();
+    let aliases = TYPE_ALIASES.iter().find(|names| names.iter().any(|n| n.eq_ignore_ascii_case(wanted))).copied().unwrap_or_default();
+    named(wanted).or_else(|| aliases.iter().find_map(|n| named(n))).or_else(|| named("Task")).or_else(|| usable.first().copied())
+}
+
+/// A project's creatable issue types, last read (`Client::creatable_issue_types`); kept in `Saved`, so the cards
+/// name the type offline too.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ProjectTypes {
+    pub project: String,
+    pub types: Vec<IssueType>,
+}
+
+/// Jira's create `fields` for a suggestion: in `project`, of type `ty` (by id), labelled `label`, with the source
+/// under the description.
+pub fn create_fields(project: &str, label: &str, title: &str, s: &Suggestion, ty: &IssueType) -> Value {
     let mut text = s.description.trim().to_string();
     if !s.source_url.trim().is_empty() {
         text.push_str(&format!("\n\nSource ({}): {}", s.source_kind.name(), s.source_url.trim()));
@@ -678,7 +702,7 @@ pub fn create_fields(project: &str, label: &str, title: &str, s: &Suggestion) ->
     let mut fields = json!({
         "project": { "key": project },
         "summary": title.trim(),
-        "issuetype": { "name": s.issue_type },
+        "issuetype": { "id": ty.id },
         "labels": [label],
     });
     if !text.trim().is_empty() {
@@ -687,20 +711,106 @@ pub fn create_fields(project: &str, label: &str, title: &str, s: &Suggestion) ->
     fields
 }
 
-/// Creates the ticket and moves it into `target`'s sprint. Ok((key, Ok(sprint name or None for the backlog))), or
-/// Ok((key, Err(why))) when the ticket was created but could not be moved.
-pub fn add_ticket(c: &Client, fields: Value, board: u64, target: Target) -> jira::Result<(String, Result<Option<String>, String>)> {
-    jira::check_writable()?;
-    let key = c.create_issue(fields)?;
-    if target == Target::Backlog {
-        return Ok((key, Ok(None)));
+/// A ticket to create from a suggestion.
+#[derive(Debug, Clone)]
+pub struct NewTicket {
+    pub project: String,
+    pub label: String,
+    /// The edited title.
+    pub title: String,
+    pub suggestion: Suggestion,
+}
+
+/// Where a created ticket ended up.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Placed {
+    Backlog,
+    Sprint(String),
+    /// Created (so in the backlog), but the move into this sprint failed, for this reason.
+    NotMoved {
+        sprint: String,
+        why: String,
+    },
+}
+
+/// A created ticket: its key, the type it was created as, the type the review asked for, and where it is.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Added {
+    pub key: String,
+    pub issue_type: String,
+    pub wanted: String,
+    pub placed: Placed,
+}
+
+/// Why nothing was created.
+#[derive(Debug, Clone)]
+pub enum AddError {
+    /// The project has no issue type left to create (`resolve_issue_type`).
+    NoType,
+    /// The project's issue types could not be read.
+    Types(jira::Error),
+    /// The target sprint is not there, or the board's sprints could not be read.
+    Sprint(String),
+    /// Jira refused the create (or read-only mode did).
+    Create(jira::Error),
+}
+
+/// Creates the ticket as the project's type for it, then moves it into `target`'s sprint. `cached` are the project's
+/// types as last read; None reads them first. The sprint is found before anything is created, so a missing sprint
+/// creates nothing. A cached list Jira no longer agrees with (no type left, or the create rejects the type) is read
+/// again and the create tried once more. Returns the outcome and the types read on the way, if any, for the cache.
+pub fn add_ticket(c: &Client, t: &NewTicket, cached: Option<Vec<IssueType>>, board: u64, target: Target) -> (Result<Added, AddError>, Option<Vec<IssueType>>) {
+    if let Err(e) = jira::check_writable() {
+        return (Err(AddError::Create(e)), None);
     }
-    let placed = c.board_sprints(board, "active,future").map_err(|e| e.to_string()).and_then(|sprints| {
-        let sprint = pick_sprint(target, &sprints)?.cloned().ok_or("no sprint")?;
-        c.move_to_sprint(sprint.id, &[&key]).map_err(|e| e.to_string())?;
-        Ok(Some(sprint.name))
-    });
-    Ok((key, placed))
+    let read = || c.creatable_issue_types(&t.project).map_err(AddError::Types);
+    let mut fresh = None;
+    let types = match cached {
+        Some(types) => types,
+        None => match read() {
+            Ok(types) => fresh.insert(types).clone(),
+            Err(e) => return (Err(e), None),
+        },
+    };
+    let sprint = match target {
+        Target::Backlog => None,
+        _ => match c.board_sprints(board, "active,future") {
+            Ok(sprints) => match pick_sprint(target, &sprints) {
+                Ok(s) => s.cloned(),
+                Err(why) => return (Err(AddError::Sprint(why)), fresh),
+            },
+            Err(e) => return (Err(AddError::Sprint(format!("couldn't read the board's sprints: {}", jira::reason(&e)))), fresh),
+        },
+    };
+    let create = |types: &[IssueType]| -> Result<(String, String), AddError> {
+        let ty = resolve_issue_type(&t.suggestion.issue_type, types).ok_or(AddError::NoType)?;
+        let key = c.create_issue(create_fields(&t.project, &t.label, &t.title, &t.suggestion, ty)).map_err(AddError::Create)?;
+        Ok((key, ty.name.clone()))
+    };
+    let mut created = create(&types);
+    let stale = match &created {
+        Err(AddError::NoType) => true,
+        Err(AddError::Create(e)) => e.to_string().to_ascii_lowercase().contains("issuetype"),
+        _ => false,
+    };
+    if stale && fresh.is_none() {
+        match read() {
+            Ok(types) => created = create(fresh.insert(types)),
+            Err(e) => return (Err(e), None),
+        }
+    }
+    let (key, issue_type) = match created {
+        Ok(k) => k,
+        Err(e) => return (Err(e), fresh),
+    };
+    let placed = match sprint {
+        None => Placed::Backlog,
+        Some(s) => match c.move_to_sprint(s.id, &[&key]) {
+            Ok(()) => Placed::Sprint(s.name),
+            Err(e) => Placed::NotMoved { sprint: s.name, why: jira::reason(&e) },
+        },
+    };
+    (Ok(Added { key, issue_type, wanted: t.suggestion.issue_type.clone(), placed }), fresh)
 }
 
 // ---------- Showing a suggestion ----------
@@ -1008,6 +1118,8 @@ pub struct Saved {
     pub added: BTreeMap<String, String>,
     /// The window's done and in-progress tickets, last read.
     pub tickets: Tickets,
+    /// The scope project's creatable issue types, last read.
+    pub issue_types: Option<ProjectTypes>,
 }
 
 impl Saved {
@@ -1410,8 +1522,34 @@ mod tests {
         assert!(pick_sprint(Target::NextSprint, &sprints[..1]).unwrap_err().contains("no future sprint"));
     }
 
+    fn ty(id: &str, name: &str) -> IssueType {
+        IssueType { id: id.into(), name: name.into(), subtask: false }
+    }
+
+    fn resolved<'a>(wanted: &str, types: &'a [IssueType]) -> Option<&'a str> {
+        resolve_issue_type(wanted, types).map(|t| t.name.as_str())
+    }
+
     #[test]
-    fn create_fields_carry_project_label_and_source() {
+    fn issue_types_resolve_to_what_the_project_allows() {
+        let all = [ty("1", "Epic"), ty("2", "story"), ty("3", "Bug"), ty("4", "Task"), IssueType { id: "5".into(), name: "Sub-task".into(), subtask: true }];
+        assert_eq!(resolved("Story", &all), Some("story"), "the exact name, any case");
+        assert_eq!(resolved(" bug ", &all), Some("Bug"));
+        let aliased = [ty("1", "Defect"), ty("2", "Feature"), ty("3", "User Story"), ty("4", "Task")];
+        assert_eq!(resolved("Story", &aliased), Some("User Story"), "the first alias the project has, in alias order");
+        assert_eq!(resolved("Bug", &aliased), Some("Defect"));
+        assert_eq!(resolved("Story", &[ty("2", "Feature"), ty("4", "Task")]), Some("Feature"));
+        assert_eq!(resolved("Story", &[ty("1", "Epic"), ty("3", "Bug"), ty("4", "Task")]), Some("Task"), "no Story: Task");
+        assert_eq!(resolved("Epic", &all), Some("Task"), "never an Epic, even when asked for");
+        assert_eq!(resolved("Task", &[ty("1", "Epic"), ty("6", "Improvement"), ty("3", "Bug")]), Some("Improvement"), "no Task: the first type left");
+        assert_eq!(resolved("", &[ty("6", "Improvement")]), Some("Improvement"));
+        let only_sub = [ty("1", "Epic"), IssueType { id: "5".into(), name: "Sub-task".into(), subtask: true }];
+        assert_eq!(resolved("Task", &only_sub), None, "only an Epic and a sub-task: nothing to create");
+        assert_eq!(resolved("Task", &[]), None);
+    }
+
+    #[test]
+    fn create_fields_carry_project_type_label_and_source() {
         let s = Suggestion {
             title: "Old".into(),
             description: "Do the thing.".into(),
@@ -1420,19 +1558,27 @@ mod tests {
             source_url: "https://x.slack.com/p1".into(),
             ..Default::default()
         };
-        let f = create_fields("CI", "PLAT", " New title ", &s);
+        let f = create_fields("CI", "PLAT", " New title ", &s, &ty("10004", "Task"));
         assert_eq!(f["project"]["key"], "CI");
         assert_eq!(f["summary"], "New title", "the edited title, trimmed");
-        assert_eq!(f["issuetype"]["name"], "Bug");
+        assert_eq!(f["issuetype"], json!({ "id": "10004" }), "the resolved type, by id");
         assert_eq!(f["labels"], json!(["PLAT"]));
         let text = crate::adf::to_plain_text(&f["description"]);
         assert!(text.contains("Do the thing.") && text.contains("Source (Slack): https://x.slack.com/p1"), "{text}");
-        let bare = create_fields("CI", "PLAT", "T", &Suggestion { issue_type: "Task".into(), ..Default::default() });
+        let bare = create_fields("CI", "PLAT", "T", &Suggestion { issue_type: "Task".into(), ..Default::default() }, &ty("1", "Task"));
         assert!(bare.get("description").is_none(), "no empty description");
     }
 
     fn client(base: &str) -> Client {
         Client::new(base, &crate::auth::Login { email: "a@b.c".into(), token: "t".into(), source: crate::auth::Source::Env })
+    }
+
+    fn new_ticket(wanted: &str) -> NewTicket {
+        NewTicket { project: "CI".into(), label: "PLAT".into(), title: "T".into(), suggestion: Suggestion { issue_type: wanted.into(), ..Default::default() } }
+    }
+
+    fn body(r: &crate::jira::tests::Recorded) -> Value {
+        serde_json::from_str(&r.body).unwrap()
     }
 
     #[test]
@@ -1445,14 +1591,77 @@ mod tests {
             ("POST", "/rest/agile/1.0/sprint/8/issue", json!({})),
         ]);
         let c = client(&base);
-        assert_eq!(add_ticket(&c, json!({}), 101, Target::NextSprint).unwrap(), ("CI-42".to_string(), Ok(Some("Sprint 93".to_string()))));
-        let paths: Vec<String> = (0..3).map(|_| rx.recv().unwrap().path).collect();
-        assert_eq!(paths[0], "/rest/api/3/issue");
-        assert!(paths[1].starts_with("/rest/agile/1.0/board/101/sprint?state=active,future"));
-        assert_eq!(paths[2], "/rest/agile/1.0/sprint/8/issue");
-        assert_eq!(add_ticket(&c, json!({}), 101, Target::Backlog).unwrap(), ("CI-42".to_string(), Ok(None)), "a new ticket is already in the backlog");
+        let types = vec![ty("3", "Story"), ty("4", "Task")];
+        let (added, fresh) = add_ticket(&c, &new_ticket("Story"), Some(types.clone()), 101, Target::NextSprint);
+        assert_eq!(
+            added.unwrap(),
+            Added { key: "CI-42".into(), issue_type: "Story".into(), wanted: "Story".into(), placed: Placed::Sprint("Sprint 93".into()) }
+        );
+        assert!(fresh.is_none(), "the cached types were used");
+        let reqs: Vec<_> = (0..3).map(|_| rx.recv().unwrap()).collect();
+        assert!(reqs[0].path.starts_with("/rest/agile/1.0/board/101/sprint?state=active,future"), "the sprint is found first");
+        assert_eq!(reqs[1].path, "/rest/api/3/issue");
+        assert_eq!(body(&reqs[1])["fields"]["issuetype"], json!({ "id": "3" }));
+        assert_eq!(reqs[2].path, "/rest/agile/1.0/sprint/8/issue");
+        let (added, _) = add_ticket(&c, &new_ticket("Task"), Some(types), 101, Target::Backlog);
+        assert_eq!(added.unwrap().placed, Placed::Backlog, "a new ticket is already in the backlog");
         assert_eq!(rx.recv().unwrap().path, "/rest/api/3/issue");
         assert!(rx.try_recv().is_err(), "no sprint call for the backlog");
+    }
+
+    #[test]
+    fn add_ticket_reads_the_types_when_none_are_cached_and_sends_the_resolved_id() {
+        let _g = crate::jira::tests::WRITE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let types = json!({ "issueTypes": [{ "id": "1", "name": "Epic" }, { "id": "4", "name": "Task" }, { "id": "5", "name": "Sub-task", "subtask": true }], "total": 3 });
+        let (base, rx) = crate::jira::tests::stub_server(vec![
+            ("GET", "/rest/api/3/issue/createmeta/CI/issuetypes", types),
+            ("POST", "/rest/api/3/issue", json!({ "key": "CI-42" })),
+        ]);
+        let (added, fresh) = add_ticket(&client(&base), &new_ticket("Story"), None, 101, Target::Backlog);
+        let added = added.unwrap();
+        assert_eq!((added.issue_type.as_str(), added.wanted.as_str()), ("Task", "Story"));
+        assert_eq!(fresh.map(|t| t.len()), Some(3), "the read types come back for the cache");
+        let reqs: Vec<_> = rx.try_iter().collect();
+        assert_eq!(reqs.len(), 2);
+        assert_eq!(body(&reqs[1])["fields"]["issuetype"], json!({ "id": "4" }), "Story wanted, Task sent by id");
+    }
+
+    #[test]
+    fn add_ticket_sends_nothing_without_a_type_or_a_sprint() {
+        let _g = crate::jira::tests::WRITE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (base, rx) = crate::jira::tests::stub_server(vec![
+            ("GET", "/rest/api/3/issue/createmeta/CI/issuetypes", json!({ "issueTypes": [{ "id": "1", "name": "Epic" }], "isLast": true })),
+            ("GET", "/rest/agile/1.0/board/101/sprint", json!({ "values": [{ "id": 7, "name": "Sprint 92", "state": "active" }] })),
+        ]);
+        let c = client(&base);
+        let (r, fresh) = add_ticket(&c, &new_ticket("Task"), None, 101, Target::Backlog);
+        assert!(matches!(r, Err(AddError::NoType)));
+        assert_eq!(fresh.map(|t| t.len()), Some(1));
+        // A cached list with no type is read again once before giving up.
+        let (r, fresh) = add_ticket(&c, &new_ticket("Task"), Some(vec![]), 101, Target::Backlog);
+        assert!(matches!(r, Err(AddError::NoType)) && fresh.is_some());
+        let (r, _) = add_ticket(&c, &new_ticket("Task"), Some(vec![ty("4", "Task")]), 101, Target::NextSprint);
+        assert!(matches!(&r, Err(AddError::Sprint(why)) if why == "the board has no future sprint"), "{r:?}");
+        let methods: Vec<String> = rx.try_iter().map(|r| r.method).collect();
+        assert!(methods.iter().all(|m| m == "GET"), "nothing created: {methods:?}");
+    }
+
+    #[test]
+    fn add_ticket_rereads_stale_types_once_when_jira_rejects_the_type() {
+        let _g = crate::jira::tests::WRITE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // The stub answers every create the same: the retry with the fresh type fails too, and says so.
+        let rejected = json!({ "errorMessages": [], "errors": { "issuetype": "Specify a valid issue type" } });
+        let (base, rx) = crate::jira::tests::stub_server_codes(vec![
+            ("GET", "/rest/api/3/issue/createmeta/CI/issuetypes", 200, json!({ "issueTypes": [{ "id": "4", "name": "Task" }], "isLast": true })),
+            ("POST", "/rest/api/3/issue", 400, rejected),
+        ]);
+        let (r, fresh) = add_ticket(&client(&base), &new_ticket("Story"), Some(vec![ty("3", "Story")]), 101, Target::Backlog);
+        assert!(matches!(&r, Err(AddError::Create(e)) if jira::reason(e) == "issuetype: Specify a valid issue type"), "{r:?}");
+        assert_eq!(fresh, Some(vec![ty("4", "Task")]));
+        let reqs: Vec<_> = rx.try_iter().collect();
+        let seen: Vec<(&str, Value)> =
+            reqs.iter().map(|r| (r.method.as_str(), if r.method == "POST" { body(r)["fields"]["issuetype"].clone() } else { Value::Null })).collect();
+        assert_eq!(seen, [("POST", json!({ "id": "3" })), ("GET", Value::Null), ("POST", json!({ "id": "4" }))]);
     }
 
     #[test]
@@ -1460,16 +1669,18 @@ mod tests {
         let _g = crate::jira::tests::WRITE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let (base, rx) = crate::jira::tests::stub_server(vec![
             ("POST", "/rest/api/3/issue", json!({ "key": "CI-43" })),
-            ("GET", "/rest/agile/1.0/board/101/sprint", json!({ "values": [{ "id": 8, "name": "Sprint 93", "state": "future" }] })),
+            ("GET", "/rest/agile/1.0/board/101/sprint", json!({ "values": [{ "id": 7, "name": "Sprint 92", "state": "active" }] })),
         ]);
         let c = client(&base);
-        let (key, placed) = add_ticket(&c, json!({}), 101, Target::CurrentSprint).unwrap();
-        assert_eq!(key, "CI-43");
-        assert!(placed.unwrap_err().contains("no active sprint"), "created, but not moved");
+        let (r, _) = add_ticket(&c, &new_ticket("Task"), Some(vec![ty("4", "Task")]), 101, Target::CurrentSprint);
+        let added = r.unwrap();
+        assert_eq!(added.key, "CI-43");
+        assert!(matches!(&added.placed, Placed::NotMoved { sprint, why } if sprint == "Sprint 92" && why.contains("404")), "created, but not moved: {added:?}");
         while rx.try_recv().is_ok() {}
         {
             let _ro = crate::jira::tests::ReadOnlyGuard::new();
-            assert!(jira::is_read_only(&add_ticket(&c, json!({}), 101, Target::Backlog).unwrap_err()));
+            let (r, _) = add_ticket(&c, &new_ticket("Task"), None, 101, Target::Backlog);
+            assert!(matches!(r, Err(AddError::Create(e)) if jira::is_read_only(&e)));
         }
         assert!(rx.try_recv().is_err(), "read-only sent nothing");
     }

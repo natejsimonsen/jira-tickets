@@ -321,15 +321,17 @@ fn run_step(harness: &mut Harness<'_, App>, step: &Step) {
     }
 }
 
-/// The Standup shot waits for its ticket cards (done in the window, in progress) to land, up to IDLE_WAIT, so they
-/// show and do not shift the page mid-shot. A fixture's review stays; the cards always come from Jira (the fake one
+/// The Standup shot waits for its ticket cards (done in the window, in progress) and the project's issue types (the
+/// cards' type) to land, up to IDLE_WAIT, so they show and do not shift the page mid-shot. A fixture's review stays; the cards always come from Jira (the fake one
 /// for the demo shots).
 fn tickets_wait(harness: &mut Harness<'_, App>) {
     let start = Instant::now();
     // Loading, or not yet read for the shown review's window (a read for today's may land first).
     let pending = |app: &App| {
         let window = crate::standup::tickets_window(&app.standup.saved, chrono::Local::now().date_naive());
-        app.client.is_some() && app.standup.tickets_error.is_none() && (app.standup.tickets_loading || app.standup.saved.tickets.since != Some(window))
+        app.client.is_some()
+            && app.standup.tickets_error.is_none()
+            && (app.standup.tickets_loading || app.standup.types_loading || app.standup.saved.tickets.since != Some(window))
     };
     while pending(harness.state()) && start.elapsed() < IDLE_WAIT {
         frames(harness, 1);

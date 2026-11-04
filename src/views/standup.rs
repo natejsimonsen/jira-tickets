@@ -69,9 +69,28 @@ pub fn confidence_text(c: f32) -> String {
     format!("{:.0}% sure", (c * 100.0).round())
 }
 
-/// A card's quiet meta line, before its source link: "GitHub · Story · 85% sure".
-pub fn meta_text(s: &Suggestion) -> String {
-    format!("{} · {} · {}", s.source_kind.name(), s.issue_type, confidence_text(s.confidence))
+/// A card's quiet meta line, before its source link: "GitHub · Task · 85% sure". `issue_type` is what an add
+/// creates (`App::standup_type_name`), left out while it is not known.
+pub fn meta_text(s: &Suggestion, issue_type: Option<&str>) -> String {
+    let ty = issue_type.map(|t| format!(" · {t}")).unwrap_or_default();
+    format!("{}{ty} · {}", s.source_kind.name(), confidence_text(s.confidence))
+}
+
+/// What stands in for an add button when the board has no sprint for it: "No next sprint".
+pub fn no_sprint_label(t: Target) -> &'static str {
+    match t {
+        Target::CurrentSprint => "No current sprint",
+        Target::NextSprint => "No next sprint",
+        Target::Backlog => "",
+    }
+}
+
+/// An add's tooltip: where it goes, by sprint name when the board's sprints are known, and its key.
+pub fn add_tip(t: Target, sprint: Option<&str>) -> String {
+    match sprint {
+        Some(name) => format!("Add to {name} ({})", key_of(t)),
+        None => format!("{} ({})", add_label(t), key_of(t)),
+    }
 }
 
 /// The primary action's label: "Add to current sprint".
@@ -512,6 +531,9 @@ fn cards(app: &mut App, ui: &mut Ui, p: &Palette, cursor: Option<usize>, moved: 
         c::empty_state(ui, p, msg, Some(hint));
         return;
     }
+    // Where each add goes, by the board's known sprints: a name for the tooltip, or why there is none.
+    let targets: Vec<(Target, Result<Option<String>, String>)> =
+        [Target::CurrentSprint, Target::NextSprint, Target::Backlog].into_iter().map(|t| (t, crate::app::target_sprint(t, &app.sprints))).collect();
     // The suggestions follow the ticket cards in cursor order; the title edit (`e`) is only for a suggestion.
     let offset = app.standup_ticket_count();
     if cursor.is_none_or(|c| c < offset) {
@@ -527,8 +549,9 @@ fn cards(app: &mut App, ui: &mut Ui, p: &Palette, cursor: Option<usize>, moved: 
         let focus_title = sel && std::mem::take(&mut app.standup.focus_title);
         let added = app.standup.saved.added.get(&key).cloned();
         let adding = app.standup.adding.contains(&key);
+        let issue_type = app.standup_type_name(s);
         let title = app.standup.titles.entry(key.clone()).or_insert_with(|| s.title.clone());
-        let st = CardState { sel, focus_title, adding, read_only, key: &key };
+        let st = CardState { sel, focus_title, adding, read_only, key: &key, issue_type: issue_type.as_deref(), targets: &targets };
         let r = match added.as_deref() {
             Some(issue) => added_card(ui, p, title, issue, &app.cfg.site, &st, i, acts),
             None => card(ui, p, s, title, &st, i, acts),
@@ -549,6 +572,10 @@ struct CardState<'a> {
     /// Writes are blocked: the card has no adds (the section header says why, once for the list).
     read_only: bool,
     key: &'a str,
+    /// The type an add creates; None while unknown.
+    issue_type: Option<&'a str>,
+    /// Each add's sprint (`app::target_sprint`).
+    targets: &'a [(Target, Result<Option<String>, String>)],
 }
 
 /// The one read-only note, at the "Suggested tickets" header; the cards then show no adds.
@@ -608,7 +635,7 @@ fn card(ui: &mut Ui, p: &Palette, s: &Suggestion, title: &mut String, st: &CardS
         }
 
         ui.add_space(sp.line_gap);
-        meta_line(ui, p, s, muted, i, acts);
+        meta_line(ui, p, s, st.issue_type, muted, i, acts);
 
         let doc = standup::description_doc(&s.description);
         let reason = s.reason.trim();
@@ -645,13 +672,13 @@ fn card(ui: &mut Ui, p: &Palette, s: &Suggestion, title: &mut String, st: &CardS
     r.response
 }
 
-/// The meta line, "GitHub · Story · 85% sure · PR #7": quiet text, the source a link.
-fn meta_line(ui: &mut Ui, p: &Palette, s: &Suggestion, muted: egui::Color32, i: usize, acts: &mut Vec<Action>) {
+/// The meta line, "GitHub · Task · 85% sure · PR #7": quiet text, the source a link.
+fn meta_line(ui: &mut Ui, p: &Palette, s: &Suggestion, issue_type: Option<&str>, muted: egui::Color32, i: usize, acts: &mut Vec<Action>) {
     let sp = theme::spacing(ui.ctx());
     let small = theme::body(sp.small);
     ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing.x = 0.0;
-        ui.label(RichText::new(meta_text(s)).font(small.clone()).color(muted));
+        ui.label(RichText::new(meta_text(s, issue_type)).font(small.clone()).color(muted));
         if !s.source_url.trim().is_empty() {
             ui.label(RichText::new(" · ").font(small.clone()).color(muted));
             let link = text_link(ui, &standup::source_label(&s.source_url), small.clone(), p.accent);
@@ -677,12 +704,20 @@ fn actions_row(ui: &mut Ui, p: &Palette, s: &Suggestion, st: &CardState, muted: 
         }
         if !st.read_only {
             let primary = s.suggested_target;
-            if crate::views::tooltip(ui.add(button(add_label(primary), p)), key_of(primary)).clicked() {
-                acts.push(Action::StandupFocus(i));
-                acts.push(Action::StandupAdd(primary));
-            }
-            for t in [Target::CurrentSprint, Target::NextSprint, Target::Backlog].into_iter().filter(|t| *t != primary) {
-                if crate::views::tooltip(ui.add(c::ghost(t.name(), p)), format!("{} ({})", add_label(t), key_of(t))).clicked() {
+            // A target the board has no sprint for says so in its place, quiet and not clickable.
+            let sprint = |t: Target| st.targets.iter().find(|(x, _)| *x == t).map_or(Ok(None), |(_, r)| r.clone());
+            for t in std::iter::once(primary).chain([Target::CurrentSprint, Target::NextSprint, Target::Backlog].into_iter().filter(|t| *t != primary)) {
+                let name = match sprint(t) {
+                    Ok(name) => name,
+                    Err(why) => {
+                        let r = ui.label(RichText::new(no_sprint_label(t)).color(muted).size(sp.small));
+                        crate::views::tooltip(r, format!("Can't add here: {why}"));
+                        continue;
+                    }
+                };
+                let tip = add_tip(t, name.as_deref());
+                let r = if t == primary { ui.add(button(add_label(t), p)) } else { ui.add(c::ghost(t.name(), p)) };
+                if crate::views::tooltip(r, tip).clicked() {
                     acts.push(Action::StandupFocus(i));
                     acts.push(Action::StandupAdd(t));
                 }
@@ -837,7 +872,11 @@ mod tests {
         assert_eq!(confidence_text(0.8), "80% sure");
         assert_eq!(confidence_text(0.0), "0% sure");
         let s = Suggestion { issue_type: "Story".into(), confidence: 0.85, ..Default::default() };
-        assert_eq!(meta_text(&s), "GitHub · Story · 85% sure");
+        assert_eq!(meta_text(&s, Some("Task")), "GitHub · Task · 85% sure", "the type that is created, not the one asked for");
+        assert_eq!(meta_text(&s, None), "GitHub · 85% sure", "no type while it is not known");
+        assert_eq!(add_tip(Target::NextSprint, Some("Sprint 93")), "Add to Sprint 93 (n)");
+        assert_eq!(add_tip(Target::Backlog, None), "Add to backlog (b)");
+        assert_eq!(no_sprint_label(Target::NextSprint), "No next sprint");
         assert_eq!(add_label(Target::CurrentSprint), "Add to current sprint");
         assert_eq!(header_note(true, 0).as_deref(), Some(READ_ONLY_NOTE));
         assert_eq!(header_note(true, 2).as_deref(), Some("Read-only: adding tickets is off · 2 dismissed"));
@@ -998,7 +1037,7 @@ mod tests {
             "Suggested tickets",
             "Rollout notifications",
             "Post each rollout. More",
-            "GitHub · Story · 80% sure",
+            "GitHub · 80% sure",
             "PR #7",
             "Add to next sprint",
             "Current sprint",
@@ -1032,6 +1071,19 @@ mod tests {
         assert!(drawn.iter().any(|t| t.starts_with("Below is the last review")), "the old review is marked while a run goes");
         assert!(drawn.iter().any(|t| t.contains("still created")), "writable: adds made meanwhile are kept: {drawn:?}");
         assert_eq!(hint(&app), StandupHint { cards: true, copy: true, run: None, read_only: false });
+
+        // With the project's types known, the card names the type an add creates: no Story in it, so a Task. With
+        // the board's sprints known and no future one, the next-sprint add says so instead of offering it.
+        let ty = |id: &str, name: &str| crate::jira::IssueType { id: id.into(), name: name.into(), subtask: false };
+        app.standup.saved.issue_types = Some(standup::ProjectTypes { project: app.cfg.scope.project.clone(), types: vec![ty("1", "Task"), ty("2", "Bug")] });
+        app.sprints = vec![crate::jira::Sprint { id: 7, name: "Sprint 92".into(), state: "active".into() }];
+        let known = texts(&mut app);
+        assert!(known.iter().any(|t| t == "GitHub · Task · 80% sure"), "{known:?}");
+        assert!(!known.iter().any(|t| t.contains("Story")), "never claude's guess: {known:?}");
+        assert!(known.iter().any(|t| t == "No next sprint") && !known.iter().any(|t| t == "Add to next sprint"), "{known:?}");
+        assert!(known.iter().any(|t| t == "Current sprint") && known.iter().any(|t| t == "Backlog"), "{known:?}");
+        app.standup.saved.issue_types = None;
+        app.sprints.clear();
 
         // Read-only: one note at the header, no adds on any card, Dismiss and the source link stay.
         {

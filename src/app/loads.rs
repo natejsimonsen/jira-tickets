@@ -33,6 +33,23 @@ impl App {
         self.refresh_done_recent();
         self.load_done_counts();
         self.load_standup_tickets();
+        if self.screen == super::Screen::Standup {
+            self.load_issue_types();
+        }
+    }
+
+    /// The scope project's creatable issue types, which the Standup cards name and its adds create; the last list
+    /// stays (and is cached) until the new one lands.
+    pub(crate) fn load_issue_types(&mut self) {
+        if !should_load(self.client.is_some(), self.standup.types_loading) {
+            return;
+        }
+        self.standup.types_loading = true;
+        let project = self.cfg.scope.project.clone();
+        self.spawn(move |c, tx| {
+            let result = c.creatable_issue_types(&project);
+            let _ = tx.send(Msg::IssueTypes { project, result });
+        });
     }
 
     /// The Standup screen's ticket cards: done since the window opened, and in progress (`standup::fetch_tickets`).
