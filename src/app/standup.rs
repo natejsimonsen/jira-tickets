@@ -288,7 +288,7 @@ impl App {
     }
 
     /// Creates the focused card's ticket (its edited title) in the scope project with the team label, as the
-    /// project's type for it, then moves it into `target`'s sprint, on the write worker. What is known to fail is not
+    /// project's type for it, assigned to the signed-in user, then moves it into `target`'s sprint, on the write worker. What is known to fail is not
     /// sent: no type to create, or no such sprint on the board.
     pub(super) fn standup_add(&mut self, target: Target) {
         let Some((i, key)) = self.standup_focused() else { return };
@@ -322,7 +322,8 @@ impl App {
             self.toast_kind(text, kind);
             return;
         }
-        let ticket = standup::NewTicket { project, label: self.cfg.scope.team_label.clone(), title, suggestion: s };
+        let assignee = self.me.as_ref().map(|u| u.account_id.clone());
+        let ticket = standup::NewTicket { project, label: self.cfg.scope.team_label.clone(), title, suggestion: s, assignee };
         let board = self.cfg.scope.board_id;
         self.standup.adding.insert(key.clone());
         self.spawn_write(move |c, tx| {
@@ -351,7 +352,10 @@ impl App {
             Err(e) => {
                 let (text, kind) = add_failed_toast(&project, &e);
                 self.toast_kind(text, kind);
-                if let AddError::Create(jira::Error::Unauthorized(m)) | AddError::Types(jira::Error::Unauthorized(m)) = e {
+                if let AddError::Create(jira::Error::Unauthorized(m))
+                | AddError::Types(jira::Error::Unauthorized(m))
+                | AddError::Me(jira::Error::Unauthorized(m)) = e
+                {
                     self.client = None;
                     self.token_error = Some(m);
                 }
@@ -403,14 +407,16 @@ fn type_phrase(project: &str, added: &Added) -> String {
     format!(" as {article} {got} (no {wanted} in {project})")
 }
 
-/// The toast for a created ticket: its key, its type, and where it is.
+/// The toast for a created ticket: its key, its type, where it is, and that it is assigned to you.
 pub fn added_toast(project: &str, added: &Added) -> (String, ToastKind) {
     let ty = type_phrase(project, added);
     let key = &added.key;
     match &added.placed {
-        Placed::Sprint(sprint) => (format!("Created {key}{ty} in {sprint}"), ToastKind::Success),
-        Placed::Backlog => (format!("Created {key}{ty} in the backlog"), ToastKind::Success),
-        Placed::NotMoved { sprint, why } => (format!("Created {key}{ty} in the backlog, but couldn't move it to {sprint}: {why}"), ToastKind::Error),
+        Placed::Sprint(sprint) => (format!("Created {key}{ty} in {sprint}, assigned to you"), ToastKind::Success),
+        Placed::Backlog => (format!("Created {key}{ty} in the backlog, assigned to you"), ToastKind::Success),
+        Placed::NotMoved { sprint, why } => {
+            (format!("Created {key}{ty} in the backlog, assigned to you, but couldn't move it to {sprint}: {why}"), ToastKind::Error)
+        }
     }
 }
 
@@ -420,6 +426,7 @@ pub fn add_failed_toast(project: &str, e: &AddError) -> (String, ToastKind) {
         AddError::NoType => (format!("Can't create in {project}: the project has no issue type you can create"), ToastKind::Error),
         AddError::Types(e) => (format!("Create failed: couldn't read the issue types of {project}: {}", jira::reason(e)), ToastKind::Error),
         AddError::Sprint(why) => (format!("Not created: {why}"), ToastKind::Error),
+        AddError::Me(e) => (format!("Not created: couldn't read your Jira account to assign it to you: {}", jira::reason(e)), ToastKind::Error),
         AddError::Create(e) if jira::is_read_only(e) => done_toast("Create", &Err(e.clone())),
         AddError::Create(e) => (format!("Create failed: {}", jira::reason(e)), ToastKind::Error),
     }
@@ -442,6 +449,11 @@ mod tests {
     fn with_review(app: &mut App) {
         let review = Review { suggestions: vec![suggestion("A", "https://a"), suggestion("B", "https://b"), suggestion("C", "")], ..Default::default() };
         app.standup.saved.review = Some(review);
+    }
+
+    /// Signs `app` in as account "me-1", the assignee of what it creates.
+    fn signed_in(app: &mut App) {
+        app.me = Some(jira::User { account_id: "me-1".into(), display_name: "Me".into() });
     }
 
     fn client(base: &str) -> std::sync::Arc<jira::Client> {
@@ -628,6 +640,7 @@ mod tests {
         let (base, rx) = jira::tests::stub_server(routes);
         let mut app = App::for_test(cfg(), Some(client(&base)));
         with_review(&mut app);
+        signed_in(&mut app);
         assert_eq!(app.standup_type_name(&app.standup.saved.visible()[0].clone()), None, "the types are not read yet: no type shown");
         app.standup.titles.insert("url:https://a".into(), "Edited title".into());
         let ctx = egui::Context::default();
@@ -641,8 +654,9 @@ mod tests {
         assert_eq!(create["fields"]["project"]["key"], "CI");
         assert_eq!(create["fields"]["issuetype"], serde_json::json!({ "id": "10001" }));
         assert_eq!(create["fields"]["labels"], serde_json::json!(["PLAT"]));
+        assert_eq!(create["fields"]["assignee"], serde_json::json!({ "accountId": "me-1" }), "the signed-in user");
         assert_eq!(app.standup.saved.added.get("url:https://a").map(String::as_str), Some("CI-42"));
-        assert_eq!(toast(&app), Some(("Created CI-42 (Task) in Sprint 92", ToastKind::Success)));
+        assert_eq!(toast(&app), Some(("Created CI-42 (Task) in Sprint 92, assigned to you", ToastKind::Success)));
         assert_eq!(app.standup_types().map(<[_]>::len), Some(4), "the read types are cached");
         assert!(app.standup.adding.is_empty());
         assert_eq!(app.standup_keys().len(), 3, "an added card stays, marked added");
@@ -659,6 +673,7 @@ mod tests {
         let (base, rx) = jira::tests::stub_server(routes);
         let mut app = App::for_test(cfg(), Some(client(&base)));
         with_review(&mut app);
+        signed_in(&mut app);
         app.standup.saved.review.as_mut().unwrap().suggestions[0].issue_type = "Story".into();
         cache_types(&mut app, &[("10001", "Task"), ("10002", "Bug"), ("10000", "Epic")]);
         let story = app.standup.saved.visible()[0].clone();
@@ -666,7 +681,7 @@ mod tests {
         app.apply(Action::StandupAdd(Target::Backlog), &egui::Context::default());
         pump(&mut app, 1);
         assert_eq!(create_body(&rx)["fields"]["issuetype"], serde_json::json!({ "id": "10001" }), "Story wanted, Task sent by id");
-        assert_eq!(toast(&app), Some(("Created CI-42 as a Task (no Story in CI) in the backlog", ToastKind::Success)));
+        assert_eq!(toast(&app), Some(("Created CI-42 as a Task (no Story in CI) in the backlog, assigned to you", ToastKind::Success)));
     }
 
     #[test]
@@ -697,6 +712,7 @@ mod tests {
         ]);
         let mut app = App::for_test(cfg(), Some(client(&base)));
         with_review(&mut app);
+        signed_in(&mut app);
         cache_types(&mut app, &[("10001", "Task")]);
         app.apply(Action::StandupAdd(Target::Backlog), &egui::Context::default());
         // Jira rejected the cached type: the types are read again (and cached), the create tried once more.
@@ -765,7 +781,10 @@ mod tests {
         let added = Added { key: "CI-9".into(), issue_type: "Task".into(), wanted: "Task".into(), placed };
         app.handle(Msg::StandupAdded { dkey: "url:https://b".into(), result: Ok(added) });
         assert_eq!(app.standup.saved.added.get("url:https://b").map(String::as_str), Some("CI-9"));
-        assert_eq!(toast(&app), Some(("Created CI-9 (Task) in the backlog, but couldn't move it to Sprint 92: Jira returned 403: no", ToastKind::Error)));
+        assert_eq!(
+            toast(&app),
+            Some(("Created CI-9 (Task) in the backlog, assigned to you, but couldn't move it to Sprint 92: Jira returned 403: no", ToastKind::Error))
+        );
         app.handle(Msg::StandupAdded {
             dkey: "url:https://a".into(),
             result: Err(AddError::Create(jira::Error::Other("Jira returned 400: issuetype: x".into()))),
@@ -778,17 +797,21 @@ mod tests {
     fn toasts_say_what_was_created_and_where() {
         let added = |ty: &str, wanted: &str, placed: Placed| Added { key: "CI-42".into(), issue_type: ty.into(), wanted: wanted.into(), placed };
         let text = |a: Added| added_toast("CI", &a).0;
-        assert_eq!(text(added("Task", "Task", Placed::Sprint("Sprint 92".into()))), "Created CI-42 (Task) in Sprint 92");
-        assert_eq!(text(added("Task", "task", Placed::Backlog)), "Created CI-42 (Task) in the backlog");
-        assert_eq!(text(added("Task", "Story", Placed::Sprint("Sprint 92".into()))), "Created CI-42 as a Task (no Story in CI) in Sprint 92");
-        assert_eq!(text(added("Improvement", "Bug", Placed::Backlog)), "Created CI-42 as an Improvement (no Bug in CI) in the backlog");
-        assert_eq!(text(added("Task", "", Placed::Backlog)), "Created CI-42 (Task) in the backlog");
+        assert_eq!(text(added("Task", "Task", Placed::Sprint("Sprint 92".into()))), "Created CI-42 (Task) in Sprint 92, assigned to you");
+        assert_eq!(text(added("Task", "task", Placed::Backlog)), "Created CI-42 (Task) in the backlog, assigned to you");
+        assert_eq!(text(added("Task", "Story", Placed::Sprint("Sprint 92".into()))), "Created CI-42 as a Task (no Story in CI) in Sprint 92, assigned to you");
+        assert_eq!(text(added("Improvement", "Bug", Placed::Backlog)), "Created CI-42 as an Improvement (no Bug in CI) in the backlog, assigned to you");
+        assert_eq!(text(added("Task", "", Placed::Backlog)), "Created CI-42 (Task) in the backlog, assigned to you");
         let fail = |e: AddError| add_failed_toast("CI", &e);
         assert_eq!(fail(AddError::NoType), ("Can't create in CI: the project has no issue type you can create".into(), ToastKind::Error));
         assert_eq!(fail(AddError::Sprint("the board has no active sprint".into())).0, "Not created: the board has no active sprint");
         assert_eq!(
             fail(AddError::Types(jira::Error::Other("Jira returned 404: no project".into()))).0,
             "Create failed: couldn't read the issue types of CI: Jira returned 404: no project"
+        );
+        assert_eq!(
+            fail(AddError::Me(jira::Error::Other("Jira returned 500: down".into()))).0,
+            "Not created: couldn't read your Jira account to assign it to you: Jira returned 500: down"
         );
         let ro = jira::Error::Other("read-only mode, so nothing was sent to Jira".into());
         assert_eq!(fail(AddError::Create(ro)).1, ToastKind::Info);
